@@ -110,14 +110,16 @@ def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[t
     TOPLEVEL = '__toplevel__'
 
     def _get_module(n: Base) -> str:
-        p = n
+        p: Optional[Base] = n
         while p and not isinstance(p, (f03.Module, f03.Main_Program)):
             p = p.parent
         if not p:
             return TOPLEVEL
-        else:
-            p_stmt = ast_utils.singular(ast_utils.children_of_type(p, (f03.Module_Stmt, f03.Program_Stmt)))
-            return utils.find_name_of_stmt(p_stmt).lower()
+        p_stmt = ast_utils.singular(ast_utils.children_of_type(p, (f03.Module_Stmt, f03.Program_Stmt)))
+        p_name = utils.find_name_of_stmt(p_stmt)
+        if p_name is None:
+            raise ValueError(f"module/program statement without a name: {p_stmt}")
+        return p_name.lower()
 
     g = nx.DiGraph()  # edge u->v: u must come before v (v depends on u).
     for c in ast.children:

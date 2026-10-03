@@ -6,10 +6,13 @@ from __future__ import annotations
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
-from typing import Union, Tuple, Dict, Optional, List, Any, Type
+from typing import TYPE_CHECKING, Union, Tuple, Dict, Optional, List, Any, Type
 
 import numpy as np
 import fparser.two.Fortran2003 as f03
+
+if TYPE_CHECKING:
+    from dace_fortran.inliner.ast_desugaring.utils import NAMED_STMTS_OF_INTEREST_TYPES
 
 # fparser node type aliases live in the modules that use them; this file is for our own custom types.
 

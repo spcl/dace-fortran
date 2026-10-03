@@ -434,33 +434,31 @@ def const_eval_nodes(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def val_2_np_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.NUMPY_TYPES:
+def val_2_np_lit(val: Union[str, bool, int, float, np.generic], type_spec: types.SPEC) -> types.NUMPY_TYPES:
     """
     Converts a string value to a NumPy scalar of a specific Fortran type.
     :param val: The string representation of the value (e.g., "123", "true").
     :param type_spec: The target Fortran type specification (e.g., ('INTEGER4',)).
     :return: A NumPy scalar (e.g., np.int32, np.float64) representing the value.
     """
-    val = str(val).lower()
+    text = str(val).lower()
     # Convert the string value to the appropriate NumPy type based on the Fortran type specification.
     if type_spec == ('INTEGER1', ):
-        val = np.int8(val)
-    elif type_spec == ('INTEGER2', ):
-        val = np.int16(val)
-    elif type_spec == ('INTEGER4', ):
-        val = np.int32(val)
-    elif type_spec == ('INTEGER8', ):
-        val = np.int64(val)
-    elif type_spec == ('REAL4', ):
-        val = np.float32(val)
-    elif type_spec == ('REAL8', ):
-        val = np.float64(val)
-    elif type_spec == ('LOGICAL', ):
-        assert val in {'true', 'false', '0', '1'}
-        val = np.bool_(val in {'true', '1'})
-    else:
-        raise NotImplementedError(f"{val} cannot be parsed as the target literal type: {type_spec}")
-    return val
+        return np.int8(text)
+    if type_spec == ('INTEGER2', ):
+        return np.int16(text)
+    if type_spec == ('INTEGER4', ):
+        return np.int32(text)
+    if type_spec == ('INTEGER8', ):
+        return np.int64(text)
+    if type_spec == ('REAL4', ):
+        return np.float32(text)
+    if type_spec == ('REAL8', ):
+        return np.float64(text)
+    if type_spec == ('LOGICAL', ):
+        assert text in {'true', 'false', '0', '1'}
+        return np.bool_(text in {'true', '1'})
+    raise NotImplementedError(f"{text} cannot be parsed as the target literal type: {type_spec}")
 
 
 def _val_2_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.LITERAL_TYPES:

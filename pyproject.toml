@@ -82,9 +82,9 @@ Issues = "https://github.com/spcl/dace-fortran/issues"
 files = ["dace_fortran"]
 follow_imports = "silent"
 
-# fparser ships neither stubs nor a py.typed marker.
+# fparser ships neither stubs nor a py.typed marker; networkx stubs are not a project dependency.
 [[tool.mypy.overrides]]
-module = ["fparser", "fparser.*"]
+module = ["fparser", "fparser.*", "networkx", "networkx.*"]
 ignore_missing_imports = true
 
 [tool.pyright]

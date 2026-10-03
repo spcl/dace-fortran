@@ -201,13 +201,10 @@ def get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
     # A module/program statement must exist.
     stmt = ast_utils.singular(
         ast_utils.children_of_type(mod, f03.Module_Stmt if isinstance(mod, f03.Module) else f03.Program_Stmt))
-    spec = list(ast_utils.children_of_type(mod, f03.Specification_Part))
-    assert len(spec) <= 1, f"A module/program cannot have more than one specification parts, found {spec} in {mod}"
-    spec = spec[0] if spec else None
-    expart = list(ast_utils.children_of_type(mod, f03.Execution_Part))
-    assert len(expart) <= 1, f"A module/program cannot have more than one execution parts, found {spec} in {mod}"
-    expart = expart[0] if expart else None
-    subp = list(ast_utils.children_of_type(mod, f03.Module_Subprogram_Part))
-    assert len(subp) <= 1, f"A module/program cannot have more than one subprogram parts, found {subp} in {mod}"
-    subp = subp[0] if subp else None
-    return stmt, spec, expart, subp
+    specs = list(ast_utils.children_of_type(mod, f03.Specification_Part))
+    assert len(specs) <= 1, f"A module/program cannot have more than one specification parts, found {specs} in {mod}"
+    exparts = list(ast_utils.children_of_type(mod, f03.Execution_Part))
+    assert len(exparts) <= 1, f"A module/program cannot have more than one execution parts, found {exparts} in {mod}"
+    subps = list(ast_utils.children_of_type(mod, f03.Module_Subprogram_Part))
+    assert len(subps) <= 1, f"A module/program cannot have more than one subprogram parts, found {subps} in {mod}"
+    return stmt, specs[0] if specs else None, exparts[0] if exparts else None, subps[0] if subps else None
