@@ -1581,7 +1581,8 @@ class SDFGBuilder:
         # ``import dace_fortran`` doesn't drag it in.
         from dace import dtypes
         from dace.data import Array, Scalar
-        from dace_fortran.bindings.frozen_signature import HOST_STORAGE, FrozenArg, FrozenSignature, dtype_string
+        from dace_fortran.bindings.frozen_signature import (HOST_STORAGE, FrozenArg, FrozenSignature, attach_to_sdfg,
+                                                            dtype_string)
 
         # Auto-detected Fortran module-global provenance, keyed by the
         # bridge's short Fortran name.  Populated from every VarInfo
@@ -1726,7 +1727,7 @@ class SDFGBuilder:
             free_symbols=free_syms,
             module_symbol_origins=module_symbol_origins,
         )
-        sdfg._frozen_signature = fs
+        attach_to_sdfg(sdfg, fs)
 
     def _diagnose_unresolved_access_nodes(self, sdfg: SDFG) -> None:
         """Raise if any ``AccessNode`` references a ``data`` field that

@@ -16,13 +16,13 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import TYPE_CHECKING, List, Sequence
 
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.emit_bindings import emit_bindings
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalInterface, build_auto_interface
-from typing import TYPE_CHECKING
+from dace_fortran.bindings.frozen_signature import get_frozen_signature
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -162,7 +162,7 @@ def build_fortran_library(
         raise ValueError(f"unknown mode {mode!r}; expected 'debug', "
                          f"'release', or an explicit flags= list")
 
-    frozen = sdfg._frozen_signature
+    frozen = get_frozen_signature(sdfg)
     if frozen is None:
         raise ValueError("build_fortran_library requires an SDFG built by "
                          "SDFGBuilder.build() (no _frozen_signature attached). "

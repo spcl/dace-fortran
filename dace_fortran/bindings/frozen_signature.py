@@ -310,7 +310,7 @@ def refreeze(sdfg: SDFG) -> "FrozenSignature":
 
     Returns the new snapshot and attaches it to ``sdfg._frozen_signature``.
     """
-    frozen: FrozenSignature | None = sdfg._frozen_signature
+    frozen = get_frozen_signature(sdfg)
     if frozen is None:
         raise RuntimeError(f"refreeze: SDFG {sdfg.name!r} carries no _frozen_signature; "
                            "it must come from SDFGBuilder.build()")
@@ -350,7 +350,7 @@ def refreeze(sdfg: SDFG) -> "FrozenSignature":
     )
     # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.
     new.verify_against(sdfg)
-    sdfg._frozen_signature = new
+    attach_to_sdfg(sdfg, new)
     return new
 
 
