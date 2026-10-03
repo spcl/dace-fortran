@@ -279,7 +279,6 @@ WORK_PACKAGES.md
 
 # Session scratch / local tooling / large test grids (not repo content)
 scratchpad/
-_session_scratch/
 .claude/
 tests/icon/full/icon-grids/
 

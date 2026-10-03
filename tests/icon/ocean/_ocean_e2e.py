@@ -15,6 +15,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -888,10 +889,8 @@ def run_kernel_e2e(
     both shims, for kernels that read the global instead of the dummy they were
     handed (see :func:`_global_bind_lines`).
     """
-    # _session_scratch is gitignored (absent on a fresh CI checkout) -- create it before carving a per-run tempdir.
-    scratch_root = _HERE.parent.parent.parent / "_session_scratch"
-    scratch_root.mkdir(parents=True, exist_ok=True)
-    out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(scratch_root)))
+    # Builds go to the system temp dir, never the checkout; a failing run's tree is kept for inspection.
+    out = Path(tempfile.mkdtemp(prefix="ocean_e2e_"))
     # numpy arrays can't ride the child's argv as JSON -- sidecar .npz in the
     # per-run out dir instead; _build_and_compare loads it and applies to both forks.
     if mesh_buffers:
@@ -930,6 +929,8 @@ def run_kernel_e2e(
     passed = any(ln.startswith("RESULT: PASS") for ln in proc.stdout.splitlines())
     max_diff = next((float(ln.split(":", 1)[1]) for ln in proc.stdout.splitlines() if ln.startswith("MAXDIFF:")), None)
     n_changed = next((int(ln.split(":", 1)[1]) for ln in proc.stdout.splitlines() if ln.startswith("CHANGED:")), 0)
+    if passed:
+        shutil.rmtree(out, ignore_errors=True)
     return {"passed": passed, "max_diff": max_diff, "n_changed": n_changed, "output": output}
 
 
