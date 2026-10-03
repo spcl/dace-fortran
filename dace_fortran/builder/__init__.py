@@ -38,18 +38,23 @@ NOTE on nanobind bindings:
     Hot paths cache such attributes into locals.
 """
 
+from __future__ import annotations
+
 import gc
 import weakref
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from dace import InterstateEdge, SDFG
+from dace.data import Data
+from dace.properties import CodeBlock
+from dace.sdfg.state import ControlFlowRegion
 from dace.sdfg.utils import specialize_symbols
 
 from dace_fortran.build_bridge import hb
 
 from dace_fortran.builder.auto_dim_symbols import install_auto_dim_symbols
 from dace_fortran.builder.context import _Ctx
-from dace_fortran.builder.records import VarLike
+from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
     add_descriptors,
@@ -82,6 +87,9 @@ from dace_fortran.builder.emit_cfg import (
     emit_while,
 )
 from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
+
+if TYPE_CHECKING:
+    from dace.sdfg.state import SDFGState
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
@@ -420,7 +428,7 @@ _RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re", "ln", "limit"})
 _DACE_NAME_PREFIX = "program_"
 
 
-def _global_is_baked_constant(v) -> bool:
+def _global_is_baked_constant(v: VarLike) -> bool:
     """Mirror of the ``hlfir-preserve-mutable-globals`` rule on the
     Python side.  A module-level Fortran global is "baked" (becomes a
     compile-time constant in the SDFG) iff the caller has no symbol to
@@ -464,7 +472,7 @@ def _global_is_baked_constant(v) -> bool:
     return 'EC' in tail or 'F' in tail
 
 
-def reject_unlowered_expressions(sdfg: SDFG):
+def reject_unlowered_expressions(sdfg: SDFG) -> None:
     """Refuse an SDFG carrying the bridge's ``?`` placeholder in any expression.
 
     ``?`` is what the C++ side returns for "I could not lower this operand".  Call sites that can legitimately
@@ -495,7 +503,7 @@ def reject_unlowered_expressions(sdfg: SDFG):
                            "\n  ".join(leaks[:20]))
 
 
-def _rename_reserved_collisions(sdfg) -> dict:
+def _rename_reserved_collisions(sdfg: SDFG) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
     ``program_<name>`` rename via ``sdfg.replace`` (which sweeps every
@@ -528,7 +536,7 @@ def _demangle_fortran_proc(sym: str) -> str:
     return sym[p + 1:] if p > 1 else sym
 
 
-def _module_of_fortran_sym(sym: str):
+def _module_of_fortran_sym(sym: str) -> str | None:
     """Module name from a flang module-procedure symbol
     ``_QM<mod>[P|F]<proc>``, or ``None`` for a free procedure / non-mangled
     name.  flang lower-cases identifiers, so the first ``P`` / ``F`` in the
@@ -543,7 +551,7 @@ def _module_of_fortran_sym(sym: str):
     return None
 
 
-def _resolve_entry_symbol(module, entry: str) -> str:
+def _resolve_entry_symbol(module: 'hb.HLFIRModule', entry: str) -> str:
     """Resolve a user-supplied ``entry`` to the flang-mangled func symbol
     the bridge keys on.
 
@@ -560,11 +568,11 @@ def _resolve_entry_symbol(module, entry: str) -> str:
     # ``module::proc`` -> (module, proc); a bare name leaves the module
     # unconstrained.  flang lower-cases Fortran identifiers.
     want_mod, _, want_proc = entry.lower().rpartition("::")
-    want_mod = want_mod or None
+    want_mod_opt: str | None = want_mod or None
     funcs = list(module.list_functions())
     matches = [
-        s for s in funcs
-        if _demangle_fortran_proc(s) == want_proc and (want_mod is None or _module_of_fortran_sym(s) == want_mod)
+        s for s in funcs if _demangle_fortran_proc(s) == want_proc and (
+            want_mod_opt is None or _module_of_fortran_sym(s) == want_mod_opt)
     ]
     if len(matches) == 1:
         return matches[0]
@@ -638,7 +646,7 @@ class SDFGBuilder:
         self._id_counter = 0
         self.access_caches = weakref.WeakKeyDictionary()
 
-    def __init__(self, hlfir_path: str, pipeline: str = DEFAULT_PIPELINE, entry: str | None = None):
+    def __init__(self, hlfir_path: str, pipeline: str = DEFAULT_PIPELINE, entry: str | None = None) -> None:
         """Parse HLFIR, run the pass pipeline, and classify variables.
 
         If ``entry`` is set, every other ``func.func`` in the module is
@@ -671,7 +679,7 @@ class SDFGBuilder:
         # otherwise be inlined into the entry, dragging its implementation (and
         # everything only it reaches) into the lowered code.  No-op when the
         # registry is empty, so ordinary single-procedure builds are unaffected.
-        from dace_fortran.external import lookup_external, registered_names
+        from dace_fortran.external import registered_names, require_external
         ext_names = registered_names()
         if ext_names:
             self.module.externalize_symbols(ext_names)
@@ -683,14 +691,14 @@ class SDFGBuilder:
             # args is pointless, and it would hard-fail the pass on an
             # unmarshallable member (e.g. a debug routine's pointer-to-record
             # ``patch``) for a call that will not exist.
-            emit_names = [n for n in ext_names if not lookup_external(n).stub]
+            emit_names = [n for n in ext_names if not require_external(n).stub]
             self.module.set_external_symbols(emit_names)
             # And the stub half, so hlfir-drop-stub-calls can erase their calls
             # before any other pass sees them.  The call is dropped at emission
             # either way; left in the IR it is an opaque USE that blocks sound
             # rewrites (a dropped dbg_print holding a copy-in temp defeated
             # hlfir-fold-copy-in-out and silently dropped writes to the temp).
-            self.module.set_stub_symbols([n for n in ext_names if lookup_external(n).stub])
+            self.module.set_stub_symbols([n for n in ext_names if require_external(n).stub])
 
         # Run bridge passes BEFORE extracting variables so assumed-shape
         # dummies pick up real names and the rest of the rewrites have
@@ -701,7 +709,11 @@ class SDFGBuilder:
         self._classify()
 
     @classmethod
-    def from_files(cls, hlfir_paths, *, entry: str, pipeline: str = MULTI_FILE_PIPELINE) -> "SDFGBuilder":
+    def from_files(cls,
+                   hlfir_paths: Sequence[str],
+                   *,
+                   entry: str,
+                   pipeline: str = MULTI_FILE_PIPELINE) -> "SDFGBuilder":
         """Parse and merge several HLFIR files, keep ``entry`` as the only
         public function, verify every remaining call resolves, then run
         the rewrite chain.
@@ -737,7 +749,7 @@ class SDFGBuilder:
         obj._classify()
         return obj
 
-    def _classify(self):
+    def _classify(self) -> None:
         """Shared post-parse extraction: variables + AST + role split."""
         # Extraction mints tens of thousands of nanobind objects (a fully-inlined
         # entry -- QE's h_psi -- yields ~40k VarInfo/AST nodes).  Python's cyclic
@@ -945,11 +957,15 @@ class SDFGBuilder:
         # downstream transformations require -- they pattern-match on
         # integer constants, not on a free symbol bound to a constant),
         # aliases get renamed to the source symbol.
-        const_offsets, alias_offsets = {}, {}
+        const_offsets: dict[str, int] = {}
+        alias_offsets: dict[str, str] = {}
         for k, v in self.offset_values.items():
             if v is None:
                 continue
-            (alias_offsets if isinstance(v, str) else const_offsets)[k] = v
+            if isinstance(v, str):
+                alias_offsets[k] = v
+            else:
+                const_offsets[k] = v
         # Snapshot the inferred per-axis offsets onto the SDFG before the
         # specialise pass zeroes their symbols out, so tests / diagnostics
         # can still inspect the inferred values without grepping memlet
@@ -1069,7 +1085,7 @@ class SDFGBuilder:
         sdfg.validate()
         return sdfg
 
-    def _zero_init_unwritten_transients(self, sdfg) -> None:
+    def _zero_init_unwritten_transients(self, sdfg: SDFG) -> None:
         """Explicitly zero-initialise every transient that is read but never
         written anywhere in the SDFG, via a dedicated entry state.
 
@@ -1115,8 +1131,8 @@ class SDFGBuilder:
         # readable as their seeded value -- zeroing them would corrupt the
         # symbol.  (They are normally kwargs / baked constants, but guard.)
         value_symbol_arrays = {arr for arr, _ in self._value_symbol_provenance.values()}
-        targets = {}  # name -> descriptor, deduplicated across states
-        read_nodes = {}  # name -> list of producer-less read AccessNodes
+        targets: dict[str, Any] = {}  # name -> descriptor, deduplicated across states
+        read_nodes: dict[str, list[Any]] = {}  # name -> list of producer-less read AccessNodes
         for state in sdfg.states():
             for node in state.nodes():
                 if not isinstance(node, dace_nodes.AccessNode):
@@ -1157,7 +1173,7 @@ class SDFGBuilder:
             self._zero_init_transient(init_state, name, desc)
 
     @staticmethod
-    def _static_zero_size(desc) -> bool:
+    def _static_zero_size(desc: Data) -> bool:
         """True iff ``desc`` has a statically zero extent in some dimension
         (a ``dimension(0)`` empty array), so it holds no elements to init."""
         import dace
@@ -1169,7 +1185,7 @@ class SDFGBuilder:
                 continue
         return False
 
-    def _zero_init_transient(self, state, name, desc) -> None:
+    def _zero_init_transient(self, state: SDFGState, name: str, desc: Data) -> None:
         """Emit an explicit zero store into transient ``name`` in ``state``.
 
         A scalar gets a single ``_out = 0`` tasklet; an array gets a mapped
@@ -1192,7 +1208,7 @@ class SDFGBuilder:
             external_edges=True,
         )
 
-    def _register_constants(self, sdfg: SDFG):
+    def _register_constants(self, sdfg: SDFG) -> None:
         """Attach Flang's constant-pool data to the SDFG.
 
         Every ``VarInfo`` with non-empty ``const_data`` represents a
@@ -1263,7 +1279,7 @@ class SDFGBuilder:
                 arr = arr.reshape(shape, order='C')
             sdfg.add_constant(v.fortran_name, arr, desc)
 
-    def _seed_written_inits(self, ctx, sdfg):
+    def _seed_written_inits(self, ctx: _Ctx, sdfg: SDFG) -> None:
         """Seed globals the kernel WRITES that carry an init value
         (``is_written`` + ``const_data``) with that value at SDFG entry.
 
@@ -1333,7 +1349,7 @@ class SDFGBuilder:
         sdfg.add_edge(ctx.cur, nxt, edge)
         ctx.cur = nxt
 
-    def _seed_value_symbols(self, ctx, sdfg):
+    def _seed_value_symbols(self, ctx: _Ctx, sdfg: SDFG) -> None:
         """Stamp each array-element value-symbol (``__sym_<arr>_<idx>``, minted
         when a runtime-indexed element like ``nrdmax(jg)`` is used as a symbol)
         from its element read, so shapes and memlets referencing the symbol
@@ -1377,7 +1393,7 @@ class SDFGBuilder:
         sdfg.add_edge(ctx.cur, dst, InterstateEdge(assignments=seeds))
         ctx.cur = dst
 
-    def _check_value_symbols_constant(self, sdfg: SDFG):
+    def _check_value_symbols_constant(self, sdfg: SDFG) -> None:
         """Soundness guard for array-element value-symbols (``__sym_<arr>_<idx>``).
 
         These are minted by ``resolveShapeSyms`` (extract_vars.cpp) ONLY from a
@@ -1424,7 +1440,7 @@ class SDFGBuilder:
                                  f"into a mutable array must use the per-site '<arr>_at<n>' promotion, "
                                  f"not a shape value-symbol.")
 
-    def _run_post_gen_passes(self, sdfg: SDFG):
+    def _run_post_gen_passes(self, sdfg: SDFG) -> None:
         """Run the post-generation cleanup passes that take a freshly-
         emitted bridge SDFG to its canonical shape.  See Stage 4b in
         ``dace_fortran/README.md`` for the pipeline.
@@ -1519,10 +1535,9 @@ class SDFGBuilder:
         # already-subscripted refs / non-SDFG names), so re-running over
         # already-deref'd edges is a no-op.
         from dace_fortran.builder.access import deref_len1_array_scalars
-        from dace.properties import CodeBlock
         from dace.sdfg.state import LoopRegion, ConditionalBlock
 
-        def _deref_cb(scope_sdfg, cb):
+        def _deref_cb(scope_sdfg: SDFG, cb: CodeBlock | None) -> CodeBlock | None:
             """Deref a CodeBlock in place; return the (possibly new) block."""
             if cb is None or not cb.as_string:
                 return cb
@@ -1551,7 +1566,7 @@ class SDFGBuilder:
                         if new_cond is not cond:
                             region.branches[idx] = (new_cond, body)
 
-    def _attach_frozen_signature(self, sdfg: SDFG):
+    def _attach_frozen_signature(self, sdfg: SDFG) -> None:
         """Snapshot ``sdfg.arglist()`` + free symbols into a
         ``FrozenSignature`` and pin it on the SDFG.
 
@@ -1714,7 +1729,7 @@ class SDFGBuilder:
         )
         sdfg._frozen_signature = fs
 
-    def _diagnose_unresolved_access_nodes(self, sdfg: SDFG):
+    def _diagnose_unresolved_access_nodes(self, sdfg: SDFG) -> None:
         """Raise if any ``AccessNode`` references a ``data`` field that
         isn't registered in ``sdfg.arrays``.
 
@@ -1776,7 +1791,6 @@ class SDFGBuilder:
             site, with array names removed.
         """
         from dace.sdfg.nodes import AccessNode
-        from dace.sdfg.state import ControlFlowRegion
         # Defined-at-SDFG: array names + module constants are not free
         # symbols.  Seed ``defined_syms`` with them so the walker
         # excludes them from the free set.
@@ -1828,7 +1842,7 @@ class SDFGBuilder:
         free_syms.discard('dace')
         return (free_syms - defined_syms) - set(sdfg.arrays.keys())
 
-    def _diagnose_unresolved_free_symbols(self, sdfg: SDFG, needed: set):
+    def _diagnose_unresolved_free_symbols(self, sdfg: SDFG, needed: set) -> None:
         """Surface a precise error before ``sdfg.arglist()`` raises an
         opaque ``KeyError``.
 
@@ -1939,7 +1953,7 @@ class SDFGBuilder:
         "symbol_init": emit_symbol_init,
     }
 
-    def _emit(self, ctx: '_Ctx', nodes: list, region):
+    def _emit(self, ctx: _Ctx, nodes: Sequence[NodeLike], region: ControlFlowRegion) -> None:
         """Recursive dispatcher  --  maps each ASTNode.kind to its emitter."""
         for n in nodes:
             fn = self._EMIT_DISPATCH.get(n.kind)
@@ -1951,13 +1965,17 @@ class SDFGBuilder:
 
     # Scalar-assign is called from _Ctx.flush; keep it as a method on the
     # builder for that caller's convenience.
-    def emit_scalar_assign(self, state, target: str, value: str):
+    def emit_scalar_assign(self, state: SDFGState, target: str, value: str) -> None:
         """Emit ``target = value`` as a scalar assignment in ``state``
         (method form so ``_Ctx.flush`` can call it on the builder)."""
         emit_scalar_assign(self, state, target, value)
 
 
-def generate_sdfg(path: str = None, *, pipeline: str = None, entry: str = None, hlfir_files=None) -> SDFG:
+def generate_sdfg(path: str | None = None,
+                  *,
+                  pipeline: str | None = None,
+                  entry: str | None = None,
+                  hlfir_files: Sequence[str] | None = None) -> SDFG:
     """Build an SDFG from one or several HLFIR files.
 
     Single-file form (back-compat):

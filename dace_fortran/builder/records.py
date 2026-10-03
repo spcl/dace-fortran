@@ -31,7 +31,7 @@ class SyntheticVar:
     const_data: bool = False
     view_source: str = ''
     view_subset: list[str] = field(default_factory=list)
-    view_dim_map: list[int] = field(default_factory=list)
+    view_dim_map: list[str] = field(default_factory=list)
     module_origin_mod: str = ''
     module_origin_name: str = ''
     module_origin_allocatable: bool = False

@@ -7,13 +7,21 @@ plain scalar assigns (``i = i + 1``, ``c = 0.5``).  ``assign_reads_array``
 is the predicate ``emit_assign`` uses to pick between them.
 """
 
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING, Container, Sequence
 
 from dace import Memlet
 
-from dace_fortran.builder.records import SyntheticVar
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
                                          resolve_object_member, resolve_object_member_expr, resolve_section_alias)
+from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticVar, VarLike
+
+if TYPE_CHECKING:
+    from dace.sdfg.nodes import AccessNode
+    from dace.sdfg.state import SDFGState
+    from dace_fortran.builder import SDFGBuilder
 
 # Excludes the imaginary-unit suffix of a complex literal (``1j`` in
 # ``(0.0) + 1j*(0.0)``): negative lookbehind drops idents starting right after
@@ -28,7 +36,7 @@ def _ident_tokens(expr: str) -> set:
     return set(_IDENT_RE.findall(expr))
 
 
-def _is_len1_scalar_view(builder, nm: str) -> bool:
+def _is_len1_scalar_view(builder: SDFGBuilder, nm: str) -> bool:
     """True when ``nm`` is a length-1 ``view_alias`` (a scalar POINTER rebind
     ``tmp => x`` lowered as a length-1-array View).  Reads/writes like a scalar,
     so emit paths wire it as ``_in_<nm>``/``<nm>[0]``, not an indexed occurrence."""
@@ -37,11 +45,12 @@ def _is_len1_scalar_view(builder, nm: str) -> bool:
         and list(a.shape_symbols) == ['1']
 
 
-def _view_link_spec(builder, state, target: str):
+def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tuple[str, str, str] | None:
     """Resolve ``(src, src_subset, view_subset)`` for a View ``target``'s source
     linking memlet, or ``None`` if not a View.  Normalises all three View flavours
     (complex-component alias, ``bounds_remap_view``, plain ``view_alias``) so the
     read-link and write-back paths agree on the same subsets."""
+    v: VarLike | None
     if target in builder.complex_component_aliases:
         from dace_fortran.builder.access import cc_alias_view_spec
         v = cc_alias_view_spec(builder, target)
@@ -72,7 +81,7 @@ def _view_link_spec(builder, state, target: str):
     return src, src_subset, view_subset
 
 
-def _ensure_view_writeback_link(builder, state, write_node, target: str):
+def _ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_node: AccessNode, target: str) -> None:
     """Add the missing view -> source writeback link when a fresh write-side
     access node is created for a view alias (else ``get_view_edge`` sees no
     edge and validation fails).  Two rules keep it happy: use a FRESH source
@@ -91,7 +100,7 @@ def _ensure_view_writeback_link(builder, state, write_node, target: str):
     state.add_edge(write_node, None, src_node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
-def _ensure_view_read_link(builder, state, read_node, target: str):
+def _ensure_view_read_link(builder: SDFGBuilder, state: SDFGState, read_node: AccessNode, target: str) -> None:
     """Install the source -> view linking memlet on a GIVEN read node of View
     ``target`` (read-direction counterpart of ``_ensure_view_writeback_link``).
     Needed when a library node's input is a View (e.g. in-place FFT over
@@ -105,7 +114,7 @@ def _ensure_view_read_link(builder, state, read_node, target: str):
     state.add_edge(src_node, None, read_node, 'views', Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
-def assign_reads_array(assign_node, arrays: dict) -> bool:
+def assign_reads_array(assign_node: NodeLike, arrays: Container[str]) -> bool:
     """True iff any ``accesses`` entry on ``assign_node`` reads an array.
     Promotes a nominally-scalar assign (``s = d(i) + 1``) onto the
     per-occurrence-connector tasklet path so the read gets a real memlet."""
@@ -115,7 +124,8 @@ def assign_reads_array(assign_node, arrays: dict) -> bool:
     return False
 
 
-def _rewrite_read_connectors(code: str, sorted_tokens, scalar_reads, array_occ: dict) -> str:
+def _rewrite_read_connectors(code: str, sorted_tokens: Sequence[str], scalar_reads: Container[str],
+                             array_occ: dict[str, int]) -> str:
     """Replace each read reference in a tasklet RHS with its per-occurrence
     input connector: scalar ``<name>`` -> ``_in_<name>``; Nth array occurrence
     ``<name>[...]`` -> ``_in_<name>_<N>`` with its balanced ``[...]`` consumed
@@ -157,7 +167,12 @@ def _rewrite_read_connectors(code: str, sorted_tokens, scalar_reads, array_occ: 
     return code
 
 
-def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect_syms: dict = None):
+def emit_tasklet(builder: SDFGBuilder,
+                 state: SDFGState,
+                 assign_node: NodeLike,
+                 idx: int,
+                 iter_map: dict[str, str],
+                 indirect_syms: dict[str, str] | None = None) -> None:
     """One Tasklet per array assignment.  Each RHS occurrence of an array
     (e.g. ``e_bln(jc,1)*z + e_bln(jc,2)*z``) gets its own input connector/memlet;
     collapsing them onto one connector would silently compute a wrong result."""
@@ -198,7 +213,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # ONE connector + ONE memlet per textual occurrence (never dedup'd) -- dedup
     # used to misalign occurrence-to-access mapping when the accesses list and
     # expr disagreed on count (e.g. MIN/MAX cmp+select).  1:1 is the contract now.
-    reads_by_name = {}
+    reads_by_name: dict[str, list[AccessLike]] = {}
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)
@@ -307,7 +322,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         state.add_edge(t, f"_out_{target}", w, None, Memlet(f"{eff_nm}[{ix}]"))
 
 
-def emit_scalar_assign(builder, state, target: str, value: str):
+def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, value: str) -> None:
     """Tasklet for ``target = value`` on a scalar target.  Identifier tokens
     naming an SDFG scalar each get their own input connector (so ``i = i + 1``
     self-updates work).  Whole-array fast path: when target and value are BOTH
@@ -358,6 +373,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         return
 
     if tgt_is_array:
+        assert tgt_var is not None
         is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
         if is_whole_array_copy:
             src_var = builder.arrays[src_name]
@@ -382,6 +398,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         _val_toks = _ident_tokens(src_name)
         _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars) | set(builder.symbols)))
         if not _reads_data:
+            assert tgt_var is not None
             dims = tgt_var.shape_symbols
             ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
             idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
@@ -446,7 +463,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     state.add_edge(t, '_out', a, None, Memlet(data=target, subset='0'))
 
 
-def _cc_elem_subset(name, elem_exprs):
+def _cc_elem_subset(name: str, elem_exprs: Sequence[str]) -> str:
     """Element subset for a complex-component-alias access in the VIEW's own
     0-based coordinates: only subtracts the element dims' Fortran lower bound
     (``qg[(i) - offset_qg_d0, ...]``) -- the view's descriptor + linking memlet
@@ -454,7 +471,12 @@ def _cc_elem_subset(name, elem_exprs):
     return ", ".join(f"({e}) - offset_{name}_d{k}" for k, e in enumerate(elem_exprs))
 
 
-def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict, indirect_syms: dict = None):
+def emit_complex_component_assign(builder: SDFGBuilder,
+                                  state: SDFGState,
+                                  node: NodeLike,
+                                  idx: int,
+                                  iter_map: dict[str, str],
+                                  indirect_syms: dict[str, str] | None = None) -> None:
     """``qg(c, i...) = <rhs>`` where ``qg`` is a complex-as-2-reals component
     alias (``REAL(2,N)`` dummy bound to a COMPLEX element -- QE's ``qvan2``
     ``qg(2,ngy)`` aliasing ``qgm(1,ijh)``), registered as a SAME-dtype COMPLEX
@@ -497,7 +519,7 @@ def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict
         r_scl.add(comp_expr)
     comp_ref = f"_in_{comp_expr}" if comp_is_scalar else comp_expr
 
-    reads_by_name = {}
+    reads_by_name: dict[str, list[AccessLike]] = {}
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)

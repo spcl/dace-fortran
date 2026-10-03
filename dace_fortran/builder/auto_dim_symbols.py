@@ -7,10 +7,13 @@ calls (test suite) need ``<arr>_d<i>``/``offset_<arr>_d<i>`` filled in -- from
 the passed array's shape when available, else a don't-care default.  SDFG
 signature itself is unchanged.
 """
+
+from __future__ import annotations
 import re
 from typing import Protocol, runtime_checkable
 
 import dace
+from typing import Any
 
 
 @runtime_checkable
@@ -32,7 +35,7 @@ class _AutoDimSDFG(dace.SDFG):
     the passed array arguments (or a don't-care default) before the
     real call."""
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         for sym in (str(s) for s in self.free_symbols):
             if sym in kwargs:
                 continue
@@ -56,7 +59,7 @@ class _AutoDimSDFG(dace.SDFG):
                 kwargs[sym] = 1  # unused extent: don't care
         return super().__call__(*args, **kwargs)
 
-    def to_json(self, *args, **kwargs):
+    def to_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """Serialise as plain ``SDFG`` so strict-type ``from_json`` (e.g.
         ``distributed_compile`` reloading a gzipped ``program.sdfgz`` per rank)
         accepts the dump; the auto-fill ``__call__`` wrapper isn't persisted

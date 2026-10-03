@@ -10,6 +10,8 @@ Genuine array dimension symbols are untouched (every extent stays a required
 SDFG input).  Keeps any symbol still referenced by some array's shape/offset;
 recurses into nested SDFGs.
 """
+
+from __future__ import annotations
 import re
 
 import dace
@@ -25,7 +27,7 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
 
     recursive = properties.Property(dtype=bool, default=True, desc="Recurse into nested SDFGs.")
 
-    def __init__(self, recursive: bool = True):
+    def __init__(self, recursive: bool = True) -> None:
         super().__init__()
         self.recursive = recursive
 
@@ -65,7 +67,7 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
                         self._rewrite(node.sdfg)
         return removed
 
-    def apply_pass(self, sdfg: dace.SDFG, _: dict):
+    def apply_pass(self, sdfg: dace.SDFG, _: dict) -> set[str] | None:
         """Returns the set of removed symbol names, or ``None`` if none."""
         removed = self._rewrite(sdfg)
         return removed or None

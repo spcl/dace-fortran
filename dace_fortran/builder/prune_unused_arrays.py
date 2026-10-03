@@ -11,7 +11,7 @@ the bindings layer still needs.
 """
 from __future__ import annotations
 
-from typing import Set
+from typing import AbstractSet, Set
 
 import dace
 from dace.properties import CodeBlock
@@ -43,7 +43,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
         live |= get_used_data(state)
     array_names = set(sdfg.arrays.keys())
 
-    def _grep(text: str):
+    def _grep(text: str) -> None:
         if text:
             live.update(set(_IDENT_RE.findall(text)) & array_names)
 
@@ -73,7 +73,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     return live
 
 
-def _prune_one(sdfg: SDFG, binding_names: Set[str]) -> Set[str]:
+def _prune_one(sdfg: SDFG, binding_names: AbstractSet[str]) -> Set[str]:
     """Drop every non-persistent, non-globally-scoped descriptor with no live
     reference and no bindings-layer reference.  Returns the set of pruned names."""
     live = _collect_live_names(sdfg)
@@ -101,7 +101,7 @@ def _prune_one(sdfg: SDFG, binding_names: Set[str]) -> Set[str]:
     return dropped
 
 
-def prune_unused_arrays(sdfg: SDFG, binding_names: Set[str] = frozenset()) -> Set[str]:
+def prune_unused_arrays(sdfg: SDFG, binding_names: AbstractSet[str] = frozenset()) -> Set[str]:
     """Recursively prune dead-descriptor arrays from ``sdfg`` and every
     NestedSDFG body reachable from it (mutated in place).  ``binding_names``
     keeps names the bindings layer needs regardless of dataflow visibility

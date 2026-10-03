@@ -21,13 +21,20 @@ Source order is recovered from ``state.node_id``: access nodes are created while
 emitted, so increasing node id is increasing Fortran statement order.  The pass therefore has to run
 on the freshly emitted graph, before anything renumbers nodes.
 """
+
+from __future__ import annotations
 from collections import defaultdict
 
 from dace import Memlet
 from dace.sdfg import nodes
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dace import SDFG
+    from dace.sdfg.state import SDFGState
 
 
-def descendants(state, source):
+def descendants(state: SDFGState, source: nodes.Node) -> set[nodes.Node]:
     """Every node reachable from ``source`` along dataflow edges."""
     seen = set()
     stack = [source]
@@ -40,17 +47,17 @@ def descendants(state, source):
     return seen
 
 
-def completion_anchor(state, node):
+def completion_anchor(state: SDFGState, node: nodes.Node) -> nodes.Node:
     """Node whose completion implies ``node`` has run (a scope stands for its whole body)."""
     return state.exit_node(node) if isinstance(node, nodes.EntryNode) else node
 
 
-def start_anchor(state, node):
+def start_anchor(state: SDFGState, node: nodes.Node) -> nodes.Node:
     """Node whose start implies ``node`` has not run yet (a scope stands for its whole body)."""
     return state.entry_node(node) if isinstance(node, nodes.ExitNode) else node
 
 
-def store_anchors(state, node, seen=None):
+def store_anchors(state: SDFGState, node: nodes.Node, seen: set[int] | None = None) -> list[nodes.Node]:
     """Nodes that perform the store into ``node``.
 
     Walks back through intervening AccessNodes so an aliased write (``p(i) = c(i)`` with
@@ -69,7 +76,7 @@ def store_anchors(state, node, seen=None):
     return anchors or [node]
 
 
-def load_anchors(state, node, seen=None):
+def load_anchors(state: SDFGState, node: nodes.Node, seen: set[int] | None = None) -> list[nodes.Node]:
     """Nodes whose completion implies every read of ``node`` has happened.
 
     The consumer rule: a later write is sequenced after the reader's CONSUMER, never after the
@@ -88,7 +95,7 @@ def load_anchors(state, node, seen=None):
     return anchors or [node]
 
 
-def order_state(state):
+def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
     """Add ordering edges for every unordered same-container pair in ``state``.
 
     :return: list of ``(container, src, dst)`` triples that had to be skipped to keep the state
@@ -146,7 +153,7 @@ def order_state(state):
     return skipped
 
 
-def enforce_statement_order(sdfg):
+def enforce_statement_order(sdfg: SDFG) -> list[tuple[str, nodes.Node, nodes.Node]]:
     """Pin Fortran statement order into every state of ``sdfg`` and its nested SDFGs."""
     skipped = []
     for nested in sdfg.all_sdfgs_recursive():

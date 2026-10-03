@@ -442,6 +442,11 @@ def lookup_external(name: str) -> Optional[ExternalSignature]:
     return _STATE.signatures.get(name)
 
 
+def require_external(name: str) -> ExternalSignature:
+    """Return the registered signature for name; KeyError when it is not registered."""
+    return _STATE.signatures[name]
+
+
 def registered_names() -> List[str]:
     """Names registered as external (``keep_external`` / ``register_external``).
 

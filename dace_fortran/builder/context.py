@@ -6,9 +6,15 @@ Tracks the "current" SDFG state, pending scalar assignments that need
 flushing as tasklets, and the active DO-loop iterator renames.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from dace import InterstateEdge, SDFG
+
+if TYPE_CHECKING:
+    from dace.sdfg.state import ControlFlowRegion, SDFGState
+    from dace_fortran.builder import SDFGBuilder
 
 
 class _Ctx:
@@ -44,7 +50,7 @@ class _Ctx:
         # parent's symbol may have been assigned on a path that did not run.
         self.cond_cache = {}
 
-    def ensure(self, region=None):
+    def ensure(self, region: ControlFlowRegion | None = None) -> None:
         """Make ``self.cur`` a writable ``SDFGState``: create the start
         state when empty, or wire a fresh successor past a non-state
         control-flow block.  ``region`` defaults to the SDFG."""
@@ -65,7 +71,7 @@ class _Ctx:
             r.add_edge(self.cur, succ, InterstateEdge())
             self.cur = succ
 
-    def flush(self, builder, region=None):
+    def flush(self, builder: SDFGBuilder, region: ControlFlowRegion | None = None) -> None:
         """Emit any pending scalar assignments into the current state."""
         if not self.pending:
             return
@@ -75,14 +81,17 @@ class _Ctx:
             builder.emit_scalar_assign(self.cur, target, value)
         self.pending.clear()
 
-    def flush_and_ensure(self, builder, region=None):
+    def flush_and_ensure(self, builder: SDFGBuilder, region: ControlFlowRegion | None = None) -> SDFGState:
         """Flush pending assignments, then guarantee and return a writable
         current state.  Enforces flush-before-ensure ordering in one place."""
         self.flush(builder, region)
         self.ensure(region)
         return self.cur
 
-    def new_state(self, builder, region=None, label=None):
+    def new_state(self,
+                  builder: SDFGBuilder,
+                  region: ControlFlowRegion | None = None,
+                  label: str | None = None) -> SDFGState:
         """Flush pending assignments, then open a fresh successor state."""
         self.flush(builder, region)
         r = self.sdfg if region is None else region

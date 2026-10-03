@@ -5,18 +5,30 @@ library nodes; BreakBlock/ReturnBlock terminators). Shared shape: flush pending 
 state, add the node, attach edges -- too small individually to earn their own file.
 """
 
+from __future__ import annotations
+
 import importlib
 import math
 import re
+from typing import TYPE_CHECKING, Any, Sequence, TypeVar, cast
 
 import dace.symbolic
 from dace import dtypes, InterstateEdge, Memlet
 
-from dace_fortran.builder.records import SyntheticNode
 from dace_fortran.builder.access import acc, iter_view_dim_map
+from dace_fortran.builder.records import NodeLike, SyntheticNode
+
+if TYPE_CHECKING:
+    from dace.sdfg.nodes import AccessNode, LibraryNode, Node
+    from dace.sdfg.state import ControlFlowRegion
+    from dace_fortran.builder import SDFGBuilder
+    from dace_fortran.builder.context import _Ctx
+    from dace_fortran.external import Arg
+
+_N = TypeVar("_N", bound="LibraryNode")
 
 
-def pin_sequential(node):
+def pin_sequential(node: _N) -> _N:
     """Pin a compute library node to a sequential schedule, and return it.
 
     Bridge output is single-threaded by contract: OpenMP directives in the Fortran are ignored and
@@ -67,14 +79,14 @@ _MOD_FORWARD_CTYPE = {
 }
 
 
-def _sym2c(s) -> str:
+def _sym2c(s: Any) -> str:
     """Render a symbolic shape entry as a C expression for an ``(int)(...)`` cast in an
     external-call body."""
     from dace.codegen.common import sym2cpp
     return sym2cpp(s)
 
 
-def _shape_is_symbolic(shape) -> bool:
+def _shape_is_symbolic(shape: Sequence[Any]) -> bool:
     """True iff any shape entry isn't an integer literal -- the
     ``dynamic_extents_abi`` callee then needs a runtime extent per dim
     rather than a baked compile-time literal in its ``c_f_pointer``."""
@@ -88,7 +100,7 @@ def _shape_is_symbolic(shape) -> bool:
     return False
 
 
-def _parse_reduce_identity(s: str):
+def _parse_reduce_identity(s: str) -> bool | int | float:
     """Resolve a reduce-accumulator-identity string (from the bridge's kRedTable or the Python
     REDUCTIONS registry) to its Python value. Raises on an unrecognised non-numeric token rather
     than silently mis-reducing."""
@@ -112,7 +124,7 @@ def _parse_reduce_identity(s: str):
         raise NotImplementedError(f"unsupported reduction identity {s!r}")
 
 
-def emit_copy(builder, ctx, n, region):
+def emit_copy(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Whole-array ``b = a`` -> ``CopyLibraryNode``. Connector names come from the node class
     so this stays correct across libnode renames."""
     from dace.libraries.standard.nodes import CopyLibraryNode
@@ -138,7 +150,7 @@ def emit_copy(builder, ctx, n, region):
     state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)
 
 
-def emit_memset(builder, ctx, n, region):
+def emit_memset(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Scalar-zero fill -> ``FillLibraryNode``. Transitions to a fresh successor state so a
     later element write to the same array doesn't race the array-wide write in one state's DAG."""
     from dace.libraries.standard.nodes import FillLibraryNode
@@ -190,7 +202,7 @@ def emit_memset(builder, ctx, n, region):
     ctx.new_state(builder, region)
 
 
-def emit_libcall(builder, ctx, n, region):
+def emit_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``target = matmul(a, b)`` / ``transpose(a)`` / ``dot_product(x, y)`` -> matching DaCe
     library node. ``MatMul`` specializes to GEMM/GEMV/Dot by operand rank."""
     from dace_fortran.intrinsics import libnode_spec
@@ -397,7 +409,7 @@ def resolve_mpi_op(opname: str) -> str:
         "so the name survives to the builder.")
 
 
-def query_target(builder, ctx, name):
+def query_target(builder: SDFGBuilder, ctx: _Ctx, name: str) -> tuple[str, str | None]:
     """Pick the data name an ``MPI_Comm_rank`` / ``_size`` result writes into.
 
     Normally the Fortran integer itself.  But when that integer goes on to drive a branch
@@ -415,7 +427,8 @@ def query_target(builder, ctx, name):
     return backing, name
 
 
-def bind_query_symbol(builder, ctx, region, backing, sym):
+def bind_query_symbol(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, backing: str,
+                      sym: str | None) -> None:
     """Assign a promoted query symbol from the transient the library node wrote.
 
     A no-op unless :func:`query_target` had to redirect the write.
@@ -427,7 +440,7 @@ def bind_query_symbol(builder, ctx, region, backing, sym):
     ctx.cur = nxt
 
 
-def emit_mpi(builder, ctx, n, region):
+def emit_mpi(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
 
@@ -530,7 +543,7 @@ def emit_mpi(builder, ctx, n, region):
     # moment the bridge carries the count / section.
     _subsets = list(n.call_arg_subsets) if n.call_arg_subsets else []
 
-    def _buf_memlet(name, idx):
+    def _buf_memlet(name: str, idx: int) -> Memlet:
         """Memlet for the collective buffer ``call_args[idx]`` honouring its
         parallel ``call_arg_subsets`` entry (whole array when empty)."""
         sub = _subsets[idx] if idx < len(_subsets) else ""
@@ -538,7 +551,7 @@ def emit_mpi(builder, ctx, n, region):
             return Memlet(f"{name}[{sub}]")
         return Memlet.from_array(name, ctx.sdfg.arrays[name])
 
-    def _wire_user_comm(node, comm):
+    def _wire_user_comm(node: Node, comm: str | None) -> None:
         """Thread an optional user communicator into an MPI node via a ``_comm``
         input connector carrying an ``opaque(MPI_Comm)`` value.
 
@@ -825,7 +838,7 @@ def emit_mpi(builder, ctx, n, region):
     _comm_base = 4 if n.callee in ('mpi_isend', 'mpi_irecv') else 3
     comm = n.call_args[_comm_base] if len(n.call_args) > _comm_base else None
 
-    def _wire_grid(node):
+    def _wire_grid(node: Node) -> None:
         """Wire the optional user communicator into the point-to-point node via a
         ``_comm`` connector (an ``opaque(MPI_Comm)`` ``CommF2c``-d from the Fortran
         handle); shares ``_wire_user_comm`` with the collectives.  No-op for the
@@ -887,7 +900,7 @@ def emit_mpi(builder, ctx, n, region):
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
 
-def emit_io(builder, ctx, n, region):
+def emit_io(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran I/O statement (``kind == 'iocall'``) to a
     ``dace_fortran.libraries.fortran_io`` node.
 
@@ -931,7 +944,7 @@ def emit_io(builder, ctx, n, region):
             state.add_edge(acc(builder, state, name), None, node, f"_in_{i}", memlet)
 
 
-def emit_fft_interpolate(builder, ctx, n, region):
+def emit_fft_interpolate(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised QE ``fft_interpolate_*`` call to an
     :class:`dace_fortran.libraries.fft.nodes.FFTInterpolate` lib node.
 
@@ -956,7 +969,7 @@ def emit_fft_interpolate(builder, ctx, n, region):
     state.add_edge(node, "_out", state.add_write(vout), None, Memlet.from_array(vout, out_desc))
 
 
-def emit_unsupported_libcall(builder, ctx, n, region):
+def emit_unsupported_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Raise a clear ``NotImplementedError`` for a Fortran call site that
     matches a recognised library's call convention (MPI / FFTW3 / BLAS /
     LAPACK) but isn't in the bridge's supported subset yet.
@@ -977,7 +990,7 @@ def emit_unsupported_libcall(builder, ctx, n, region):
                               f"but is not in the bridge's supported subset.  To add support: {hint}.")
 
 
-def emit_blas(builder, ctx, n, region):
+def emit_blas(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran BLAS call (``kind == 'blascall'``) to a
     :mod:`dace.libraries.blas` library node.
 
@@ -1012,7 +1025,7 @@ def emit_blas(builder, ctx, n, region):
     # BLAS state so the symbol is bound BEFORE the lib node executes.
     promotions: dict[str, str] = {}  # sym -> "array_name[0]"
 
-    def _scalar(name):
+    def _scalar(name: str) -> float | dace.symbolic.symbol:
         """Resolve a scalar literal / dummy to a value usable as a
         :class:`SymbolicProperty` on the BLAS lib node.
         """
@@ -1035,7 +1048,7 @@ def emit_blas(builder, ctx, n, region):
         ctx.sdfg.add_symbol(name, dace.float64)
         return _ds.symbol(name)
 
-    def _apply_promotions():
+    def _apply_promotions() -> None:
         """Stage any pending scalar promotions on the BLAS state's inbound edge."""
         if not promotions:
             return
@@ -1234,7 +1247,7 @@ def emit_blas(builder, ctx, n, region):
         return
 
 
-def emit_lapack(builder, ctx, n, region):
+def emit_lapack(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran LAPACK call (``kind == 'lapackcall'``)
     to a :mod:`dace.libraries.lapack` library node.
 
@@ -1323,7 +1336,7 @@ def emit_lapack(builder, ctx, n, region):
         return
 
 
-def emit_fft(builder, ctx, n, region):
+def emit_fft(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised FFTW3 ``fftw_execute_dft`` call site
     (``kind == 'fftcall'``) to a :class:`dace.libraries.fft.nodes.FFT`
     (forward) or :class:`dace.libraries.fft.nodes.IFFT` (backward)
@@ -1389,7 +1402,7 @@ def emit_fft(builder, ctx, n, region):
         _ensure_view_writeback_link(builder, state, out_node, out_arr)
 
 
-def emit_call(builder, ctx, n, region):
+def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a *registered* external ``bind(c)`` call to an
     :class:`dace_fortran.external.ExternalCall` library node.
 
@@ -1754,7 +1767,7 @@ def emit_call(builder, ctx, n, region):
                             ov = builder.offset_values[off]
                             if ov is None:
                                 call_args_c.append(f"(int)({off})")
-                            elif ov < 1:
+                            elif cast(int, ov) < 1:
                                 call_args_c.append(f"(int)({ov})")
                         call_args_c.append(f"(int)({_sym2c(s)})")
                 call_args_c.append(tok)
@@ -1842,16 +1855,17 @@ def emit_call(builder, ctx, n, region):
     # extents the body emission prepends.
     decl_types: list = []
     sig_arg_iter = iter(sig.args)
-    cur_sig_arg = next(sig_arg_iter, None)
+    cur_sig_arg: Arg | None = next(sig_arg_iter, None)
     last_gid_seen = None
     last_member_idx = -1
     plan_term_index = -1  # mirrors ``logical_terms`` indexing for non-aos
     for kind, dtype, intent, gid in plan:
         if gid is None:
             plan_term_index += 1
-            arr_shape = array_shape_at_term.get(plan_term_index)
-            if arr_shape:
-                decl_types.extend(["int"] * len(arr_shape))
+            term_shape = array_shape_at_term.get(plan_term_index)
+            if term_shape:
+                decl_types.extend(["int"] * len(term_shape))
+            assert cur_sig_arg is not None
             decl_types.append(cur_sig_arg.c_decl_type())
             cur_sig_arg = next(sig_arg_iter, None)
             last_gid_seen = None
@@ -1885,7 +1899,7 @@ def emit_call(builder, ctx, n, region):
                     off = f"offset_{s}"
                     if off in builder.offset_values:
                         ov = builder.offset_values[off]
-                        if ov is None or ov < 1:
+                        if ov is None or cast(int, ov) < 1:
                             decl_types.append("int")
                     decl_types.append("int")
             decl_types.append(f"{ct}*")
@@ -1951,7 +1965,7 @@ def emit_call(builder, ctx, n, region):
     # Array connectors carry a pointer; data scalars stay by-value;
     # ``comm`` connectors carry ``opaque(MPI_Comm)`` by value (matches
     # the C ``MPI_Comm`` parameter type the shim declares).
-    def _retype_in(c, d):
+    def _retype_in(c: str, d: dtypes.typeclass) -> dtypes.typeclass:
         if c in ptr_of:
             return dace.pointer(ptr_of[c])
         if c in comm_conns:
@@ -1962,7 +1976,7 @@ def emit_call(builder, ctx, n, region):
     node.out_connectors = {c: dace.pointer(ptr_of[c]) for c, d in node.out_connectors.items()}
 
 
-def emit_reduce(builder, ctx, n, region):
+def emit_reduce(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``target = sum(src)`` (and product / minval / maxval) lowered as a
     DaCe ``standard.Reduce`` library node via
     ``state.add_reduce(wcr, axes, identity)``.
@@ -2005,11 +2019,11 @@ def emit_reduce(builder, ctx, n, region):
         if identity_val in (math.inf, -math.inf):
             np_dt = tgt_desc.dtype.as_numpy_dtype()
             if np.issubdtype(np_dt, np.integer):
-                info = np.iinfo(np_dt)
-                identity_val = info.max if identity_val == math.inf else info.min
+                iinfo = np.iinfo(np_dt)
+                identity_val = iinfo.max if identity_val == math.inf else iinfo.min
             elif np.issubdtype(np_dt, np.floating):
-                info = np.finfo(np_dt)
-                identity_val = float(info.max if identity_val == math.inf else info.min)
+                finfo = np.finfo(np_dt)
+                identity_val = float(finfo.max if identity_val == math.inf else finfo.min)
 
     src_access = acc(builder, state, src_name)
     tgt_access = acc(builder, state, n.target)
@@ -2077,7 +2091,8 @@ def emit_reduce(builder, ctx, n, region):
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
 
-def _emit_terminator_block(builder, ctx, region, block_cls, prefix: str):
+def _emit_terminator_block(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, block_cls: type,
+                           prefix: str) -> None:
     """Add a leaf control-flow terminator (``BreakBlock`` /
     ``ReturnBlock``) to ``region``, wired from ``ctx.cur`` -- or marked
     the region's start block when the terminator is its first statement.
@@ -2094,7 +2109,7 @@ def _emit_terminator_block(builder, ctx, region, block_cls, prefix: str):
     ctx.cur = blk
 
 
-def emit_break(builder, ctx, n, region):
+def emit_break(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``EXIT`` -> ``BreakBlock`` added to the current region.
     The block is a leaf and implicitly transfers control to the nearest
     enclosing loop's exit edge at codegen time.  When the break is the
@@ -2105,7 +2120,7 @@ def emit_break(builder, ctx, n, region):
     _emit_terminator_block(builder, ctx, region, BreakBlock, "break")
 
 
-def emit_return(builder, ctx, n, region):
+def emit_return(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``RETURN`` -> ``ReturnBlock``.  Added to the current region
     so RETURNs nested inside a loop or conditional get placed correctly;
     codegen still emits a plain ``return`` that bails out of the whole
