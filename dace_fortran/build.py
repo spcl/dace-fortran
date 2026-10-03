@@ -643,6 +643,8 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
         raise ValueError("build_sdfg_from_files requires entry= (it selects the root file)")
     paths = [Path(f) for f in files]
     proc = _entry_proc_name(entry)
+    if proc is None:
+        raise ValueError(f"cannot derive a procedure name from entry {entry!r}")
     _def = re.compile(rf"^\s*(?:[\w()*]+\s+)*?(?:subroutine|function)\s+{re.escape(proc)}\b",
                       re.IGNORECASE | re.MULTILINE)
     roots = [p for p in paths if _def.search(p.read_text())]

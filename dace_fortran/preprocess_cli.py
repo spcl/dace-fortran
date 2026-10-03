@@ -112,7 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _parse_kind_map(items: Iterable[str] | None) -> dict[str, int | None]:
     """Parse ``--kind-map`` CLI items into the dict the pass accepts."""
     out: dict = {}
-    for item in items:
+    for item in items or ():
         if "=" not in item:
             raise SystemExit(f"--kind-map expects NAME=N, got {item!r}")
         name, raw = item.split("=", 1)

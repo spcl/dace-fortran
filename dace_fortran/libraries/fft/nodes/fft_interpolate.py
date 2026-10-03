@@ -18,6 +18,10 @@ from dace import nodes, SDFG, SDFGState, dtypes, Memlet
 from dace import transformation as xf
 from typing import Any, ClassVar, Sequence
 
+import numpy as np
+
+from dace_fortran.dace_types import MapRanges
+
 
 @dace.library.node
 class FFTInterpolate(nodes.LibraryNode):
@@ -99,7 +103,7 @@ def _emit_fftw3_tasklet(state: SDFGState, sdfg: SDFG, in_array: str, out_array: 
     else:
         prefix, complex_t = 'fftwf_', 'fftwf_complex'
     rank = len(shape)
-    cdims = ', '.join(cpp.sym2cpp(s) for s in shape)
+    cdims = ', '.join(str(cpp.sym2cpp(s)) for s in shape)
     code = f"""
     {{
         {prefix}plan __plan = {prefix}plan_dft_{rank}d({cdims},
@@ -122,21 +126,21 @@ def _emit_fftw3_tasklet(state: SDFGState, sdfg: SDFG, in_array: str, out_array: 
 
 
 def _region_iter_ranges(part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, Any, Any, Any]],
-                        ivars: Sequence[str]) -> dict[str, str]:
+                        ivars: Sequence[str]) -> MapRanges:
     """Per-axis map iteration ranges for the copy tasklet.
 
     Each ``low`` side iterates ``0:low_d``; each ``high`` side iterates
     ``0:high_d``.  Returns ``{ivar: 'a:b'}`` ready for
     :meth:`add_mapped_tasklet`.
     """
-    ranges = {}
+    ranges: MapRanges = {}
     for part, (low_d, high_d, _, _), iv in zip(part_per_axis, cuts, ivars):
         size_d = low_d if part == 'low' else high_d
         ranges[iv] = f'0:{size_d}'
     return ranges
 
 
-@dace.library.register_expansion(FFTInterpolate, 'pure')
+@dace.library.register_expansion(FFTInterpolate, 'pure')  # type: ignore[arg-type]  # dace types the node argument as an instance
 class FFTInterpolatePure(xf.ExpandTransformation):
     """Backend-agnostic FFTInterpolate as compose(FFT -> pad/truncate -> IFFT).
 
@@ -151,7 +155,8 @@ class FFTInterpolatePure(xf.ExpandTransformation):
     environments: ClassVar[list[type]] = []
 
     @staticmethod
-    def expansion(node: 'FFTInterpolate', parent_state: SDFGState, parent_sdfg: SDFG) -> SDFG:
+    def expansion(  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
+            node: 'FFTInterpolate', parent_state: SDFGState, parent_sdfg: SDFG) -> SDFG:
         input_name, output_name = _get_input_and_output(parent_state, node)
         indesc = parent_sdfg.arrays[input_name]
         outdesc = parent_sdfg.arrays[output_name]
@@ -173,8 +178,9 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         sdfg.add_datadesc('_inp', in_inner)
         sdfg.add_datadesc('_out', out_inner)
 
-        complex_dtype = dtypes.complex128 if indesc.dtype in (dtypes.float64, dtypes.complex128) \
-            else dtypes.complex64
+        # ``dtypes.complex128`` / ``complex64`` are declared as array classes for annotations; build the typeclass.
+        complex_dtype = dtypes.typeclass(np.complex128 if indesc.dtype in (dtypes.float64, dtypes.complex128) else
+                                         np.complex64)
 
         in_shape = list(indesc.shape)
         out_shape = list(outdesc.shape)
@@ -197,7 +203,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
 
         # 1. Zero the padded spectrum.
         zero_ivars = [f'i{d}' for d in range(rank)]
-        zero_ranges = {iv: f'0:{out_shape[d]}' for d, iv in enumerate(zero_ivars)}
+        zero_ranges: MapRanges = {iv: f'0:{out_shape[d]}' for d, iv in enumerate(zero_ivars)}
         zero_index = ', '.join(zero_ivars)
         st_init.add_mapped_tasklet('zero_spec',
                                    zero_ranges, {},
@@ -206,7 +212,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
 
         # 2. Cast input to complex.
         cast_ivars = [f'i{d}' for d in range(rank)]
-        cast_ranges = {iv: f'0:{in_shape[d]}' for d, iv in enumerate(cast_ivars)}
+        cast_ranges: MapRanges = {iv: f'0:{in_shape[d]}' for d, iv in enumerate(cast_ivars)}
         cast_index = ', '.join(cast_ivars)
         st_fft.add_mapped_tasklet('cast_inp',
                                   cast_ranges, {'__x': Memlet(f'_inp[{cast_index}]')},
@@ -280,7 +286,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         # 6. Project to output dtype and apply 1/Nin scaling.
         st_finalize = sdfg.add_state_after(st_ifft_state, 's_finalize')
         fin_ivars = [f'i{d}' for d in range(rank)]
-        fin_ranges = {iv: f'0:{out_shape[d]}' for d, iv in enumerate(fin_ivars)}
+        fin_ranges: MapRanges = {iv: f'0:{out_shape[d]}' for d, iv in enumerate(fin_ivars)}
         fin_index = ', '.join(fin_ivars)
         is_real = (node.dtype_kind == 'real')
         inv_nin_expr = f'(1.0 / ({in_size}))'

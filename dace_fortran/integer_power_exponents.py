@@ -23,7 +23,7 @@ class _ExponentIntegerizer(ast.NodeTransformer):
         self.rewrites = 0
 
     @staticmethod
-    def _as_int_constant(node: ast.AST) -> Optional[ast.AST]:
+    def _as_int_constant(node: ast.expr) -> Optional[ast.expr]:
         """Int-valued replacement for a float ``**`` exponent (``2.0`` or
         ``-2.0``), or ``None`` if not integer-valued. Sign folds into the int."""
         if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
@@ -45,7 +45,7 @@ class _ExponentIntegerizer(ast.NodeTransformer):
 
 
 @explicit_cf_compatible
-class IntegerizePowerExponents(ppl.Pass):
+class IntegerizePowerExponents(ppl.Pass):  # type: ignore[type-var]  # dace types the decorator as taking an instance
     """Retype integer-valued float ``**`` exponents in tasklets to ``int``.
 
     Must run after tasklet splitting -- flips codegen from libm ``pow`` to

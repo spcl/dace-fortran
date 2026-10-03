@@ -689,7 +689,7 @@ def array_read_to_dace_expr(builder: SDFGBuilder,
                 eff_name, eff_ac = resolve_section_alias(builder, ac.array_name, ac)
                 parts = [_remap_token(raw, iter_map) for raw in (eff_ac.index_exprs or [])]
                 out.append(_format_offset_subset(eff_name, parts))
-            elif not already_subscripted and sdfg_is_len1_array(sdfg, tok):
+            elif not already_subscripted and sdfg is not None and sdfg_is_len1_array(sdfg, tok):
                 # A logical scalar kept as a length-1 Array (inout/out module
                 # global like ``kunit`` / ``npool``, or a complex intent(in)):
                 # it is a pointer in C, so the code-block expression must read

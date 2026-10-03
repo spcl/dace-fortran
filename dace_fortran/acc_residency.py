@@ -142,7 +142,8 @@ def _mask_cpp(source: str, defines: frozenset) -> str:
         stripped = line.lstrip()
         if stripped.startswith("#"):
             directive = stripped[1:].lstrip()
-            word = re.match(r"\w*", directive).group(0)
+            word_match = re.match(r"\w*", directive)  # matches the empty string at worst
+            word = word_match.group(0) if word_match else ""
             rest = directive[len(word):].strip()
             if word == "ifdef":
                 taken = rest.split()[0] in defines if rest.split() else False
@@ -231,6 +232,8 @@ class _Logical:
 def _sentinel_body(line: str) -> Tuple[str, bool]:
     """The directive text of one physical ``!$acc`` line, plus its continues-flag."""
     match = _ACC_SENTINEL_RE.match(line)
+    if match is None:
+        raise ValueError(f"not a !$acc sentinel line: {line!r}")
     body = _strip_comment(line[match.end():]).rstrip()
     continued = body.endswith("&")
     if continued:

@@ -34,6 +34,11 @@ class FortranIONode(nodes.LibraryNode):
     dead code even when, like ``WRITE``, they have no output connectors.
     """
 
+    @property
+    def num_items(self) -> int:
+        """Number of connected I/O items; each concrete node defines it."""
+        raise NotImplementedError
+
     def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 

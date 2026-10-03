@@ -278,10 +278,10 @@ def _install_sdfg_accessor() -> None:
 
     if isinstance(SDFG.__dict__.get('_frozen_signature'), property):
         return
-    if 'frontend_metadata' not in SDFG.__properties__:
+    if 'frontend_metadata' not in SDFG.__properties__:  # type: ignore[attr-defined]  # set by dace's make_properties
         raise RuntimeError("this dace has no SDFG.frontend_metadata property, so a frozen "
                            "signature could not survive save/load; update dace")
-    SDFG._frozen_signature = property(get_frozen_signature, attach_to_sdfg)
+    SDFG._frozen_signature = property(get_frozen_signature, attach_to_sdfg)  # type: ignore[attr-defined]  # installed accessor
 
 
 _install_sdfg_accessor()

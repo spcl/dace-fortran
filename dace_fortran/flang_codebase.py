@@ -315,6 +315,8 @@ def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str
     defines = sorted(set(_DEFINE_RE.findall(compile_line)))
     include_dirs = [Path(p) for p in _INCLUDE_RE.findall(compile_line)]
     src_match = _FORTRAN_SOURCE_RE.search(compile_line)
+    if src_match is None:
+        raise ValueError(f"no Fortran source file in compile command: {compile_line!r}")
     return {
         "defines": defines,
         "include_dirs": include_dirs,

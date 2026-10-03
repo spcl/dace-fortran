@@ -32,7 +32,7 @@ class ExpandWriteFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: Write, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
+    def expansion(node: Write, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
         items = node.ordered_items(parent_sdfg, parent_state, "_in_", edges_in=True)
         path = c_string(node.filename)
         lines = [f'int _u = dace_fio_open("{path}", {len(node.filename.encode())}, 1);']
@@ -59,7 +59,7 @@ class Write(FortranIONode):
     default_implementation = "FortranIO"
 
     filename = dace.properties.Property(dtype=str, default="", desc="Output file path")
-    num_items = dace.properties.Property(dtype=int, default=0, desc="Number of items written")
+    num_items: int = dace.properties.Property(dtype=int, default=0, desc="Number of items written")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
 
     def __init__(self, name: str, filename: str = "", num_items: int = 0, **kwargs: Any) -> None:
         super().__init__(name, inputs={f"_in_{i}" for i in range(num_items)}, outputs=set(), **kwargs)

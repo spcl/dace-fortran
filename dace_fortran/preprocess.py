@@ -967,7 +967,8 @@ def replace_external_with_modules(source: str, *, search_dirs: Sequence[str | Pa
             if _scope_already_uses(scope_lines, mod):
                 continue  # EXTERNAL becomes a no-op delete
             # Indent = opener's leading whitespace + 2 spaces (conventional continuation).
-            opener_indent = re.match(r"^(\s*)", lines[opener_idx]).group(1)
+            indent_match = re.match(r"^(\s*)", lines[opener_idx])  # matches the empty string at worst
+            opener_indent = indent_match.group(1) if indent_match else ""
             body_indent = opener_indent + "  "
             synth_use_lines.append(f"{body_indent}USE {mod}, ONLY: {', '.join(names)}\n")
         if synth_use_lines:

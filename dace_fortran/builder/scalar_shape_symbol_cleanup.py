@@ -21,7 +21,7 @@ from dace.transformation import pass_pipeline as ppl, transformation
 
 @properties.make_properties
 @transformation.explicit_cf_compatible
-class RemoveScalarFortranShapeSymbols(ppl.Pass):
+class RemoveScalarFortranShapeSymbols(ppl.Pass):  # type: ignore[type-var]  # dace types the decorator as taking an instance
     """Remove the bridge's ``<scalar>_d<i>``/``offset_<scalar>_d<i>`` symbols
     (a ``Scalar`` has neither shape nor offset)."""
 

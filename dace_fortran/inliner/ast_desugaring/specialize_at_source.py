@@ -338,7 +338,7 @@ def _fold_logical_literal_locals(exec_text: str) -> str:
         return exec_text
     kept = [
         line for line in exec_text.splitlines()
-        if not ((m := _LOGICAL_LIT_ASSIGN.match(line)) and m.group(1).lower() in const)
+        if not ((assign := _LOGICAL_LIT_ASSIGN.match(line)) and assign.group(1).lower() in const)
     ]
     return _subst("\n".join(kept), const)
 

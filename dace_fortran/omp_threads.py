@@ -24,7 +24,7 @@ OMP_NUM_THREADS_SYMBOL = '__omp_num_threads'
 
 
 @explicit_cf_compatible
-class BindOmpThreadCount(ppl.Pass):
+class BindOmpThreadCount(ppl.Pass):  # type: ignore[type-var]  # dace types the decorator as taking an instance
     """Define the free symbol ``symbol`` as ``omp_get_max_threads()`` at the entry of the SDFG.
 
     Does nothing when the SDFG does not use the symbol, or already defines it on an interstate edge.

@@ -40,6 +40,7 @@ NOTE on nanobind bindings:
 
 from __future__ import annotations
 
+import ast
 import gc
 import weakref
 from typing import TYPE_CHECKING, Any, Sequence
@@ -56,6 +57,7 @@ from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
 from dace_fortran.builder.context import Ctx
+from dace_fortran.dace_types import MapRanges, connectors
 from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
@@ -986,7 +988,8 @@ class SDFGBuilder:
         # attempt that broke ``type_array`` /
         # ``type_array2`` tests for non-default lower bounds.  Batched:
         # one recursive walk for the whole set, not one per offset.
-        specialize_symbols(sdfg, const_offsets)
+        specialize_args: dict[str, float | int | str] = dict(const_offsets)
+        specialize_symbols(sdfg, specialize_args)
         # Symbol-to-symbol aliasing (``offset_d_d0 = arrsize``): rename
         # every reference and drop the now-redundant offset symbol from
         # the SDFG so its signature only carries ``arrsize`` as a free
@@ -1193,10 +1196,10 @@ class SDFGBuilder:
         from dace import data as dace_data
         if isinstance(desc, dace_data.Scalar):
             wnode = state.add_access(name)
-            tasklet = state.add_tasklet(f"zinit_{name}", {}, {"_out": None}, "_out = 0")
+            tasklet = state.add_tasklet(f"zinit_{name}", {}, connectors(["_out"]), "_out = 0")
             state.add_edge(tasklet, "_out", wnode, None, Memlet(data=name, subset="0"))
             return
-        ranges = {f"__zi{d}": f"0:{ext}" for d, ext in enumerate(desc.shape)}
+        ranges: MapRanges = {f"__zi{d}": f"0:{ext}" for d, ext in enumerate(desc.shape)}
         state.add_mapped_tasklet(
             name=f"zinit_{name}",
             map_ranges=ranges,
@@ -1364,7 +1367,7 @@ class SDFGBuilder:
         (:meth:`_check_value_symbols_constant`)."""
         import dace
         self._value_symbol_provenance = {}
-        seeds = {}
+        seeds: dict[str, str | ast.AST] = {}
         for vs in self.value_symbols:
             sym, arr, idx = vs.symbol, vs.array, vs.index_expr
             if arr not in sdfg.arrays:

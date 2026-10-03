@@ -198,7 +198,7 @@ def optimize(sdfg: SDFG,
 
     if validate:
         sdfg.validate()
-    if verify_inputs is not None:
+    if verify_inputs is not None and reference is not None:
         verify_numerics(reference, sdfg, verify_inputs)
     return sdfg
 

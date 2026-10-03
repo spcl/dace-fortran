@@ -49,12 +49,22 @@ def descendants(state: SDFGState, source: nodes.Node) -> set[nodes.Node]:
 
 def completion_anchor(state: SDFGState, node: nodes.Node) -> nodes.Node:
     """Node whose completion implies ``node`` has run (a scope stands for its whole body)."""
-    return state.exit_node(node) if isinstance(node, nodes.EntryNode) else node
+    if not isinstance(node, nodes.EntryNode):
+        return node
+    exit_node = state.exit_node(node)
+    if exit_node is None:
+        raise ValueError(f"scope entry {node} has no exit node in state {state.label}")
+    return exit_node
 
 
 def start_anchor(state: SDFGState, node: nodes.Node) -> nodes.Node:
     """Node whose start implies ``node`` has not run yet (a scope stands for its whole body)."""
-    return state.entry_node(node) if isinstance(node, nodes.ExitNode) else node
+    if not isinstance(node, nodes.ExitNode):
+        return node
+    entry_node = state.entry_node(node)
+    if entry_node is None:
+        raise ValueError(f"scope exit {node} has no entry node in state {state.label}")
+    return entry_node
 
 
 def store_anchors(state: SDFGState, node: nodes.Node, seen: set[int] | None = None) -> list[nodes.Node]:

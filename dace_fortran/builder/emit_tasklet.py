@@ -16,6 +16,7 @@ from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
                                          resolve_object_member, resolve_object_member_expr, resolve_section_alias)
+from dace_fortran.dace_types import MapRanges, connectors
 from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticVar, VarLike
 
 if TYPE_CHECKING:
@@ -225,11 +226,9 @@ def emit_tasklet(builder: SDFGBuilder,
 
     # Connector dicts, not sets: ``add_tasklet`` turns a set into a dict anyway, and doing it here
     # keeps the connector order the one this code built rather than a hash order.
-    in_c = {f"_in_{sc}": None for sc in r_scl}
-    for nm, acs in reads_by_name.items():
-        for i in range(len(acs)):
-            in_c[f"_in_{nm}_{i}"] = None
-    out_c = {f"_out_{target}": None}
+    in_c = connectors([*(f"_in_{sc}" for sc in r_scl),
+                       *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))])
+    out_c = connectors([f"_out_{target}"])
 
     # iter_map rename MUST run before the connector rewrite: ``d(i) = i*2.0``
     # in ``do i = 50, 54`` renders RHS ``i * 2.0``, but the LoopRegion's iter is
@@ -401,7 +400,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         if not _reads_data:
             assert tgt_var is not None
             dims = tgt_var.shape_symbols
-            ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
+            ranges: MapRanges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
             idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
             w = state.add_access(target)
             cache = builder.access_caches.get(state)
@@ -434,8 +433,8 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
     for nm in reads:
         code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
 
-    in_c = {f"_in_{nm}": None for nm in reads}
-    out_c = {'_out': None}
+    in_c = connectors(f"_in_{nm}" for nm in reads)
+    out_c = connectors(['_out'])
     t = state.add_tasklet(f"set_{target}", in_c, out_c, f"_out = {code}")
 
     for nm in reads:
@@ -531,10 +530,8 @@ def emit_complex_component_assign(builder: SDFGBuilder,
         raise NotImplementedError(f"emit_complex_component_assign: unresolved operand placeholder "
                                   f"``?`` in rhs ``{rhs_code}`` (target={name!r}).")
 
-    in_conns = {'_in_z': None, **{f"_in_{sc}": None for sc in r_scl}}
-    for nm, acs in reads_by_name.items():
-        for i in range(len(acs)):
-            in_conns[f"_in_{nm}_{i}"] = None
+    in_conns = connectors(['_in_z', *(f"_in_{sc}" for sc in r_scl),
+                           *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))])
     # ``.real()``/``.imag()`` METHODS, not ``re()``/``im()`` helpers: a bare
     # ``im`` token collides with QE's kernel variable ``im`` (reserved-name
     # rewrite turns the call into a call on an int).  Attribute access isn't a
@@ -542,7 +539,7 @@ def emit_complex_component_assign(builder: SDFGBuilder,
     code = (f"_cur = ((_in_z).real() if ({comp_ref} == 1) else (_in_z).imag())\n"
             f"_new = {rhs_code}\n"
             f"_out_z = (_new + 1j*(_in_z).imag()) if ({comp_ref} == 1) else ((_in_z).real() + 1j*_new)")
-    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, {'_out_z': None}, code)
+    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, connectors(['_out_z']), code)
 
     rz = acc(builder, state, name)  # COMPLEX view read (installs src -> view link)
     state.add_edge(rz, None, t, '_in_z', Memlet(f"{name}[{elem_sub}]"))

@@ -33,7 +33,13 @@ _DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
 class AutoDimSDFG(dace.SDFG):
     """``SDFG`` that fills missing synthetic Fortran extent symbols from
     the passed array arguments before the real call; an extent no
-    argument supplies raises instead of defaulting."""
+    argument supplies raises instead of defaulting.
+
+    The annotated attributes are the sidecars ``SDFGBuilder.build`` stashes for the binding emitter."""
+
+    _fortran_offset_values: dict[str, int]
+    _fortran_interface_raw: Any
+    _flatten_plan_raw: Any
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         for sym in (str(s) for s in self.free_symbols):

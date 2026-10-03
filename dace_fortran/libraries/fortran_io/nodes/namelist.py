@@ -28,7 +28,7 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
+    def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
         items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
         if len(node.members) != len(items):
             raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
@@ -61,9 +61,10 @@ class NamelistRead(FortranIONode):
     implementations = {"FortranIO": ExpandNamelistReadFortranIO}
     default_implementation = "FortranIO"
 
-    filename = dace.properties.Property(dtype=str, default="", desc="Namelist file path")
-    group = dace.properties.Property(dtype=str, default="", desc="Namelist group name")
-    members = dace.properties.ListProperty(element_type=str, default=[], desc="Member names, in output-connector order")
+    filename: str = dace.properties.Property(dtype=str, default="", desc="Namelist file path")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
+    group: str = dace.properties.Property(dtype=str, default="", desc="Namelist group name")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
+    members: list[str] = dace.properties.ListProperty(  # type: ignore[assignment]  # dace types it as list[type[str]]
+        element_type=str, default=[], desc="Member names, in output-connector order")
 
     def __init__(self,
                  name: str,

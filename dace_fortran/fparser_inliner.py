@@ -839,7 +839,10 @@ def _function_result_name(fn: f03.Function_Stmt) -> str:
         result = atmost_one(children_of_type(suffix, f03.Name))
         if result is not None:
             return result.string
-    return utils.find_name_of_stmt(fn)
+    name = utils.find_name_of_stmt(fn)
+    if name is None:
+        raise ValueError(f"function statement without a name: {fn}")
+    return name
 
 
 #: ``/group/ obj, obj, ...`` segment of a ``NAMELIST`` statement.
@@ -1074,9 +1077,10 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         # is still valid Fortran (the interface plus its stubbed module
         # procedures resolve at the call site), and the final gfortran gate
         # rejects a genuinely uncompilable TU, so this is safe to leave.
-        surviving = sorted(
-            {utils.find_name_of_stmt(i)
-             for i in walk(ast, f03.Interface_Stmt) if utils.find_name_of_stmt(i)})
+        surviving = sorted({
+            name
+            for i in walk(ast, f03.Interface_Stmt) if (name := utils.find_name_of_stmt(i)) is not None
+        })
         logger.warning("Left %d generic interface(s) unresolved while tolerating externals: %s", len(surviving),
                        ", ".join(surviving))
     ast = cleanup.correct_for_function_calls(ast)
@@ -1251,6 +1255,8 @@ def encode_acc_directives(src_map: Dict[str, str]) -> Tuple[Dict[str, str], Dict
                 block.append(lines[i])
             i += 1
             first = _ACC_SENTINEL_LINE_RE.match(block[0])
+            if first is None:
+                raise ValueError(f"not a !$acc sentinel line: {block[0]!r}")
             head = re.match(r"\s*([A-Za-z_]\w*)", block[0][first.end():])
             if head is not None and head.group(1).lower() in _ACC_SPEC_PART_HEADS:
                 out.extend(block)

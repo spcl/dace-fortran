@@ -78,6 +78,18 @@ Repository = "https://github.com/spcl/dace-fortran"
 Documentation = "https://spcldace.readthedocs.io"
 Issues = "https://github.com/spcl/dace-fortran/issues"
 
+[tool.mypy]
+files = ["dace_fortran"]
+follow_imports = "silent"
+
+# fparser ships neither stubs nor a py.typed marker.
+[[tool.mypy.overrides]]
+module = ["fparser", "fparser.*"]
+ignore_missing_imports = true
+
+[tool.pyright]
+include = ["dace_fortran"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dace_fortran*"]

@@ -83,7 +83,7 @@ def _sym2c(s: Any) -> str:
     """Render a symbolic shape entry as a C expression for an ``(int)(...)`` cast in an
     external-call body."""
     from dace.codegen.common import sym2cpp
-    return sym2cpp(s)
+    return str(sym2cpp(s))
 
 
 def _shape_is_symbolic(shape: Sequence[Any]) -> bool:
@@ -580,6 +580,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
         state.add_edge(cw, None, node, '_comm', Memlet(data=cname, subset='0'))
 
+    node: LibraryNode  # each MPI branch below binds its own library-node class
     if n.callee == 'mpi_wait':
         from dace.libraries.mpi.nodes.wait import Wait
         (req, ) = n.call_args

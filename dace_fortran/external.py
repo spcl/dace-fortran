@@ -570,8 +570,8 @@ class ExpandExternalCallPure(ExpandTransformation):
     environments: ClassVar[list[type]] = []
 
     @staticmethod
-    def expansion(node: ExternalCall, parent_state: SDFGState, parent_sdfg: dace.SDFG,
-                  **_kwargs: Any) -> dace.nodes.Tasklet:
+    def expansion(  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
+            node: ExternalCall, parent_state: SDFGState, parent_sdfg: dace.SDFG, **_kwargs: Any) -> dace.nodes.Tasklet:
         if node.c_decl:
             parent_sdfg.append_global_code(node.c_decl)
         tasklet = dace.sdfg.nodes.Tasklet(node.label,
@@ -635,7 +635,7 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
     @property
     def free_symbols(self) -> set:
         fsyms = super().free_symbols
-        fsyms.update(self.symbol_deps)
+        fsyms.update(self.symbol_deps)  # type: ignore[arg-type]  # ``symbol_deps`` is typed ``list[type[str]]`` by dace's Property
         return fsyms
 
     def validate(self, sdfg: dace.SDFG, state: SDFGState) -> None:

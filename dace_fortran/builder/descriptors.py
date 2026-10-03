@@ -12,7 +12,7 @@ classification.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 import dace
 from dace import SDFG
@@ -502,7 +502,8 @@ DTYPE = {
 
 def dt(s: str) -> dace.typeclass:
     """Map a Fortran type string to its DaCe ``typeclass`` (default ``float64``)."""
-    return DTYPE.get(s, dace.float64)
+    # ``dace.float64`` & co. are declared as array classes for annotations; at runtime they are typeclasses.
+    return cast(dace.typeclass, DTYPE.get(s, dace.float64))
 
 
 def sdfg_name(builder: SDFGBuilder) -> str:

@@ -42,8 +42,8 @@ class FortranProcessGrid(ProcessGrid):
         super().__init__(name=name,
                          is_subgrid=False,
                          shape=shape,
-                         parent_grid=None,
-                         color=None,
+                         parent_grid=None,  # type: ignore[arg-type]  # dace annotates both as required; None = world grid
+                         color=None,  # type: ignore[arg-type]
                          exact_grid=exact_grid,
                          root=root)
         self.parent_comm_symbol = parent_comm_symbol
