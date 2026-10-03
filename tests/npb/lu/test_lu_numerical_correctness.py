@@ -43,7 +43,11 @@ _DT = 0.5
 _OMEGA = 1.2
 _TOLRSD = 1.0e-08
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+# The LU builds are multi-GB each: one at a time, on one xdist worker.
+pytestmark = [
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
+    pytest.mark.xdist_group("npb_lu"),
+]
 
 
 def _compile_reference(tmp_path):

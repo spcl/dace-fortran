@@ -31,6 +31,7 @@ import pytest
 from _util import build_sdfg, have_flang
 from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
+from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -102,15 +103,15 @@ _IFACE = OriginalInterface(
     # free symbols the kernel reads from Fortran module data (no dummy to
     # query); emitter use-imports each under a __mod alias and assigns it.
     module_symbol_sources={
-        "nproma": ("mo_parallel_config", "nproma"),
-        "timers_level": ("mo_run_config", "timers_level"),
-        "nrdmax": ("mo_vertical_grid", "nrdmax"),
-        "nflatlev": ("mo_init_vgrid", "nflatlev"),
-        "i_am_accel_node": ("mo_mpi", "i_am_accel_node"),
-        "lextra_diffu": ("mo_nonhydrostatic_config", "lextra_diffu"),
-        "lvert_nest": ("mo_run_config", "lvert_nest"),
-        "timer_intp": ("mo_timer", "timer_intp"),
-        "timer_solve_nh_veltend": ("mo_timer", "timer_solve_nh_veltend"),
+        "nproma": ModuleOrigin("mo_parallel_config", "nproma"),
+        "timers_level": ModuleOrigin("mo_run_config", "timers_level"),
+        "nrdmax": ModuleOrigin("mo_vertical_grid", "nrdmax"),
+        "nflatlev": ModuleOrigin("mo_init_vgrid", "nflatlev"),
+        "i_am_accel_node": ModuleOrigin("mo_mpi", "i_am_accel_node"),
+        "lextra_diffu": ModuleOrigin("mo_nonhydrostatic_config", "lextra_diffu"),
+        "lvert_nest": ModuleOrigin("mo_run_config", "lvert_nest"),
+        "timer_intp": ModuleOrigin("mo_timer", "timer_intp"),
+        "timer_solve_nh_veltend": ModuleOrigin("mo_timer", "timer_solve_nh_veltend"),
     },
 )
 

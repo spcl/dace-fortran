@@ -21,7 +21,11 @@ _LU_SOURCES = [_HERE / "lu.F90", _HERE / "useapplu.F90"]
 # Kernels dolu sequences; if none survive the merge, lu.F90's body was silently dropped.
 _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+# The LU builds are multi-GB each: one at a time, on one xdist worker.
+pytestmark = [
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
+    pytest.mark.xdist_group("npb_lu"),
+]
 
 
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])

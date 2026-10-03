@@ -12,7 +12,7 @@ from dace_fortran.bindings import (
     FrozenSignature,
     SignatureDriftError,
 )
-from dace_fortran.bindings.frozen_signature import FrozenArgKind, HOST_STORAGE, refreeze
+from dace_fortran.bindings.frozen_signature import FrozenArgKind, HOST_STORAGE, ModuleOrigin, refreeze
 
 
 def _demo_signature() -> FrozenSignature:
@@ -82,7 +82,7 @@ def _rich_signature() -> FrozenSignature:
             ),
         ),
         free_symbols=("m", "n"),
-        module_symbol_origins={"tol": ("mo_cfg", "tol")},
+        module_symbol_origins={"tol": ModuleOrigin("mo_cfg", "tol")},
         user_comm_source="comm",
     )
 

@@ -2,7 +2,7 @@
 ``size(vn, dim=2)``, not the module global (unset=0 in extracted kernels -> OOB writes)."""
 
 from dace_fortran.bindings.block_builders import _sym_from_array_extent
-from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature, ModuleOrigin
 
 
 def _sig():
@@ -21,7 +21,7 @@ def _sig():
         mangled="_QPnonlinear_coriolis_3d_fast_scalar",
         args=(vn,),
         free_symbols=("n_zlev", "nproma"),
-        module_symbol_origins={"n_zlev": ("mo_ocean_nml", "n_zlev")},
+        module_symbol_origins={"n_zlev": ModuleOrigin("mo_ocean_nml", "n_zlev")},
     )
 
 

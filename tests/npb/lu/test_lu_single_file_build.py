@@ -19,7 +19,11 @@ _ENTRY = "lu::dolu"
 # Kernels that must appear in the SDFG, else the build silently dropped lu.F90's body.
 _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+# The LU builds are multi-GB each: one at a time, on one xdist worker.
+pytestmark = [
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
+    pytest.mark.xdist_group("npb_lu"),
+]
 
 
 def test_lu_single_file_builds(tmp_path):
