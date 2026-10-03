@@ -13,9 +13,11 @@ member is inline-flat (scalar or static-shape array of scalar).
 Unsupported (raises :class:`UnsupportedShimInterfaceError`): nested
 derived-type members; allocatable/pointer/dynamic-shape members.
 """
+
+from __future__ import annotations
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Sequence
 
 from dace_fortran.bindings.fortran_interface import (
     DerivedType,
@@ -23,6 +25,10 @@ from dace_fortran.bindings.fortran_interface import (
     OriginalArg,
     OriginalInterface,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dace_fortran.bindings.flatten_plan import FlattenPlan
 
 # Identifier in a shape expr (e.g. nproma) -- recovers module-variable extents.
 _SHAPE_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -34,14 +40,14 @@ class UnsupportedShimInterfaceError(NotImplementedError):
     with no recorded layout."""
 
 
-def _dim_spec(shape) -> str:
+def _dim_spec(shape: Sequence[str]) -> str:
     """``(:,:)`` for rank-N, empty for scalars."""
     if not shape:
         return ""
     return "(" + ", ".join(":" for _ in shape) + ")"
 
 
-def _shape_literal(shape) -> str:
+def _shape_literal(shape: Sequence[str]) -> str:
     """``[d1, d2, ...]`` Fortran array constructor for the
     ``c_f_pointer`` extent argument."""
     return "[" + ", ".join(str(s) for s in shape) + "]"
@@ -112,7 +118,7 @@ def _is_value_record(iface: OriginalInterface, struct_name: str) -> bool:
     return True
 
 
-def _validate_struct_layout_recursive(iface: OriginalInterface, st: DerivedType, arg_name: str, path: str):
+def _validate_struct_layout_recursive(iface: OriginalInterface, st: DerivedType, arg_name: str, path: str) -> None:
     """Walk ``st`` (and nested derived-type members), raise
     :class:`UnsupportedShimInterfaceError` on the first unhandleable leaf.
     ``path`` is the Fortran access path used in the error message."""
@@ -137,7 +143,7 @@ def _validate_struct_layout_recursive(iface: OriginalInterface, st: DerivedType,
                                                 f"members need a hand-authored shim.")
 
 
-def _collect_nested_struct_modules(iface: OriginalInterface, st: DerivedType, out_lines: List[str], seen: set):
+def _collect_nested_struct_modules(iface: OriginalInterface, st: DerivedType, out_lines: List[str], seen: set) -> None:
     """Append a ``use <mod>, only: ...`` line for every module a
     nested-derived-type member references, so ``type(<nested>)``
     resolves at compile time (the outer struct decl doesn't cover it)."""
@@ -164,7 +170,7 @@ def _struct_module_use(iface: OriginalInterface, struct_name: str) -> str:
 
 
 def _emit_flat_arg(a: OriginalArg, header_args: List[str], decls_value: List[str], decls_ptr: List[str],
-                   decls_local: List[str], c_f_calls: List[str], call_args: List[str]):
+                   decls_local: List[str], c_f_calls: List[str], call_args: List[str]) -> None:
     """Per-dummy split for a non-struct arg: scalar inputs by value,
     scalar outputs/arrays as ``c_ptr`` + ``c_f_pointer`` alias.
     Mutates the parallel lists in place.
@@ -203,7 +209,8 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str], decls_value: List[str
 
 def _emit_value_record_array(iface: OriginalInterface, vt_name: str, outer_rank: int, inst_path: str, flat_prefix: str,
                              intent: str, header_args: List[str], decls_value: List[str], decls_ptr: List[str],
-                             decls_local: List[str], c_f_calls: List[str], copy_in: List[str], copy_out: List[str]):
+                             decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
+                             copy_out: List[str]) -> None:
     """Reconstruct an ARRAY of a value record (see :func:`_is_value_record`,
     e.g. ``t_cartesian_coordinates``) element-wise.  ``outer_rank`` is the
     record array's rank; ``inst_path`` is the Fortran instance to assemble.
@@ -264,7 +271,7 @@ def _emit_value_record_array(iface: OriginalInterface, vt_name: str, outer_rank:
 _DBUF_OUTER_RE = re.compile(r'^(?P<prefix>.+)%(?P<aor>\w+)\((?P<sym>\w+)\)%(?P<leaf>.+)$')
 
 
-def _build_dbuf_map(plan) -> dict:
+def _build_dbuf_map(plan: FlattenPlan | None) -> dict:
     """Group the FlattenPlan's double-buffer lane recipes by
     ``(struct-instance prefix, AoR member)`` for per-time-level
     reconstruction.
@@ -294,7 +301,7 @@ def _build_dbuf_map(plan) -> dict:
 
 def _emit_double_buffer_member(inst_path: str, aor: str, syms: dict, header_args: List[str], decls_value: List[str],
                                decls_ptr: List[str], decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
-                               copy_out: List[str]):
+                               copy_out: List[str]) -> None:
     """Reconstruct an ICON double-buffer AoR member (``p%prog``) from the
     SDFG's per-time-level lane buffers (``prog(nnow)``/``prog(nnew)`` split
     into static ``p_prog_nnow_rho``/``p_prog_nnew_rho`` lanes).  Allocates
@@ -338,7 +345,7 @@ def _emit_struct_members_recursive(iface: OriginalInterface,
                                    copy_in: List[str],
                                    copy_out: List[str],
                                    shape_syms: set,
-                                   dbuf_map: dict = None):
+                                   dbuf_map: dict | None = None) -> None:
     """Walk ``st``'s members: emit a C-ABI slot + ``c_f_pointer`` alias +
     copy-in/copy-out per leaf; descend into nested-struct members with
     extended paths.  ``inst_path`` is the Fortran access path,
@@ -453,7 +460,7 @@ def _emit_struct_arg(a: OriginalArg,
                      copy_out: List[str],
                      call_args: List[str],
                      shape_syms: set,
-                     dbuf_map: dict = None):
+                     dbuf_map: dict | None = None) -> None:
     """Per-member split for a derived-type argument.
 
     The dummy becomes a local ``type(<struct>), target :: <name>``; each
@@ -469,6 +476,7 @@ def _emit_struct_arg(a: OriginalArg,
     preserves the per_member_soa no-pack contract).
     """
     if a.rank > 0:
+        assert a.struct_type is not None
         # Array-of-record dummy: value record scatters element-wise;
         # container-record array has no path here -- reject loudly.
         if not _is_value_record(iface, a.struct_type):
@@ -499,9 +507,9 @@ _MOD_FORWARD_SCALAR_FTYPE = {
 }
 
 
-def _emit_module_symbol_forward(module_symbol_forward, header_args: List[str], decls_value: List[str],
-                                decls_ptr: List[str], decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
-                                use_lines: List[str]):
+def _emit_module_symbol_forward(module_symbol_forward: Sequence[tuple[str, str, str, int]], header_args: List[str],
+                                decls_value: List[str], decls_ptr: List[str], decls_local: List[str],
+                                c_f_calls: List[str], copy_in: List[str], use_lines: List[str]) -> None:
     """Per ``(module, member, dtype, rank)``, extend the shim so the caller
     can write the INNER library's copy of ``<module>::<member>`` via the C
     ABI -- gfortran ships a per-library BSS copy of module vars, so an
@@ -562,7 +570,7 @@ def scalar_pointer_members(iface: OriginalInterface) -> frozenset:
     shape_syms = set(_free_shape_symbols(iface))
     out: set = set()
 
-    def walk(st: DerivedType, flat_prefix: str, intent: str):
+    def walk(st: DerivedType, flat_prefix: str, intent: str) -> None:
         for m in st.members:
             flat_name = f"{flat_prefix}_{m.name}"
             if m.struct_name:
@@ -580,10 +588,10 @@ def scalar_pointer_members(iface: OriginalInterface) -> frozenset:
 
 
 def emit_bind_c_shim(iface: OriginalInterface,
-                     out_path: str,
+                     out_path: str | Path,
                      debug_prints: bool = False,
-                     module_symbol_forward=(),
-                     plan=None) -> Path:
+                     module_symbol_forward: Sequence[tuple[str, str, str, int]] = (),
+                     plan: FlattenPlan | None = None) -> Path:
     """Emit ``<entry>_c.f90`` -- a thin ``bind(c)`` wrapper around the
     binding module's ``<entry>_dace`` procedure.
 
@@ -724,7 +732,7 @@ def emit_bind_c_shim(iface: OriginalInterface,
         "",
     ]
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines))
-    return out_path
+    out_file = Path(out_path)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("\n".join(lines))
+    return out_file

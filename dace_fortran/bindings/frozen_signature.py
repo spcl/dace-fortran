@@ -13,12 +13,18 @@ divergence.  dace-core contributes only the opaque ``SDFG.frontend_metadata``
 dict this rides in and never reads it -- the contract is dace-fortran-only.
 """
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Optional, Tuple
 
 import dace
 from dace.data import Data
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dace import SDFG
 
 # Where a Fortran caller's buffers live unless a pass says otherwise.  Anything a
 # transformation moves into a ``GPU_*`` storage is a device relocation the binding has
@@ -177,7 +183,7 @@ class FrozenSignature:
             user_comm_source=d.get('user_comm_source'),
         )
 
-    def to_json(self, path: str):
+    def to_json(self, path: str) -> None:
         """Write the snapshot to ``path`` as indented JSON."""
         with open(path, 'w') as fh:
             json.dump(self.to_dict(), fh, indent=2)
@@ -190,7 +196,7 @@ class FrozenSignature:
 
     # ----- Drift check -------------------------------------------------
 
-    def verify_against(self, sdfg):
+    def verify_against(self, sdfg: SDFG) -> None:
         """Compare live ``sdfg.arglist()`` + free symbols against this
         snapshot; raise ``SignatureDriftError`` on divergence (arg name
         set/order, dtype per arg, free-symbol set).
@@ -240,7 +246,7 @@ _CACHE_ATTR = '_frozen_signature_cache'
 _MAY_SHRINK = frozenset({'scalar', 'symbol'})
 
 
-def get_frozen_signature(sdfg) -> Optional["FrozenSignature"]:
+def get_frozen_signature(sdfg: SDFG) -> Optional["FrozenSignature"]:
     """Deserialise the snapshot stored on ``sdfg``; None if it carries none."""
     raw = sdfg.frontend_metadata.get(SDFG_METADATA_KEY)
     if raw is None:
@@ -255,7 +261,7 @@ def get_frozen_signature(sdfg) -> Optional["FrozenSignature"]:
     return frozen
 
 
-def attach_to_sdfg(sdfg, frozen: Optional["FrozenSignature"]):
+def attach_to_sdfg(sdfg: SDFG, frozen: Optional["FrozenSignature"]) -> None:
     """Store ``frozen`` on ``sdfg`` in serialized form; None clears it."""
     if frozen is None:
         sdfg.frontend_metadata.pop(SDFG_METADATA_KEY, None)
@@ -266,7 +272,7 @@ def attach_to_sdfg(sdfg, frozen: Optional["FrozenSignature"]):
     sdfg.__dict__[_CACHE_ATTR] = (raw, frozen)
 
 
-def _install_sdfg_accessor():
+def _install_sdfg_accessor() -> None:
     """Make ``sdfg._frozen_signature`` a view onto ``sdfg.frontend_metadata``."""
     from dace.sdfg import SDFG
 
@@ -281,7 +287,7 @@ def _install_sdfg_accessor():
 _install_sdfg_accessor()
 
 
-def refreeze(sdfg) -> "FrozenSignature":
+def refreeze(sdfg: SDFG) -> "FrozenSignature":
     """Re-snapshot after a DELIBERATE transformation of the built SDFG (e.g. an optimization
     pipeline run between ``build()`` and ``build_fortran_library``), so the bindings regenerate
     against the live signature instead of tripping the drift check.

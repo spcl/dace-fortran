@@ -19,7 +19,7 @@ from dace_fortran.builder.access import acc, iter_view_dim_map
 from dace_fortran.builder.records import NodeLike, SyntheticNode
 
 if TYPE_CHECKING:
-    from dace.sdfg.nodes import AccessNode, LibraryNode, Node
+    from dace.sdfg.nodes import LibraryNode, Node
     from dace.sdfg.state import ControlFlowRegion
     from dace_fortran.builder import SDFGBuilder
     from dace_fortran.builder.context import _Ctx

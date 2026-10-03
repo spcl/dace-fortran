@@ -13,6 +13,8 @@ expressions stand for the N loop indices the copy nest declares;
 :func:`substitute_indices` fills in concrete names.
 """
 
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -216,7 +218,7 @@ class FlattenPlan:
             synthetic_globals=tuple(SyntheticGlobal.from_dict(s) for s in d.get('synthetic_globals', [])),
         )
 
-    def to_json(self, path: str):
+    def to_json(self, path: str) -> None:
         """Write the plan to ``path`` as indented JSON."""
         with open(path, 'w') as fh:
             json.dump(self.to_dict(), fh, indent=2)

@@ -34,7 +34,6 @@ are declared through :mod:`dace_fortran.external`
 (``register_external``); they are re-exported here for convenience.
 """
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -241,7 +240,7 @@ def _emit_hlfir(source: str,
                 merge_engine: str = "regex",
                 external_names: Sequence[str] = (),
                 defines: Sequence[str] = (),
-                kind_map: dict = None,
+                kind_map: dict | None = None,
                 kind_passthrough: bool = False) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
     (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
@@ -319,7 +318,7 @@ def make_builder(source: str,
                  out_dir: Optional[Union[str, Path]] = None,
                  preprocess: bool = False,
                  defines: Sequence[str] = (),
-                 kind_map: dict = None,
+                 kind_map: dict | None = None,
                  kind_passthrough: bool = False,
                  merge_engine: str = "regex") -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
@@ -386,7 +385,7 @@ def build_sdfg(source: str,
                out_dir: Optional[Union[str, Path]] = None,
                preprocess: bool = False,
                defines: Sequence[str] = (),
-               kind_map: dict = None,
+               kind_map: dict | None = None,
                kind_passthrough: bool = False,
                merge_engine: str = "regex") -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.

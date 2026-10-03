@@ -388,7 +388,7 @@ def _local_kind_bindings(source: str) -> dict:
     return out
 
 
-def normalize_kind_parameters(source: str, *, kind_map: dict = None, passthrough: bool = False) -> str:
+def normalize_kind_parameters(source: str, *, kind_map: dict | None = None, passthrough: bool = False) -> str:
     """Substitute symbolic precision kind aliases (``wp``, ``JPRB``, ...) with
     literal kind ints (default fp64 ``8``) at every use site
     (``REAL(KIND=wp)``, ``1.0_wp``).
@@ -1252,7 +1252,7 @@ def preprocess_fortran_source(source: str,
                               merge_entry: Optional[str] = None,
                               external_names: Iterable[str] = (),
                               if_intvar: bool = False,
-                              kind_map: dict = None,
+                              kind_map: dict | None = None,
                               kind_passthrough: bool = False,
                               keep_acc_directives: bool = False) -> str:
     """Single entrypoint for all Fortran-source preprocessing before flang.

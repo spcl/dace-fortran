@@ -116,10 +116,11 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
             fortran_type = f"type({a['struct_name']})"
             struct_type = a["struct_name"]
         else:
-            fortran_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
-            if fortran_type is None:
+            mapped_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
+            if mapped_type is None:
                 raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
                                  f"for argument {a['name']!r}")
+            fortran_type = mapped_type
             struct_type = None
         rank = int(a["rank"])
         shape = tuple(a["shape"])

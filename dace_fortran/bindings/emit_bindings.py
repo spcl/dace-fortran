@@ -20,19 +20,20 @@ from dace_fortran.bindings.block_builders import (
     build_wrapper_tail,
     splice_acc_staging,
 )
+from dace_fortran.bindings.acc_transfers import AccTransferPlan
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalInterface
 from dace_fortran.bindings.frozen_signature import FrozenSignature
 
 
 def emit_bindings(
-        frozen: FrozenSignature,
-        iface: OriginalInterface,
-        plan: FlattenPlan,
-        out_path: str,
-        dace_arglist: tuple = (),
-        enum_maps: dict = None,
-        acc_residency=None,
+    frozen: FrozenSignature,
+    iface: OriginalInterface,
+    plan: FlattenPlan,
+    out_path: str | Path,
+    dace_arglist: tuple[str, ...] = (),
+    enum_maps: dict | None = None,
+    acc_residency: AccTransferPlan | None = None,
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
@@ -58,8 +59,8 @@ def emit_bindings(
     """
     from dace_fortran.bindings.acc_transfers import plan_frozen_transfers
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_file = Path(out_path)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
     enum_maps = enum_maps or {}
     if acc_residency is None:
         acc_residency = plan_frozen_transfers(frozen)
@@ -73,5 +74,5 @@ def emit_bindings(
         'finalize': build_finalize(iface),
     }
     blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
-    out_path.write_text(assemble_module(iface, frozen, blocks, plan))
-    return out_path
+    out_file.write_text(assemble_module(iface, frozen, blocks, plan))
+    return out_file

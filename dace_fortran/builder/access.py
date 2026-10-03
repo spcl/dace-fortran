@@ -718,7 +718,6 @@ def _rewrite_inner_indirects(part: str, indirect_syms: dict) -> str:
     # in ``indirect_syms`` until no more replacements are possible.  We
     # don't reuse ``find_array_subscripts`` since we need indexes into
     # ``part`` (not into a parent expression) for slicing.
-    arr_names = set(indirect_syms.keys())
     # Sort longest-first so a ``a[b[i]]`` form picks the outer first only
     # after the inner ``b[i]`` has been substituted.  But since we scan
     # innermost-first via the bracket walker each pass, longest doesn't

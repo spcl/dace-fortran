@@ -58,8 +58,6 @@ from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
     add_descriptors,
-    auto_declare_synth,
-    dt,
     emit_declare_transient,
     sdfg_name,
 )
@@ -86,7 +84,7 @@ from dace_fortran.builder.emit_cfg import (
     emit_symbol_init,
     emit_while,
 )
-from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
+from dace_fortran.builder.emit_tasklet import emit_scalar_assign
 
 if TYPE_CHECKING:
     from dace.sdfg.state import SDFGState

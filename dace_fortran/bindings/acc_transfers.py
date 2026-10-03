@@ -56,6 +56,8 @@ the extractor reports ``velocity_tendencies``' six scalars as
 ``unclassified``.  Array/pointer dummies get no such pass.
 """
 
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass, field
@@ -63,6 +65,10 @@ from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 import dace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dace_fortran.bindings.frozen_signature import FrozenSignature
 
 _GPU_STORAGE = (
     dace.dtypes.StorageType.GPU_Global,
@@ -124,7 +130,7 @@ class AccResidency:
         )
 
     @classmethod
-    def from_file(cls, path) -> "AccResidency":
+    def from_file(cls, path: str | Path) -> "AccResidency":
         """Read and parse the sidecar at ``path``."""
         path = Path(path)
         try:
@@ -319,7 +325,7 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
     )
 
 
-def plan_frozen_transfers(frozen) -> AccTransferPlan:
+def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
     """Plan the standalone direction: host caller, offloaded SDFG.
 
     No ICON sidecar is involved -- the caller is ordinary Fortran, so every buffer

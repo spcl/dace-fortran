@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import TYPE_CHECKING, Any, Container, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import dace
 from dace import InterstateEdge
