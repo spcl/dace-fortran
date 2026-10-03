@@ -3,7 +3,7 @@
 - Hyperbolic: sinh/cosh/tanh (sinh lowers to a fir.call runtime call, not math.*).
 - Inverse trig: asin/acos/atan/atan2 (math.* ops).
 - Conversion: int/nint/aint/anint/floor -- nint via llvm.lround, aint via llvm.trunc; bridge maps to dace::int{32,64} casts and trunc/round.
-- Modulo: mod (truncated) / modulo (floored) -- both lower to fir.call @_FortranAMod*Real8, both map to Python %, C++ codegen picks semantics per operand type.
+- Modulo: mod (truncated) / modulo (floored) -- real operands lower to the _FortranAMod* / _FortranAModulo* runtime calls, bridged to FtnMod / FtnModulo.
 """
 
 from pathlib import Path
@@ -89,7 +89,7 @@ end subroutine
 
 
 def test_mod_modulo(tmp_path: Path):
-    """Fortran MOD (truncated) and MODULO (floored) -- both are Python % at the bridge level; C++ codegen picks the right semantics per type."""
+    """Fortran MOD (truncated, FtnMod) and MODULO (floored, FtnModulo) on real operands."""
     src = """
 subroutine probe(a, b, out)
   real(8), intent(in)  :: a, b
@@ -102,6 +102,5 @@ end subroutine
     # MOD truncated, MODULO floored: (-7,3) -> mod=-7-3*int(-7/3)=-1, modulo=-7-3*floor(-7/3)=2
     out = np.zeros(2, dtype=np.float64)
     sdfg(a=-7.0, b=3.0, out=out)
-    # both bridge to %; codegen lowers it to fmod (truncated) for MOD positions and a floor-helper for MODULO positions -- verify against the floored numpy result.
     np.testing.assert_allclose(out[0], np.fmod(-7.0, 3.0), rtol=1e-12)
     np.testing.assert_allclose(out[1], -7.0 - 3.0 * np.floor(-7.0 / 3.0), rtol=1e-12)

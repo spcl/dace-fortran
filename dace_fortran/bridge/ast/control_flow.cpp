@@ -770,14 +770,16 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
 
   // Binary arith  --  recurse through the subscript-aware builder.
   static const std::map<llvm::StringRef, std::string> bin_ops = {
-      {"arith.mulf", " * "}, {"arith.addf", " + "},   {"arith.subf", " - "},
-      {"arith.divf", " / "}, {"arith.muli", " * "},   {"arith.addi", " + "},
-      {"arith.subi", " - "}, {"arith.divsi", " // "}, {"arith.divui", " // "},
+      {"arith.mulf", " * "}, {"arith.addf", " + "}, {"arith.subf", " - "}, {"arith.divf", " / "},
+      {"arith.muli", " * "}, {"arith.addi", " + "}, {"arith.subi", " - "}, {"arith.divui", " // "},
   };
   auto nm = def->getName().getStringRef();
   if (auto it = bin_ops.find(nm); it != bin_ops.end() && def->getNumOperands() == 2)
     return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + it->second +
            buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
+  if (nm == "arith.divsi" && def->getNumOperands() == 2)
+    return truncatedDivision(buildExprWithSubscripts(def->getOperand(0), d + 1),
+                             buildExprWithSubscripts(def->getOperand(1), d + 1));
   if (nm == "arith.negf" && def->getNumOperands() == 1)
     return "(-" + buildExprWithSubscripts(def->getOperand(0), d + 1) + ")";
 

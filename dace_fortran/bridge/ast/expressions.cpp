@@ -915,7 +915,10 @@ std::string buildExpr(mlir::Value val, int d) {
       {"arith.muli", " * "},
       {"arith.addi", " + "},
       {"arith.subi", " - "},
-      {"arith.divsi", " // "},
+      // Fortran integer division truncates: C++ ``/`` on the integer connectors. ``truncatedDivision`` would name
+      // each operand twice, and every operand occurrence here is its own connector.
+      {"arith.divsi", " / "},
+      // Unsigned: floored and truncated division agree.
       {"arith.divui", " // "},
       // Fortran COMPLEX arithmetic  --  flang emits dedicated ops on
       // ``complex<f32>`` / ``complex<f64>`` operands.
@@ -1128,10 +1131,9 @@ std::string buildExpr(mlir::Value val, int d) {
   // Notable cases:
   //   * ``math.sinh`` / ``math.cosh`` / ``math.tanh`` exist but Flang
   //     occasionally still emits ``fir.call @sinh``  --  recognise both.
-  //   * Fortran ``MOD`` / ``MODULO`` lower to ``_FortranAMod*Real{4,8}``
-  //     runtime calls; the Python ``math.fmod`` matches Fortran ``MOD``
-  //     (truncated quotient) and a ``(a - b * floor(a/b))`` formula
-  //     matches ``MODULO`` (floored quotient).
+  //   * Fortran ``MOD`` / ``MODULO`` on reals lower to ``_FortranAMod*`` /
+  //     ``_FortranAModulo*`` runtime calls: ``FtnMod`` (truncated) and
+  //     ``FtnModulo`` (floored).
   //   * ``NINT(x)`` lowers to ``llvm.lround``; ``AINT(x)`` to
   //     ``llvm.trunc``; both are supported by DaCe's tasklet codegen
   //     when surfaced as ``round`` / ``trunc`` Python calls.
@@ -1296,12 +1298,10 @@ std::string buildExpr(mlir::Value val, int d) {
       if (cname == "atan2" && call.getNumOperands() >= 2) {
         return "atan2(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
-      // Fortran MOD on real operands  --  truncated-quotient
-      // remainder.  Maps directly to ``std::fmod`` (in ``<cmath>``,
-      // pulled in via ``<dace/dace.h>``); integer MOD lowers to
-      // ``arith.remsi`` and never reaches this fir.call branch.
+      // Fortran MOD on real operands: truncated remainder (sign of the dividend), the SDFG's ``FtnMod``.
+      // Integer MOD lowers to ``arith.remsi`` and never reaches this fir.call branch.
       if ((cname == "_FortranAModReal4" || cname == "_FortranAModReal8") && call.getNumOperands() >= 2) {
-        return "fmod(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
+        return "FtnMod(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
       // Fortran SCALE(x, n)  --  returns ``x * 2^n``.  Maps to
       // ``dace::math::ldexp`` (templated; ``std::ldexp``
@@ -1321,9 +1321,7 @@ std::string buildExpr(mlir::Value val, int d) {
           call.getNumOperands() >= 1) {
         return "ilogb(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
-      // Fortran MODULO  --  floored-quotient remainder.  ``FtnModulo``
-      // is its SDFG spelling (C++ ``ftn_modulo``); a bare ``%`` in an
-      // SDFG is C's truncating remainder.
+      // Fortran MODULO: floored remainder (sign of the divisor), the SDFG's ``FtnModulo``.
       if ((cname == "_FortranAModuloReal4" || cname == "_FortranAModuloReal8" || cname == "_FortranAModuloInteger4" ||
            cname == "_FortranAModuloInteger8") &&
           call.getNumOperands() >= 2) {
@@ -1503,10 +1501,9 @@ std::string buildExpr(mlir::Value val, int d) {
            ")";
   }
 
-  // Integer remainder  --  ``arith.remsi`` / ``arith.remui``  --  used by some
-  // Fortran ``mod`` lowerings on integers.
+  // Integer Fortran MOD lowers to ``arith.remsi`` / ``arith.remui``: the SDFG's truncated ``FtnMod``.
   if ((nm == "arith.remsi" || nm == "arith.remui") && def->getNumOperands() == 2) {
-    return "(" + buildExpr(def->getOperand(0), d + 1) + " % " + buildExpr(def->getOperand(1), d + 1) + ")";
+    return "FtnMod(" + buildExpr(def->getOperand(0), d + 1) + ", " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Scalar min / max idiom: Flang lowers ``min(a, b)`` on f32/f64 to

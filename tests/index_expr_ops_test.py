@@ -3,7 +3,7 @@
 ``bridge/ast/assigns.cpp::buildIndexExpr`` renders integer arithmetic inside
 ``arr(<expr>)`` subscripts and must keep parity with the value path
 (``buildExpr``); a missing op bottoms out at ``?`` and the SDFG build fails
-on an unresolved free symbol. Covers ``MOD`` -> Python ``%`` and width-cast
+on an unresolved free symbol. Covers ``MOD`` -> ``FtnMod`` and width-cast
 index pass-through. NOT yet supported: bitwise IAND/IOR/IEOR/ISHFT in a subscript.
 """
 import numpy as np
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 
 def test_mod_in_array_index(tmp_path):
     """``a(MOD(i, n) + 1)`` -- the MOD lowers to ``arith.remsi``; the
-    subscript must render as ``(i % n) + 1`` (sympy ``Mod``)."""
+    subscript must render as ``FtnMod(i, n) + 1``."""
     src = """
 MODULE mod_idx_mod
   IMPLICIT NONE

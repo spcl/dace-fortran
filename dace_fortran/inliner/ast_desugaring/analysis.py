@@ -450,10 +450,14 @@ def _eval_selected_real_kind(p: int, r: int) -> int:
 
 
 def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
-    """Performs integer or real division based on operand types."""
-    return operator.floordiv(x, y) \
-        if (types.is_numpy_int(x) and types.is_numpy_int(y)) \
-        else operator.truediv(x, y)
+    """Fortran ``/``: integer division truncates toward zero, real division is exact."""
+    if not (types.is_numpy_int(x) and types.is_numpy_int(y)):
+        return operator.truediv(x, y)
+    quotient = operator.floordiv(x, y)
+    # Python floors; step back toward zero when the quotient is negative and inexact.
+    if (x % y != 0) and ((x < 0) != (y < 0)):
+        quotient += 1
+    return quotient
 
 
 UNARY_OPS: Dict[str, Callable[..., Any]] = {
@@ -500,7 +504,9 @@ INTR_FNS: Dict[str, Callable[..., Any]] = {
     'LOG10': np.log10,
     'MAX': np.max,
     'MIN': np.min,
+    # MOD truncates (sign of the dividend), MODULO floors (sign of the divisor).
     'MOD': np.fmod,
+    'MODULO': np.mod,
     'NOT': np.logical_not,
     'OR': np.logical_or,
     'REAL': np.real,
@@ -513,6 +519,9 @@ INTR_FNS: Dict[str, Callable[..., Any]] = {
     'TANH': np.tanh,
     'XOR': np.logical_xor,
 }
+
+# The ``INTR_FNS`` entries that also fold on integer operands.
+INTEGER_INTR_FNS = frozenset({'MOD', 'MODULO'})
 
 
 def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_Constant],
@@ -630,7 +639,8 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[t
                 return type(a)(sys.float_info.epsilon)
         elif intr.string in INTR_FNS:
             avals = tuple(const_eval_basic_type(a, alias_map) for a in args)
-            if all(types.is_numpy_real(a) for a in avals):
+            if all(types.is_numpy_real(a) for a in avals) or (intr.string in INTEGER_INTR_FNS
+                                                              and all(types.is_numpy_int(a) for a in avals)):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
             p, r = args

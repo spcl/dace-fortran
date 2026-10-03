@@ -462,21 +462,19 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       {"arith.addi", " + "},
       {"arith.subi", " - "},
       {"arith.muli", " * "},
-      {"arith.divsi", " // "},
       {"arith.divui", " // "},
-      // ``MOD(i, k)`` in an index expression (``arr(mod(i,2)+1)``)
-      // lowers to ``arith.remsi`` / ``arith.remui``.  Render as Python
-      // ``%`` -- sympy maps it to ``Mod``, which the memlet-subset
-      // engine accepts.  Fortran ``MOD`` truncates toward zero and
-      // Python ``%`` floors; they agree for non-negative operands,
-      // which every valid array index is (index >= lbound >= 1, and
-      // ``mod(i,k)+1`` only produces a valid subscript when ``i`` is
-      // non-negative).
-      {"arith.remsi", " % "},
-      {"arith.remui", " % "},
   };
   if (auto it = int_bin.find(nm); it != int_bin.end() && def->getNumOperands() == 2) {
     return "(" + buildIndexExpr(def->getOperand(0), d + 1) + it->second + buildIndexExpr(def->getOperand(1), d + 1) +
+           ")";
+  }
+  if (nm == "arith.divsi" && def->getNumOperands() == 2) {
+    return truncatedDivision(buildIndexExpr(def->getOperand(0), d + 1), buildIndexExpr(def->getOperand(1), d + 1));
+  }
+  // ``MOD(i, k)`` in an index expression (``arr(mod(i,2)+1)``) lowers to ``arith.remsi`` / ``arith.remui``.
+  // ``FtnMod`` is the SDFG's truncated remainder (sign of the dividend), the semantics of Fortran ``MOD``.
+  if ((nm == "arith.remsi" || nm == "arith.remui") && def->getNumOperands() == 2) {
+    return "FtnMod(" + buildIndexExpr(def->getOperand(0), d + 1) + ", " + buildIndexExpr(def->getOperand(1), d + 1) +
            ")";
   }
 

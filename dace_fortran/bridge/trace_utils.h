@@ -21,6 +21,12 @@
 
 namespace hlfir_bridge {
 
+/// Fortran integer ``a / b`` (``arith.divsi``) truncates toward zero; the SDFG's ``//`` floors. The dividend minus
+/// its truncated remainder ``FtnMod`` is an exact multiple of ``b``, where both roundings agree.
+inline std::string truncatedDivision(const std::string& a, const std::string& b) {
+  return "((" + a + " - FtnMod(" + a + ", " + b + ")) // " + b + ")";
+}
+
 /// Recursion/walk-length budgets for SSA tracing; defensive guards against pathological IR -- bumping them never
 /// changes semantics, only reduces false-``?`` fallbacks.
 namespace limits {
