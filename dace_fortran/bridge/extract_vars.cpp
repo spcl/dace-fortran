@@ -3815,6 +3815,28 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                 return "";
               };
               v.bounds_remap_total_extent = renderExtent(pairs[1]);
+              // Rank-changing remap of a 1-D target (``p(1:M,1:K) => arr1d``; recent flang emits
+              // ``embox`` of the 1-D target + ``rebox`` with a rank-R shape_shift): the view carries
+              // every per-dim extent (not just ext0) so its stride symbols are bound, and the total is
+              // their product.  ``pairs`` layout: lb0, ext0, lb1, ext1, ...
+              if (pairs.size() > 2 && pairs.size() / 2 == static_cast<size_t>(v.rank)) {
+                std::vector<std::string> perDim;
+                std::string total;
+                for (size_t i = 1; i < pairs.size(); i += 2) {
+                  std::string const e = renderExtent(pairs[i]);
+                  if (e.empty()) {
+                    perDim.clear();
+                    total.clear();
+                    break;
+                  }
+                  perDim.push_back(e);
+                  total = total.empty() ? e : total + "*" + e;
+                }
+                if (!perDim.empty()) {
+                  v.bounds_remap_total_extent = total;
+                  v.shape_symbols = std::move(perDim);
+                }
+              }
             }
           }
           // Trace back to the parent declare through any

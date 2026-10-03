@@ -1050,6 +1050,8 @@ struct RewritePointerAssignsPass
     auto constLbValue = [](mlir::Value lb) -> std::optional<int64_t> {
       if (!lb) return std::nullopt;
       auto* def = lb.getDefiningOp();
+      // Newer flang materialises the lb as ``fir.convert(arith.constant : i64) -> index``.
+      while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(def)) def = cv.getValue().getDefiningOp();
       if (!def) return std::nullopt;
       if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
         if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return a.getInt();
