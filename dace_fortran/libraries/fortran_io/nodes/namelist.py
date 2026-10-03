@@ -12,12 +12,13 @@ import dace.library
 import dace.properties
 from dace import dtypes
 from dace.sdfg import nodes
+from dace.sdfg.nodes import LibraryNode
 from dace.transformation.transformation import ExpandTransformation
 
 from .node import FortranIONode, fio_type
 from .write import c_string
 from .. import environments
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from dace import SDFG, SDFGState
 from dace_fortran.dace_types import library_node
@@ -29,7 +30,9 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
+    def expansion(node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any,
+                  **kwargs: Any) -> nodes.Tasklet:
+        assert isinstance(node, NamelistRead)
         items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False, num_items=node.num_items)
         if len(node.members) != len(items):
             raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
@@ -62,10 +65,12 @@ class NamelistRead(FortranIONode):
     implementations = {"FortranIO": ExpandNamelistReadFortranIO}
     default_implementation = "FortranIO"
 
-    filename: str = dace.properties.Property(dtype=str, default="", desc="Namelist file path")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
-    group: str = dace.properties.Property(dtype=str, default="", desc="Namelist group name")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
-    members: list[str] = dace.properties.ListProperty(  # type: ignore[assignment]  # dace types it as list[type[str]]
-        element_type=str, default=[], desc="Member names, in output-connector order")
+    filename = dace.properties.Property(dtype=str, default="", desc="Namelist file path")
+    group = dace.properties.Property(dtype=str, default="", desc="Namelist group name")
+    # dace types ``ListProperty(element_type=str)`` as ``list[type[str]]``.
+    members = cast(
+        list[str],
+        dace.properties.ListProperty(element_type=str, default=[], desc="Member names, in output-connector order"))
 
     def __init__(self,
                  name: str,

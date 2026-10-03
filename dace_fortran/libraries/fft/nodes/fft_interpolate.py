@@ -16,7 +16,7 @@ import dace.properties
 import dace
 from dace import nodes, SDFG, SDFGState, dtypes, Memlet
 from dace import transformation as xf
-from typing import Any, ClassVar, Sequence
+from typing import Any, ClassVar, Sequence, cast
 
 import numpy as np
 
@@ -157,8 +157,9 @@ class FFTInterpolatePure(xf.ExpandTransformation):
     environments: ClassVar[list[type]] = []
 
     @staticmethod
-    def expansion(  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
-            node: 'FFTInterpolate', parent_state: SDFGState, parent_sdfg: SDFG) -> SDFG:
+    def expansion(node: nodes.LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any,
+                  **kwargs: Any) -> SDFG:
+        assert isinstance(node, FFTInterpolate)
         input_name, output_name = _get_input_and_output(parent_state, node)
         indesc = parent_sdfg.arrays[input_name]
         outdesc = parent_sdfg.arrays[output_name]
@@ -181,8 +182,8 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         sdfg.add_datadesc('_out', out_inner)
 
         # ``dtypes.complex128`` / ``complex64`` are declared as array classes for annotations; build the typeclass.
-        complex_dtype = dtypes.typeclass(np.complex128 if indesc.dtype in (dtypes.float64, dtypes.complex128) else
-                                         np.complex64)
+        complex_dtype = dtypes.typeclass(np.complex128 if indesc.dtype in (dtypes.float64,
+                                                                           dtypes.complex128) else np.complex64)
 
         in_shape = list(indesc.shape)
         out_shape = list(outdesc.shape)
@@ -227,7 +228,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         if rank == 1:
             fft_node = FFT('fft_inner')
             fft_node.implementation = 'pure'
-            fft_node.factor = 1  # type: ignore[attr-defined]  # property of dace's FFT node, invisible to type checkers
+            cast(Any, fft_node).factor = 1  # property of dace's FFT node, invisible to type checkers
             st_fft.add_node(fft_node)
             st_fft.add_edge(st_fft.add_read('__inp_c'), None, fft_node, '_inp',
                             Memlet.from_array('__inp_c', sdfg.arrays['__inp_c']))
@@ -269,7 +270,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         if rank == 1:
             ifft_node = IFFT('ifft_inner')
             ifft_node.implementation = 'pure'
-            ifft_node.factor = 1  # type: ignore[attr-defined]  # property of dace's FFT node, invisible to type checkers
+            cast(Any, ifft_node).factor = 1  # property of dace's FFT node, invisible to type checkers
             st_ifft_state.add_node(ifft_node)
             st_ifft_state.add_edge(st_ifft_state.add_read('__padded_spec'), None, ifft_node, '_inp',
                                    Memlet.from_array('__padded_spec', sdfg.arrays['__padded_spec']))

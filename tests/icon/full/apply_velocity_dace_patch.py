@@ -9,13 +9,11 @@ from pathlib import Path
 
 p = Path(sys.argv[1])
 lines = p.read_text().splitlines()
-subr_start = next(i for i, ln in enumerate(lines)
-                  if "SUBROUTINE velocity_tendencies " in ln and "(" in ln)
+subr_start = next(i for i, ln in enumerate(lines) if "SUBROUTINE velocity_tendencies " in ln and "(" in ln)
 header_end = subr_start
 while lines[header_end].rstrip().endswith("&"):
     header_end += 1
-end_subr = next(i for i, ln in enumerate(lines[header_end + 1:],
-                                         start=header_end + 1)
+end_subr = next(i for i, ln in enumerate(lines[header_end + 1:], start=header_end + 1)
                 if "END SUBROUTINE velocity_tendencies" in ln)
 last_intent = header_end
 for i, ln in enumerate(lines[header_end + 1:end_subr], start=header_end + 1):
@@ -63,9 +61,5 @@ iface_block = [
     "",
 ]
 extra_top_use = ["    USE iso_c_binding, ONLY: c_bool"]
-new = (lines[:header_end + 1]
-       + extra_top_use
-       + lines[header_end + 1:last_intent + 1]
-       + iface_block
-       + lines[end_subr:])
+new = (lines[:header_end + 1] + extra_top_use + lines[header_end + 1:last_intent + 1] + iface_block + lines[end_subr:])
 p.write_text("\n".join(new) + "\n")

@@ -109,7 +109,7 @@ def _reparent_children(node: Base) -> None:
             c.parent = node
 
 
-def set_children(par: Base, children: Iterable[Union[Base, str]]) -> None:
+def set_children(par: Base, children: Iterable[Union[Base, str, None]]) -> None:
     """Replaces `par`'s children, handling both `.items`- and `.content`-based nodes."""
     if isinstance(par, BlockBase):
         if not children:
@@ -134,15 +134,15 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     """Replaces `node` with `subst` (None deletes it; can be a single node or iterable)."""
     # Ensure substituted nodes aren't the same object reused at multiple sites.
     par = node.parent
-    repls = []
+    repls: List[Union[Base, str, None]] = []
+    found = False
     for c in par.children:
         if c is not node:
             repls.append(c)
             continue
-        if subst is None or isinstance(subst, Base):
-            subst = [subst]
-        repls.extend(subst)
-    if isinstance(par, f03.Loop_Control) and isinstance(subst, Base):
+        found = True
+        repls.extend([subst] if subst is None or isinstance(subst, Base) else subst)
+    if not found and isinstance(par, f03.Loop_Control) and isinstance(subst, Base):
         _, cntexpr, _, _ = par.children
         if cntexpr:
             loopvar, looprange = cntexpr

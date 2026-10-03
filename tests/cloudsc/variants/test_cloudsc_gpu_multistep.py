@@ -34,14 +34,20 @@ def variant_tu(tmp_path_factory):
 def f2py_ref(variant_tu, tmp_path_factory):
     """gfortran/f2py reference; only=('cloudscouter',) for the same crackfortran reason as scc_k_caching."""
     ref_dir = tmp_path_factory.mktemp("multistep_ref")
-    return f2py_compile(variant_tu, ref_dir, "cloudsc_gpu_multistep_ref", extra_f90flags=CLOUDSC_F90FLAGS,
+    return f2py_compile(variant_tu,
+                        ref_dir,
+                        "cloudsc_gpu_multistep_ref",
+                        extra_f90flags=CLOUDSC_F90FLAGS,
                         only=("cloudscouter", ))
 
 
 @pytest.mark.parametrize("simplify", [False, True], ids=["raw", "simplify"])
 def test_cloudsc_gpu_multistep_numerical(tmp_path, variant_tu, f2py_ref, _strict_fp_cpu_args, simplify):
     """SDFG-vs-gfortran equivalence on the CLOUDSC-GPU multistep variant."""
-    outputs_sdfg, outputs_ref = run_cloudsc_gpu(variant_tu, NAME, f2py_ref, tmp_path / "sdfg",
+    outputs_sdfg, outputs_ref = run_cloudsc_gpu(variant_tu,
+                                                NAME,
+                                                f2py_ref,
+                                                tmp_path / "sdfg",
                                                 simplify=simplify,
                                                 state_arrays=PROGNOSTIC_STATE)
 

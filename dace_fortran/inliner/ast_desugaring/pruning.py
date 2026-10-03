@@ -144,9 +144,12 @@ def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[t
     top_ord = {n: i for i, n in enumerate(nx.lexicographical_topological_sort(h))}
     top_ord[TOPLEVEL] = g.number_of_nodes() + 1
 
-    utils.set_children(ast, [n for n in ast.children if _get_module(n) in used_modules])
-    assert all(_get_module(n) in top_ord for n in ast.children)
-    utils.set_children(ast, sorted(ast.children, key=lambda x: top_ord[_get_module(x)]))
+    units: List[Base] = list(ast.children)
+    utils.set_children(ast, [n for n in units if _get_module(n) in used_modules])
+    kept_units: List[Base] = list(ast.children)
+    assert all(_get_module(n) in top_ord for n in kept_units)
+    ordered_units = sorted(kept_units, key=lambda x: top_ord[_get_module(x)])
+    utils.set_children(ast, ordered_units)
 
     return ast
 

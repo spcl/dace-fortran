@@ -6,7 +6,7 @@ from __future__ import annotations
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Union, Tuple, Dict, Optional, List, Any, Type
+from typing import TYPE_CHECKING, Union, Tuple, Dict, Optional, List, Any, Type, TypeGuard
 
 import numpy as np
 import fparser.two.Fortran2003 as f03
@@ -24,8 +24,6 @@ SPEC_TABLE = Dict[SPEC, 'NAMED_STMTS_OF_INTEREST_TYPES']
 
 # Type Aliases for numpy types used in constant evaluation
 NUMPY_INTS_TYPES = Union[np.int8, np.int16, np.int32, np.int64]
-NUMPY_INTS = (np.int8, np.int16, np.int32, np.int64)
-NUMPY_REALS = (np.float32, np.float64)
 NUMPY_REALS_TYPES = Union[np.float32, np.float64]
 NUMPY_TYPES = Union[NUMPY_INTS_TYPES, NUMPY_REALS_TYPES, np.bool_]
 
@@ -176,17 +174,26 @@ class ConstInstanceInjection:
 ConstInjection = Union[ConstTypeInjection, ConstInstanceInjection]
 
 
+def is_numpy_int(val: object) -> TypeGuard[NUMPY_INTS_TYPES]:
+    """Whether ``val`` is one of the numpy signed-integer scalars the constant evaluator produces."""
+    return isinstance(val, np.integer)
+
+
+def is_numpy_real(val: object) -> TypeGuard[NUMPY_REALS_TYPES]:
+    """Whether ``val`` is one of the numpy floating scalars the constant evaluator produces."""
+    return isinstance(val, np.floating)
+
+
 def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
     """Converts a numpy scalar (int/float/bool) to its fparser literal node."""
     if isinstance(val, np.bool_):
-        val = f03.Logical_Literal_Constant('.true.' if val else '.false.')
-    elif isinstance(val, NUMPY_INTS):
+        return f03.Logical_Literal_Constant('.true.' if val else '.false.')
+    if is_numpy_int(val):
         bytez = count_bytes(type(val))
         if val < 0:
-            val = f03.Signed_Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
-        else:
-            val = f03.Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
-    elif isinstance(val, NUMPY_REALS):
+            return f03.Signed_Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
+        return f03.Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
+    if is_numpy_real(val):
         bytez = count_bytes(type(val))
         valstr = str(val)
         if bytez == 8:
@@ -195,10 +202,9 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
             else:
                 valstr = f"{valstr}D0"
         if val < 0:
-            val = f03.Signed_Real_Literal_Constant(valstr)
-        else:
-            val = f03.Real_Literal_Constant(valstr)
-    return val
+            return f03.Signed_Real_Literal_Constant(valstr)
+        return f03.Real_Literal_Constant(valstr)
+    raise TypeError(f"not a numpy scalar the constant evaluator produces: {type(val)}")
 
 
 def count_bytes(t: Type[NUMPY_TYPES]) -> int:

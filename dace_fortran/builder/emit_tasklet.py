@@ -226,8 +226,9 @@ def emit_tasklet(builder: SDFGBuilder,
 
     # Connector dicts, not sets: ``add_tasklet`` turns a set into a dict anyway, and doing it here
     # keeps the connector order the one this code built rather than a hash order.
-    in_c = connectors([*(f"_in_{sc}" for sc in r_scl),
-                       *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))])
+    in_c = connectors([
+        *(f"_in_{sc}" for sc in r_scl), *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))
+    ])
     out_c = connectors([f"_out_{target}"])
 
     # iter_map rename MUST run before the connector rewrite: ``d(i) = i*2.0``
@@ -530,8 +531,10 @@ def emit_complex_component_assign(builder: SDFGBuilder,
         raise NotImplementedError(f"emit_complex_component_assign: unresolved operand placeholder "
                                   f"``?`` in rhs ``{rhs_code}`` (target={name!r}).")
 
-    in_conns = connectors(['_in_z', *(f"_in_{sc}" for sc in r_scl),
-                           *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))])
+    in_conns = connectors([
+        '_in_z', *(f"_in_{sc}" for sc in r_scl),
+        *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))
+    ])
     # ``.real()``/``.imag()`` METHODS, not ``re()``/``im()`` helpers: a bare
     # ``im`` token collides with QE's kernel variable ``im`` (reserved-name
     # rewrite turns the call into a call on an int).  Attribute access isn't a

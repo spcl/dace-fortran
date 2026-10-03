@@ -43,7 +43,7 @@ from __future__ import annotations
 import ast
 import gc
 import weakref
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import Any, Sequence, cast
 
 from dace import InterstateEdge, SDFG, SDFGState
 from dace.data import Data

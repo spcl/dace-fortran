@@ -62,8 +62,9 @@ class AutoDimSDFG(dace.SDFG):
                 # off-by-one read of every such array.
                 kwargs[sym] = 1
             else:
-                raise ValueError(f"extent symbol {sym!r} is unbound: no argument {m.group('arr')!r} supplies its extent "
-                                 f"(pass {sym}=<extent> explicitly); refusing to default it")
+                raise ValueError(
+                    f"extent symbol {sym!r} is unbound: no argument {m.group('arr')!r} supplies its extent "
+                    f"(pass {sym}=<extent> explicitly); refusing to default it")
         return super().__call__(*args, **kwargs)
 
     def to_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:

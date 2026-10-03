@@ -37,14 +37,20 @@ def f2py_ref(variant_tu, tmp_path_factory):
     only=('cloudscouter',): crackfortran crashes on the inner driver/kernel's TYPE(...) dummies.
     """
     ref_dir = tmp_path_factory.mktemp("scc_ref")
-    return f2py_compile(variant_tu, ref_dir, "cloudsc_gpu_scc_ref", extra_f90flags=CLOUDSC_F90FLAGS,
+    return f2py_compile(variant_tu,
+                        ref_dir,
+                        "cloudsc_gpu_scc_ref",
+                        extra_f90flags=CLOUDSC_F90FLAGS,
                         only=("cloudscouter", ))
 
 
 @pytest.mark.parametrize("simplify", [False, True], ids=["raw", "simplify"])
 def test_cloudsc_gpu_scc_k_caching_numerical(tmp_path, variant_tu, f2py_ref, _strict_fp_cpu_args, simplify):
     """SDFG-vs-gfortran equivalence on the CLOUDSC-GPU scc_k_caching variant."""
-    outputs_sdfg, outputs_ref = run_cloudsc_gpu(variant_tu, NAME, f2py_ref, tmp_path / "sdfg",
+    outputs_sdfg, outputs_ref = run_cloudsc_gpu(variant_tu,
+                                                NAME,
+                                                f2py_ref,
+                                                tmp_path / "sdfg",
                                                 simplify=simplify,
                                                 state_arrays=LOC_TENDENCIES)
 

@@ -16,6 +16,7 @@ import dace.symbolic
 from dace import dtypes, InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
+from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.builder.records import NodeLike, SyntheticNode
 
 if TYPE_CHECKING:
@@ -143,8 +144,8 @@ def add_copy_node(builder: SDFGBuilder, ctx: Ctx, state: SDFGState, src_name: st
     same_rank_diff_shape = (len(src_desc.shape) == len(tgt_desc.shape) and list(src_desc.shape) != list(tgt_desc.shape))
     tgt_memlet = (Memlet.from_array(tgt_name, src_desc) if same_rank_diff_shape else Memlet.from_array(
         tgt_name, tgt_desc))
-    state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
-    state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
+    state.add_edge(src_access, None, cp, input_connector(CopyLibraryNode), Memlet.from_array(src_name, src_desc))
+    state.add_edge(cp, output_connector(CopyLibraryNode), tgt_access, None, tgt_memlet)
 
 
 def emit_copy(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
@@ -176,8 +177,8 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         ms = FillLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
         state.add_node(ms)
         tgt_access = acc(builder, state, tgt_name)  # redirects to src via resolve
-        state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
-                       Memlet(data=src_name, subset=slab_subset))
+        state.add_edge(ms, output_connector(FillLibraryNode), tgt_access, None, Memlet(data=src_name,
+                                                                                       subset=slab_subset))
         ctx.new_state(builder, region)
         return
 
@@ -192,14 +193,13 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         # use a fresh write node + ensure_view_writeback_link (same as tasklet RMW writes).
         from dace_fortran.builder.emit_tasklet import ensure_view_writeback_link
         view_node = state.add_access(tgt_name)
-        state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
-                       Memlet.from_array(tgt_name, tgt_desc))
+        state.add_edge(ms, output_connector(FillLibraryNode), view_node, None, Memlet.from_array(tgt_name, tgt_desc))
         ensure_view_writeback_link(builder, state, view_node, tgt_name)
         ctx.new_state(builder, region)
         return
 
     tgt_access = acc(builder, state, tgt_name)
-    state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
+    state.add_edge(ms, output_connector(FillLibraryNode), tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
 
     # Force a state break: two incoming memlets on one access node race in DaCe's dataflow DAG.
     ctx.new_state(builder, region)
@@ -1300,7 +1300,7 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     # chain has two inverse FFTs -> the emitted result was off by exactly
     # N^2 = nrxxs^2). N is the transform length (the flat DFT size over nnr).
     if is_inverse:
-        node.factor = 1 / in_desc.total_size  # pyright: ignore[reportOperatorIssue]  # dace types total_size as a sympy Basic; Expr divides
+        node.factor = 1 / cast(Any, in_desc.total_size)  # dace types total_size as a sympy Basic; Expr divides
     # Use ``add_read`` / ``add_write`` (fresh nodes) rather than the cached
     # ``acc`` helper: when the Fortran source is in-place (the same array
     # for ``in`` and ``out``) the cache returns one shared access node and
@@ -1974,8 +1974,8 @@ def emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{_logical_op}_{n.target}_{builder.nid()}", dim=dim)
         state.add_node(pin_sequential(node))
-        state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
-        state.add_edge(node, cls.OUTPUT_CONNECTOR_NAME, tgt_access, None, out_memlet)  # pyright: ignore[reportAttributeAccessIssue]  # dace's unannotated @library.node decorator hides the class attributes
+        state.add_edge(src_access, None, node, input_connector(cls), Memlet.from_array(src_name, src_desc))
+        state.add_edge(node, output_connector(cls), tgt_access, None, out_memlet)
         return
 
     # Section source (``MINVAL(kmin(iv, :))`` row / ``m(:, j)`` column): reduce a

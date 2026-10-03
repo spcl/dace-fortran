@@ -767,11 +767,10 @@ end subroutine {fn_name}
         _make_init_fn(init_fn_name, comps, t)
 
     global_inited_vars: List[types.SPEC] = [
-        k for k, v in ident_map.items()
-        if isinstance(v, f03.Entity_Decl) and (v_type := analysis.find_type_of_entity(v, alias_map)) is not None
-        and not v_type.const and (v_type.spec in type_defs or ast_utils.atmost_one(
-            ast_utils.children_of_type(v, f03.Initialization))) and (v_scope := analysis.search_scope_spec(v))
-        and isinstance(alias_map[v_scope], f03.Module_Stmt)
+        k for k, v in ident_map.items() if isinstance(v, f03.Entity_Decl) and
+        (v_type := analysis.find_type_of_entity(v, alias_map)) is not None and not v_type.const and (
+            v_type.spec in type_defs or ast_utils.atmost_one(ast_utils.children_of_type(v, f03.Initialization))) and (
+                v_scope := analysis.search_scope_spec(v)) and isinstance(alias_map[v_scope], f03.Module_Stmt)
     ]
     if global_inited_vars:
         _make_init_fn(GLOBAL_INIT_FN_NAME, global_inited_vars, None)

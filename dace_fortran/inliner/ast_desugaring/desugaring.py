@@ -38,7 +38,7 @@ def deconstruct_enums(ast: f03.Program) -> f03.Program:
             for c in el.children:
                 if isinstance(c, f03.Name):
                     c_name = c.string
-                elif isinstance(c, f03.Enumerator):
+                else:  # f03.Enumerator
                     # TODO: Add ref.
                     name, _, val = c.children
                     c_name = name.string
@@ -1009,7 +1009,7 @@ def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
         # Get external subprogram names ( EXTERNAL :: [ ext_subprogram_names:list ] )
         if isinstance(node, f03.External_Stmt):
             ext_subprogram_names = node.children[1].children
-        elif isinstance(node, f03.Type_Declaration_Stmt):
+        else:  # f03.Type_Declaration_Stmt
             attr_spec_list = ast_utils.atmost_one(ast_utils.children_of_type(node, f08.Attr_Spec_List))
             if attr_spec_list and ('EXTERNAL' in attr_spec_list.tostr()):
                 entity_decl_list = ast_utils.singular(ast_utils.children_of_type(node, f03.Entity_Decl_List))
@@ -1067,7 +1067,7 @@ def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
             # This part is repetitive, but object management is cleaner by separating passes (2) and (3)
             if isinstance(ext_node, f03.External_Stmt):
                 ext_subprogram_names = ext_node.children[1].children
-            elif isinstance(ext_node, f03.Type_Declaration_Stmt):
+            else:  # f03.Type_Declaration_Stmt
                 attr_spec_list = ast_utils.atmost_one(ast_utils.children_of_type(ext_node, f08.Attr_Spec_List))
                 if attr_spec_list and ('EXTERNAL' in attr_spec_list.tostr()):
                     entity_decl_list = ast_utils.singular(ast_utils.children_of_type(ext_node, f03.Entity_Decl_List))

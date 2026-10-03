@@ -15,7 +15,6 @@ from typing import Any, Dict, Optional, cast
 
 import dace
 from dace import dtypes
-from dace.sdfg import nodes
 from dace.transformation import pass_pipeline as ppl
 from dace_fortran.dace_types import explicit_cf_compatible
 

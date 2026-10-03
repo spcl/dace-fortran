@@ -10,7 +10,7 @@ import math
 import operator
 import sys
 from copy import copy
-from typing import Callable, Iterable, Iterator, Optional, Tuple, List, Dict, Union, Set
+from typing import Any, Callable, Iterable, Iterator, Optional, Tuple, List, Dict, Union, Set
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
@@ -97,6 +97,7 @@ def search_scope_spec(node: Base) -> Optional[types.SPEC]:
         stmt = scope
     else:
         stmt = ast_utils.atmost_one(ast_utils.children_of_type(scope, utils.NAMED_STMTS_OF_INTEREST_CLASSES))
+    assert stmt is not None, f"scope `{scope}` carries no named statement"
     if not utils.find_name_of_stmt(stmt):
         # If this is an anonymous object, the scope has to be outside.
         return search_scope_spec(scope.parent)
@@ -300,7 +301,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
                     src, tgt = c, c
                 elif isinstance(c, f03.Rename):
                     _, src, tgt = c.children
-                elif isinstance(c, f03.Generic_Spec):
+                else:  # Generic_Spec, by the assertion above
                     src, tgt = c, c
                 src, tgt = f"{src}", f"{tgt}"
                 src_spec: types.SPEC = scope_spec + (src, )
@@ -353,7 +354,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
 def search_real_ident_spec(ident: str,
                            in_spec: types.SPEC,
                            alias_map: types.SPEC_TABLE,
-                           node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
+                           node_types: Optional[Union[type, Tuple[type, ...]]] = None) -> Optional[types.SPEC]:
     """
     Searches for the canonical (real) specifier for an identifier string within a given scope.
     It traverses up the scope hierarchy until the identifier is found in the alias map.
@@ -382,7 +383,7 @@ def search_real_ident_spec(ident: str,
 def find_real_ident_spec(ident: str,
                          in_spec: types.SPEC,
                          alias_map: types.SPEC_TABLE,
-                         node_types: Optional[Union[Base, tuple[Base]]] = None) -> types.SPEC:
+                         node_types: Optional[Union[type, Tuple[type, ...]]] = None) -> types.SPEC:
     """
     A wrapper around `search_real_ident_spec` that asserts an identifier is always found.
 
@@ -400,7 +401,7 @@ def find_real_ident_spec(ident: str,
 def find_real_ident_spec_tolerant(ident: str,
                                   in_spec: types.SPEC,
                                   alias_map: types.SPEC_TABLE,
-                                  node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
+                                  node_types: Optional[Union[type, Tuple[type, ...]]] = None) -> Optional[types.SPEC]:
     """Resolve ``ident`` to its canonical spec with a single lookup.  Under
     :data:`OPTIONS` an unresolved external symbol returns ``None``
     (the caller substitutes a match-anything type) instead of asserting;
@@ -451,16 +452,16 @@ def _eval_selected_real_kind(p: int, r: int) -> int:
 def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
     """Performs integer or real division based on operand types."""
     return operator.floordiv(x, y) \
-        if (isinstance(x, types.NUMPY_INTS) and isinstance(y, types.NUMPY_INTS)) \
+        if (types.is_numpy_int(x) and types.is_numpy_int(y)) \
         else operator.truediv(x, y)
 
 
-UNARY_OPS: Dict[str, Callable[..., types.NUMPY_TYPES]] = {
+UNARY_OPS: Dict[str, Callable[..., Any]] = {
     '.NOT.': np.logical_not,
     '-': operator.neg,
 }
 
-BINARY_OPS: Dict[str, Callable[..., types.NUMPY_TYPES]] = {
+BINARY_OPS: Dict[str, Callable[..., Any]] = {
     '<': operator.lt,
     '>': operator.gt,
     '==': operator.eq,
@@ -479,7 +480,7 @@ BINARY_OPS: Dict[str, Callable[..., types.NUMPY_TYPES]] = {
 
 # A mapping of Fortran intrinsic function names to their numpy equivalents.
 # TODO: Bessel, Complex constructors, DiM, ErF, ErFC
-INTR_FNS: Dict[str, Callable[..., types.NUMPY_TYPES]] = {
+INTR_FNS: Dict[str, Callable[..., Any]] = {
     'ABS': np.fabs,
     'ACOS': np.arccos,
     'AIMAG': np.imag,
@@ -533,12 +534,12 @@ def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_
     elif kind in {'1', '2', '4', '8'}:
         kind = np.int32(kind)
     else:
-        kind_spec = search_real_local_alias_spec_from_spec(find_scope_spec(x) + (kind, ), alias_map)
+        kind_spec = search_real_local_alias_spec_from_spec(find_scope_spec(x) + (str(kind), ), alias_map)
         if kind_spec:
             kind_decl = alias_map[kind_spec]
             kind_node, _, _, _ = kind_decl.children
             kind = const_eval_basic_type(kind_node, alias_map)
-            assert isinstance(kind, np.int32)
+            assert type(kind) is np.int32
     assert kind in {1, 2, 4, 8}
     if kind == 1: return np.int8(num)
     if kind == 2: return np.int16(num)
@@ -567,18 +568,18 @@ def _eval_real_literal(x: Union[f03.Signed_Real_Literal_Constant, f03.Real_Liter
             kind = 4
     elif isinstance(kind, str):
         # Named kind parameter (``1.0_JPRB``): resolve it through the alias map.
-        kind_spec = search_real_local_alias_spec_from_spec(find_scope_spec(x) + (kind, ), alias_map)
+        kind_spec = search_real_local_alias_spec_from_spec(find_scope_spec(x) + (str(kind), ), alias_map)
         if not kind_spec:
             return None
         kind_decl = alias_map[kind_spec]
         kind_node, _, _, _ = kind_decl.children
         kind = const_eval_basic_type(kind_node, alias_map)
-        if not isinstance(kind, np.int32):
+        if type(kind) is not np.int32:
             return None
     else:
         # Numeric kind literal (``1.0_8``): evaluate the kind expression directly.
         kind_val = const_eval_basic_type(kind, alias_map)
-        if not isinstance(kind_val, (np.int32, np.int64)):
+        if kind_val is None or type(kind_val) not in (np.int32, np.int64):
             return None
         kind = int(kind_val)
     if kind not in {4, 8}:
@@ -620,16 +621,16 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[t
             return None
         return optimizations.val_2_np_lit(val, typ.spec)
     elif isinstance(expr, f03.Intrinsic_Function_Reference):
-        intr, args = expr.children
-        args = args.children if args else tuple()
+        intr, raw_args = expr.children
+        args: List[Base] = list(raw_args.children) if raw_args else []
         if intr.string == 'EPSILON':
             a, = args
             a = const_eval_basic_type(a, alias_map)
-            if isinstance(a, types.NUMPY_REALS):
+            if types.is_numpy_real(a):
                 return type(a)(sys.float_info.epsilon)
         elif intr.string in INTR_FNS:
             avals = tuple(const_eval_basic_type(a, alias_map) for a in args)
-            if all(isinstance(a, types.NUMPY_REALS) for a in avals):
+            if all(types.is_numpy_real(a) for a in avals):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
             p, r = args
@@ -739,7 +740,7 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
             elif typ_name == 'DOUBLE COMPLEX':
                 typ_name = "COMPLEX8"
         spec = (typ_name, )
-    elif isinstance(typ, f03.Declaration_Type_Spec):
+    else:  # Declaration_Type_Spec, by the assertion above
         _, typ_name_node = typ.children
         typ_name = typ_name_node.string if isinstance(typ_name_node, f03.Name) else str(typ_name_node)
         resolved_spec = find_real_ident_spec_tolerant(typ_name, ident_spec(node), alias_map)
@@ -1099,7 +1100,7 @@ def _find_real_ident_spec(node: f03.Name, alias_map: types.SPEC_TABLE) -> types.
 
 
 def lookup_dataref(dr: Union[f03.Data_Ref, f03.Data_Pointer_Object],
-                   alias_map: types.SPEC_TABLE) -> Tuple[f03.Name, types.SPEC]:
+                   alias_map: types.SPEC_TABLE) -> Tuple[f03.Name, Tuple[Base, ...]]:
     scope_spec = find_scope_spec(dr)
     root, root_tspec, rest = dataref_root(dr, scope_spec, alias_map)
     while not isinstance(root, f03.Name):
@@ -1464,7 +1465,7 @@ def track_local_consts(node: Union[Base, List[Base]],
         for c in ast_utils.children_of_type(node, (f03.If_Then_Stmt, f03.Else_If_Stmt)):
             if isinstance(c, f03.If_Then_Stmt):
                 cond, = c.children
-            elif isinstance(c, f03.Else_If_Stmt):
+            else:  # Else_If_Stmt
                 cond, _ = c.children
             _inject_knowns(cond)
         assert isinstance(node.children[-1], f03.End_If_Stmt)

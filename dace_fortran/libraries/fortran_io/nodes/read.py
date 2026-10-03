@@ -12,6 +12,7 @@ import dace.library
 import dace.properties
 from dace import dtypes
 from dace.sdfg import nodes
+from dace.sdfg.nodes import LibraryNode
 from dace.transformation.transformation import ExpandTransformation
 
 from .node import FortranIONode, fio_type
@@ -29,7 +30,9 @@ class ExpandReadFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: Read, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
+    def expansion(node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any,
+                  **kwargs: Any) -> nodes.Tasklet:
+        assert isinstance(node, Read)
         items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False, num_items=node.num_items)
         path = c_string(node.filename)
         lines = [f'int _u = dace_fio_open("{path}", {len(node.filename.encode())}, 0);']
@@ -56,7 +59,7 @@ class Read(FortranIONode):
     default_implementation = "FortranIO"
 
     filename = dace.properties.Property(dtype=str, default="", desc="Input file path")
-    num_items: int = dace.properties.Property(dtype=int, default=0, desc="Number of items read")  # type: ignore[assignment]  # dace types a Property descriptor as returning its dtype argument
+    num_items = dace.properties.Property(dtype=int, default=0, desc="Number of items read")
 
     def __init__(self, name: str, filename: str = "", num_items: int = 0, **kwargs: Any) -> None:
         super().__init__(name, inputs=set(), outputs={f"_out_{i}" for i in range(num_items)}, **kwargs)

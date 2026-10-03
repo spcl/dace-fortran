@@ -10,7 +10,6 @@ via ``MPI_Comm_f2c``).  ``exit_code()`` is inherited unchanged.
 """
 from typing import Any, Sequence
 
-import dace.dtypes as dtypes
 from dace.data.distributed import ProcessGrid
 from dace.properties import Property, make_properties
 
@@ -39,13 +38,15 @@ class FortranProcessGrid(ProcessGrid):
                  parent_comm_symbol: str | None = None,
                  exact_grid: int | None = None,
                  root: int = 0) -> None:
-        super().__init__(name=name,
-                         is_subgrid=False,
-                         shape=shape,
-                         parent_grid=None,  # type: ignore[arg-type]  # dace annotates both as required; None = world grid
-                         color=None,  # type: ignore[arg-type]
-                         exact_grid=exact_grid,  # type: ignore[arg-type]  # dace's RankType omits int
-                         root=root)  # type: ignore[arg-type]
+        # dace annotates ``parent_grid``/``color`` as required and ``RankType`` omits ``int``; ``None`` means the world grid.
+        grid_args: dict[str, Any] = dict(name=name,
+                                         is_subgrid=False,
+                                         shape=shape,
+                                         parent_grid=None,
+                                         color=None,
+                                         exact_grid=exact_grid,
+                                         root=root)
+        super().__init__(**grid_args)
         self.parent_comm_symbol = parent_comm_symbol
 
     def init_code(self) -> str:

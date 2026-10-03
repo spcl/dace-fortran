@@ -33,9 +33,9 @@ def make_practically_constant_global_vars_constants(ast: f03.Program) -> f03.Pro
     # - Must be in a module scope (global variable).
     never_assigned: Set[types.SPEC] = {
         k
-        for k, v in ident_map.items()
-        if isinstance(v, f03.Entity_Decl) and (v_type := analysis.find_type_of_entity(v, alias_map)) is not None
-        and not v_type.const and (v_scope := analysis.search_scope_spec(v)) and isinstance(alias_map[v_scope], f03.Module_Stmt)
+        for k, v in ident_map.items() if isinstance(v, f03.Entity_Decl) and (
+            v_type := analysis.find_type_of_entity(v, alias_map)) is not None and not v_type.const and (
+                v_scope := analysis.search_scope_spec(v)) and isinstance(alias_map[v_scope], f03.Module_Stmt)
     }
 
     # Any variable that is assigned to is removed from the candidate set.
@@ -539,8 +539,8 @@ def _type_injection_applies_to_instance(item: types.ConstTypeInjection, defn_spe
         tdef = alias_map[inst_typ.spec].parent
         if not isinstance(tdef, f03.Derived_Type_Def):
             return False
-        comp_decl: Optional[f03.Component_Decl] = ast_utils.atmost_one(
-            c for c in walk(tdef, f03.Component_Decl) if utils.find_name_of_node(c) == comp_spec[0])
+        comp_decl: Optional[f03.Component_Decl] = ast_utils.atmost_one(c for c in walk(tdef, f03.Component_Decl)
+                                                                       if utils.find_name_of_node(c) == comp_spec[0])
         if not comp_decl:
             # Either not a valid component (possibly a bug), or could not proceed with the traversal.
             return False
@@ -556,10 +556,8 @@ def _type_injection_applies_to_instance(item: types.ConstTypeInjection, defn_spe
     if comp_spec[:-1] != item.component_spec[:-1]:
         # For what's left, everything until the leaf must exactly match.
         return False
-    comp: Optional[str] = comp_spec[-1]
-    item_comp = item.component_spec[-1]
-    assert item_comp is not None and comp is not None
-    return _item_comp_matches_actual_comp(item_comp, comp)
+    leaf = comp_spec[len(comp_spec) - 1]
+    return _item_comp_matches_actual_comp(item.component_spec[-1], leaf)
 
 
 def _instance_injection_applies_to_instance(item: types.ConstInstanceInjection, defn_spec: types.SPEC,
@@ -628,8 +626,7 @@ def _find_items_applicable_to_instance(items: Iterable[types.ConstInjection],
 
         # Find out if `inst_ref`'s root refers to a valid variable.
         local_spec = analysis.search_real_local_alias_spec(root, alias_map)
-        if local_spec is None or local_spec not in alias_map or not isinstance(alias_map[local_spec],
-                                                                              f03.Entity_Decl):
+        if local_spec is None or local_spec not in alias_map or not isinstance(alias_map[local_spec], f03.Entity_Decl):
             # `local_spec` does not really describe a target instance.
             return None
 
@@ -891,8 +888,9 @@ def inject_const_evals(ast: f03.Program, inject_consts: Optional[List[types.Cons
             if not dr_item:
                 continue
             utils.replace_node(
-                dr, _val_2_lit(dr_item.value,
-                               analysis.find_type_dataref(dr, analysis.find_scope_spec(dr), alias_map).spec))
+                dr,
+                _val_2_lit(dr_item.value,
+                           analysis.find_type_dataref(dr, analysis.find_scope_spec(dr), alias_map).spec))
 
         # --- Handle direct value injections for simple names --- #
         for nm in names:

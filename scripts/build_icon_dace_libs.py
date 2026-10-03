@@ -329,8 +329,8 @@ def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_
     print(f"[build_icon_dace_libs] real ICON velocity source: {entry_src}", flush=True)
 
     if os.environ.get("DACE_FORTRAN_ACC_RESIDENCY"):
-        sidecar = dace_fortran.write_acc_residency_sidecar(entry_src, _VELOCITY_ENTRY_QUALIFIED.split("::")[-1],
-                                                          sdfg_dir)
+        sidecar = dace_fortran.write_acc_residency_sidecar(entry_src,
+                                                           _VELOCITY_ENTRY_QUALIFIED.split("::")[-1], sdfg_dir)
         print(f"[build_icon_dace_libs] ACC residency sidecar: {sidecar}", flush=True)
 
     hlfir = dace_fortran.emit_hlfir_from_codebase(

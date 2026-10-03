@@ -84,10 +84,14 @@ def scan(sdfg):
                     if kind is None:
                         continue
                     hazards.append({
-                        'sdfg': sdfg.label,
-                        'state': state.label,
-                        'container': container,
-                        'kind': kind,
+                        'sdfg':
+                        sdfg.label,
+                        'state':
+                        state.label,
+                        'container':
+                        container,
+                        'kind':
+                        kind,
                         'lines': (first['line'], second['line']),
                         'roles': (('w' if first['writes'] else '') + ('r' if first['reads'] else ''),
                                   ('w' if second['writes'] else '') + ('r' if second['reads'] else '')),

@@ -21,7 +21,7 @@ since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-
 defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
 """
 import copy
-from typing import Any, Dict, Optional, Set, Union
+from typing import Any, Dict, Optional, Set, Union, cast
 
 from dace.transformation.dataflow.map_collapse import MapCollapse
 import numpy as np
@@ -111,7 +111,7 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
     # The two SDFGs share a name, and the build folder is keyed on it -- compiling both would put
     # them in one directory and the second would clobber the first.
     reference = copy.deepcopy(reference)
-    reference.name = f"{reference.name}_preopt"  # type: ignore[assignment]  # dace declares SDFG.name as a Property
+    cast(Any, reference).name = f"{reference.name}_preopt"  # dace declares SDFG.name as a Property
 
     def fresh() -> Dict[str, Any]:
         return {

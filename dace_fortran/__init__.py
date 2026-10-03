@@ -8,7 +8,17 @@ cheap -- the C++ bridge builds on first use, not at import time. See
 README "Building an SDFG from a real project" for worked examples.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dace_fortran.build import build_sdfg, build_sdfg_from_files, build_sdfg_from_hlfir, build_sdfg_from_project
+    from dace_fortran.external import register_external, keep_external, apply_external_functions, ExternalSignature, Arg, clear_external_registry
+    from dace_fortran.external_functions import ExternalFunction
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, generate_sdfg, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
+    from dace_fortran.preprocess import preprocess_fortran_source, merge_used_modules, preprocess_fortran, rewrite_integer_powers, normalize_kind_parameters, replace_external_with_modules, rewrite_string_enum_to_integer
+    from dace_fortran.fparser_inliner import inline_to_single_tu, inline_to_ast
+    from dace_fortran.flang_codebase import prepare_flang_translation_unit, emit_hlfir_from_codebase, extract_make_compile_args, vendor_netcdf_fortran, mpi_stub_source, find_openmpi_include, LIBRARY_STUBS, FLANG_BUG_PATCHES
+    from dace_fortran.acc_residency import extract_acc_residency, write_acc_residency_sidecar
 
 _LAZY = {
     # Public build entry points (the documented surface).
@@ -55,7 +65,45 @@ _LAZY = {
     "write_acc_residency_sidecar": "dace_fortran.acc_residency",
 }
 
-__all__ = list(_LAZY)
+__all__ = [
+    "build_sdfg",
+    "build_sdfg_from_files",
+    "build_sdfg_from_hlfir",
+    "build_sdfg_from_project",
+    "register_external",
+    "keep_external",
+    "apply_external_functions",
+    "ExternalSignature",
+    "Arg",
+    "clear_external_registry",
+    "ExternalFunction",
+    "SDFGBuilder",
+    "generate_sdfg",
+    "DEFAULT_PIPELINE",
+    "MULTI_FILE_PIPELINE",
+    "preprocess_fortran_source",
+    "merge_used_modules",
+    "inline_to_single_tu",
+    "inline_to_ast",
+    "preprocess_fortran",
+    "rewrite_integer_powers",
+    "normalize_kind_parameters",
+    "replace_external_with_modules",
+    "rewrite_string_enum_to_integer",
+    "prepare_flang_translation_unit",
+    "emit_hlfir_from_codebase",
+    "extract_make_compile_args",
+    "vendor_netcdf_fortran",
+    "mpi_stub_source",
+    "find_openmpi_include",
+    "LIBRARY_STUBS",
+    "FLANG_BUG_PATCHES",
+    "extract_acc_residency",
+    "write_acc_residency_sidecar",
+]
+
+# Static ``__all__`` for type checkers; it must name exactly the lazily-exported attributes.
+assert set(__all__) == set(_LAZY), set(__all__) ^ set(_LAZY)
 
 
 def __getattr__(name: str) -> Any:

@@ -44,7 +44,7 @@ import subprocess
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union, cast
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -717,7 +717,7 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
     # Map each module-procedure name to its defining module(s).
     proc_mods: Dict[str, Set[str]] = {}
     for mod in walk(ast, f03.Module):
-        mname = utils.find_name_of_stmt(atmost_one(children_of_type(mod, f03.Module_Stmt)))
+        mname = utils.find_name_of_stmt(singular(children_of_type(mod, f03.Module_Stmt)))
         subpart = atmost_one(children_of_type(mod, f03.Module_Subprogram_Part))
         if not mname or subpart is None:
             continue
@@ -745,7 +745,7 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
             host = host.parent
         cmod, host_spec, target = None, None, scope
         if isinstance(host, f03.Module):
-            cmod = utils.find_name_of_stmt(atmost_one(children_of_type(host, f03.Module_Stmt)))
+            cmod = utils.find_name_of_stmt(singular(children_of_type(host, f03.Module_Stmt)))
             cmod = cmod.lower() if cmod else None
             host_spec = atmost_one(children_of_type(host, f03.Specification_Part))
             target = host
@@ -1077,10 +1077,9 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         # is still valid Fortran (the interface plus its stubbed module
         # procedures resolve at the call site), and the final gfortran gate
         # rejects a genuinely uncompilable TU, so this is safe to leave.
-        surviving = sorted({
-            name
-            for i in walk(ast, f03.Interface_Stmt) if (name := utils.find_name_of_stmt(i)) is not None
-        })
+        surviving = sorted(
+            {name
+             for i in walk(ast, f03.Interface_Stmt) if (name := utils.find_name_of_stmt(i)) is not None})
         logger.warning("Left %d generic interface(s) unresolved while tolerating externals: %s", len(surviving),
                        ", ".join(surviving))
     ast = cleanup.correct_for_function_calls(ast)
@@ -1621,7 +1620,7 @@ def _normalize_sources(sources: Union[Dict[str, str], Iterable[Union[str, Path]]
     """Accept a ``{name: content}`` mapping or an iterable of file /
     directory paths and return a ``{name: content}`` mapping."""
     if isinstance(sources, dict):
-        return dict(sources)
+        return dict(cast(Dict[str, str], sources))
     out: Dict[str, str] = {}
     for item in sources:
         p = Path(item)
