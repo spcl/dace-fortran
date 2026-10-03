@@ -20,10 +20,10 @@ from typing import Any, ClassVar, Sequence
 
 import numpy as np
 
-from dace_fortran.dace_types import MapRanges
+from dace_fortran.dace_types import MapRanges, library_node, register_expansion
 
 
-@dace.library.node
+@library_node
 class FFTInterpolate(nodes.LibraryNode):
     """Fourier interpolation between two FFT grids.
 
@@ -53,6 +53,8 @@ def _get_input_and_output(state: SDFGState, node: nodes.Node) -> tuple[str, str]
     """Resolve the lib node's IO connector data names."""
     in_edge = next(e for e in state.in_edges(node) if e.dst_conn)
     out_edge = next(e for e in state.out_edges(node) if e.src_conn)
+    if in_edge.data.data is None or out_edge.data.data is None:
+        raise ValueError(f"FFTInterpolate '{node}': connector carries an empty memlet")
     return in_edge.data.data, out_edge.data.data
 
 
@@ -140,7 +142,7 @@ def _region_iter_ranges(part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, 
     return ranges
 
 
-@dace.library.register_expansion(FFTInterpolate, 'pure')  # type: ignore[arg-type]  # dace types the node argument as an instance
+@register_expansion(FFTInterpolate, 'pure')
 class FFTInterpolatePure(xf.ExpandTransformation):
     """Backend-agnostic FFTInterpolate as compose(FFT -> pad/truncate -> IFFT).
 
@@ -225,7 +227,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         if rank == 1:
             fft_node = FFT('fft_inner')
             fft_node.implementation = 'pure'
-            fft_node.factor = 1
+            fft_node.factor = 1  # type: ignore[attr-defined]  # property of dace's FFT node, invisible to type checkers
             st_fft.add_node(fft_node)
             st_fft.add_edge(st_fft.add_read('__inp_c'), None, fft_node, '_inp',
                             Memlet.from_array('__inp_c', sdfg.arrays['__inp_c']))
@@ -267,7 +269,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         if rank == 1:
             ifft_node = IFFT('ifft_inner')
             ifft_node.implementation = 'pure'
-            ifft_node.factor = 1
+            ifft_node.factor = 1  # type: ignore[attr-defined]  # property of dace's FFT node, invisible to type checkers
             st_ifft_state.add_node(ifft_node)
             st_ifft_state.add_edge(st_ifft_state.add_read('__padded_spec'), None, ifft_node, '_inp',
                                    Memlet.from_array('__padded_spec', sdfg.arrays['__padded_spec']))

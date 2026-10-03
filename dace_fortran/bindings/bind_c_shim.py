@@ -184,6 +184,7 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str], decls_value: List[str
         call_args.append(a.name)
         return
     is_dynamic = a.rank > 0 and any(s in ('?', '*', ':') for s in a.shape)
+    ext_names: List[str] = []
     if is_dynamic:
         ext_names = [f"{a.name}_d{i}" for i in range(a.rank)]
         for en in ext_names:
@@ -392,6 +393,8 @@ def _emit_struct_members_recursive(iface: OriginalInterface,
             continue
         ptr_name = f"{flat_name}_p"
         is_dynamic = any(s in ('?', '*', ':') for s in m.shape)
+        lb_names: List[str] = []
+        ext_names = []
         if is_dynamic:
             # Per dim: lower bound then extent, both by-value ints
             # (``<flat>_lb<i>``/``<flat>_d<i>``) ahead of the pointer.

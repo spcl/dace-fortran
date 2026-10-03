@@ -44,8 +44,8 @@ class FortranProcessGrid(ProcessGrid):
                          shape=shape,
                          parent_grid=None,  # type: ignore[arg-type]  # dace annotates both as required; None = world grid
                          color=None,  # type: ignore[arg-type]
-                         exact_grid=exact_grid,
-                         root=root)
+                         exact_grid=exact_grid,  # type: ignore[arg-type]  # dace's RankType omits int
+                         root=root)  # type: ignore[arg-type]
         self.parent_comm_symbol = parent_comm_symbol
 
     def init_code(self) -> str:

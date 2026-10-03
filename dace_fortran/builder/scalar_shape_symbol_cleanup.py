@@ -16,12 +16,14 @@ import re
 
 import dace
 from dace import properties
-from dace.transformation import pass_pipeline as ppl, transformation
+from dace.transformation import pass_pipeline as ppl
+
+from dace_fortran.dace_types import explicit_cf_compatible
 
 
 @properties.make_properties
-@transformation.explicit_cf_compatible
-class RemoveScalarFortranShapeSymbols(ppl.Pass):  # type: ignore[type-var]  # dace types the decorator as taking an instance
+@explicit_cf_compatible
+class RemoveScalarFortranShapeSymbols(ppl.Pass):
     """Remove the bridge's ``<scalar>_d<i>``/``offset_<scalar>_d<i>`` symbols
     (a ``Scalar`` has neither shape nor offset)."""
 
@@ -67,7 +69,7 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):  # type: ignore[type-var]  # da
                         self._rewrite(node.sdfg)
         return removed
 
-    def apply_pass(self, sdfg: dace.SDFG, _: dict) -> set[str] | None:
+    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: dict) -> set[str] | None:
         """Returns the set of removed symbol names, or ``None`` if none."""
         removed = self._rewrite(sdfg)
         return removed or None

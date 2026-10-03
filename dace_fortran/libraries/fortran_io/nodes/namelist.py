@@ -20,6 +20,7 @@ from .. import environments
 from typing import Any, Sequence
 
 from dace import SDFG, SDFGState
+from dace_fortran.dace_types import library_node
 
 
 @dace.library.expansion
@@ -29,7 +30,7 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
 
     @staticmethod
     def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
-        items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
+        items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False, num_items=node.num_items)
         if len(node.members) != len(items):
             raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
                              f"for {len(items)} connected outputs")
@@ -54,7 +55,7 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
                              side_effects=True)
 
 
-@dace.library.node
+@library_node
 class NamelistRead(FortranIONode):
     """Read ``members`` of namelist ``group`` from ``filename`` into outputs."""
 

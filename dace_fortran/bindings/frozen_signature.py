@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, replace
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 import dace
 from dace.data import Data
@@ -248,28 +248,33 @@ _MAY_SHRINK = frozenset({'scalar', 'symbol'})
 
 def get_frozen_signature(sdfg: SDFG) -> Optional["FrozenSignature"]:
     """Deserialise the snapshot stored on ``sdfg``; None if it carries none."""
-    raw = sdfg.frontend_metadata.get(SDFG_METADATA_KEY)
+    raw = _metadata(sdfg).get(SDFG_METADATA_KEY)
     if raw is None:
         return None
     # Hand back the same object while the stored dict is untouched, so repeated
     # reads don't rebuild several hundred FrozenArgs apiece.
-    cached = sdfg.__dict__.get(_CACHE_ATTR)
+    cached = vars(sdfg).get(_CACHE_ATTR)
     if cached is not None and cached[0] is raw:
         return cached[1]
     frozen = FrozenSignature.from_dict(raw)
-    sdfg.__dict__[_CACHE_ATTR] = (raw, frozen)
+    vars(sdfg)[_CACHE_ATTR] = (raw, frozen)
     return frozen
+
+
+def _metadata(sdfg: SDFG) -> dict[str, Any]:
+    """The SDFG's mutable ``frontend_metadata`` dict (dace's property is annotated as a read-only mapping)."""
+    return cast(dict[str, Any], sdfg.frontend_metadata)
 
 
 def attach_to_sdfg(sdfg: SDFG, frozen: Optional["FrozenSignature"]) -> None:
     """Store ``frozen`` on ``sdfg`` in serialized form; None clears it."""
     if frozen is None:
-        sdfg.frontend_metadata.pop(SDFG_METADATA_KEY, None)
-        sdfg.__dict__.pop(_CACHE_ATTR, None)
+        _metadata(sdfg).pop(SDFG_METADATA_KEY, None)
+        vars(sdfg).pop(_CACHE_ATTR, None)
         return
     raw = frozen.to_dict()
-    sdfg.frontend_metadata[SDFG_METADATA_KEY] = raw
-    sdfg.__dict__[_CACHE_ATTR] = (raw, frozen)
+    _metadata(sdfg)[SDFG_METADATA_KEY] = raw
+    vars(sdfg)[_CACHE_ATTR] = (raw, frozen)
 
 
 def _install_sdfg_accessor() -> None:

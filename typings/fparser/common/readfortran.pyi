@@ -1,0 +1,6 @@
+from typing import Any
+
+class FortranReaderBase:
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+
+class FortranStringReader(FortranReaderBase): ...

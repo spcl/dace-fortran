@@ -188,7 +188,7 @@ def _dace_call_order(frozen: FrozenSignature, dace_arglist: Sequence[str]) -> li
     by_name = {a.sdfg_name: a for a in frozen.args}
     if dace_arglist:
         return [by_name.get(n, n) for n in dace_arglist]
-    return list(frozen.args) + _free_sym_names(frozen)
+    return [*frozen.args, *_free_sym_names(frozen)]
 
 
 def _render_logical_bridge_copy_in(recipe: FlattenRecipe, outer_expr: str) -> List[str]:

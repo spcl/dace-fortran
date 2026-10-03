@@ -5,6 +5,7 @@ from typing import List, Tuple
 
 from dace import SDFG, SDFGState, data, dtypes
 from dace.sdfg import nodes
+from dace.subsets import Range
 
 #: DaCe base type -> (``dace_fio_*`` entry suffix, C scalar type) for the
 #: shipped wrappers.  The suffix selects the typed ``read``/``write`` entry; the
@@ -34,17 +35,12 @@ class FortranIONode(nodes.LibraryNode):
     dead code even when, like ``WRITE``, they have no output connectors.
     """
 
-    @property
-    def num_items(self) -> int:
-        """Number of connected I/O items; each concrete node defines it."""
-        raise NotImplementedError
-
     def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 
-    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str,
-                      edges_in: bool) -> List[Tuple[str, data.Data, str, bool]]:
-        """Resolve the connected I/O items in connector order, as ``(connector,
+    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str, edges_in: bool,
+                      num_items: int) -> List[Tuple[str, data.Data, str, bool]]:
+        """Resolve the ``num_items`` connected I/O items in connector order, as ``(connector,
         descriptor, count, is_value)``.  ``is_value`` marks a scalar/single-element
         connector (emitted by value, so the call site takes its address)."""
         if edges_in:
@@ -52,14 +48,16 @@ class FortranIONode(nodes.LibraryNode):
         else:
             edges = {e.src_conn: e for e in state.out_edges(self) if e.src_conn}
         items = []
-        for i in range(self.num_items):
+        for i in range(num_items):
             conn = f"{prefix}{i}"
             edge = edges.get(conn)
             if edge is None:
                 raise ValueError(f"{type(self).__name__} '{self.name}': item connector '{conn}' is not connected")
+            subset = edge.data.subset
+            if edge.data.data is None or not isinstance(subset, Range):
+                raise ValueError(f"{type(self).__name__} '{self.name}': connector '{conn}' carries no range memlet")
             desc = sdfg.arrays[edge.data.data]
-            num_elements = edge.data.subset.num_elements()
-            is_value = isinstance(desc, data.Scalar) or num_elements == 1
-            count = "*".join(str(s) for s in edge.data.subset.size_exact()) or "1"
+            is_value = isinstance(desc, data.Scalar) or subset.num_elements() == 1
+            count = "*".join(str(s) for s in subset.size_exact()) or "1"
             items.append((conn, desc, count, is_value))
         return items

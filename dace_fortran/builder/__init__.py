@@ -43,13 +43,14 @@ from __future__ import annotations
 import ast
 import gc
 import weakref
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
-from dace import InterstateEdge, SDFG
+from dace import InterstateEdge, SDFG, SDFGState
 from dace.data import Data
 from dace.properties import CodeBlock
 from dace.sdfg.state import ControlFlowRegion
 from dace.sdfg.utils import specialize_symbols
+from dace.subsets import Subset
 
 from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
@@ -89,9 +90,6 @@ from dace_fortran.builder.emit_cfg import (
     emit_while,
 )
 from dace_fortran.builder.emit_tasklet import emit_scalar_assign
-
-if TYPE_CHECKING:
-    from dace.sdfg.state import SDFGState
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
@@ -1170,7 +1168,10 @@ class SDFGBuilder:
                     node.setzero = True
                 continue
             if init_state is None:
-                init_state = sdfg.add_state_before(sdfg.start_state, "init_unwritten_globals", is_start_block=True)
+                # dace annotates ``add_state_before``'s anchor as an SDFGState; any control-flow block works.
+                init_state = sdfg.add_state_before(cast(SDFGState, sdfg.start_block),
+                                                   "init_unwritten_globals",
+                                                   is_start_block=True)
             self._zero_init_transient(init_state, name, desc)
 
     @staticmethod
@@ -1180,7 +1181,7 @@ class SDFGBuilder:
         import dace
         for ext in desc.shape:  # symbolic extents -> not static-zero
             try:
-                if int(dace.symbolic.pystr_to_symbolic(ext)) == 0:
+                if dace.symbolic.pystr_to_symbolic(ext) == 0:
                     return True
             except (TypeError, ValueError):
                 continue
@@ -1431,7 +1432,7 @@ class SDFGBuilder:
         for state in sdfg.all_states():
             for e in state.edges():
                 for sub in (e.data.subset, e.data.other_subset):
-                    if sub is not None:
+                    if isinstance(sub, Subset):
                         subset_syms |= {str(s) for s in sub.free_symbols}
         for sym, (arr, idx) in prov.items():
             if arr in written and sym in subset_syms:

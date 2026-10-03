@@ -13,7 +13,7 @@ from typing import Optional
 
 import dace
 from dace.transformation import pass_pipeline as ppl
-from dace.transformation.transformation import explicit_cf_compatible
+from dace_fortran.dace_types import explicit_cf_compatible
 
 
 class _ExponentIntegerizer(ast.NodeTransformer):
@@ -45,7 +45,7 @@ class _ExponentIntegerizer(ast.NodeTransformer):
 
 
 @explicit_cf_compatible
-class IntegerizePowerExponents(ppl.Pass):  # type: ignore[type-var]  # dace types the decorator as taking an instance
+class IntegerizePowerExponents(ppl.Pass):
     """Retype integer-valued float ``**`` exponents in tasklets to ``int``.
 
     Must run after tasklet splitting -- flips codegen from libm ``pow`` to
@@ -60,7 +60,7 @@ class IntegerizePowerExponents(ppl.Pass):  # type: ignore[type-var]  # dace type
         """One-shot: the retype doesn't re-trigger the pass."""
         return False
 
-    def apply_pass(self, sdfg: dace.SDFG, _: dict) -> Optional[int]:
+    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: dict) -> Optional[int]:
         """Rewrite every Python tasklet's integer-valued float ``**`` exponents
         to ``int``, recursively including nested SDFGs. Returns rewrite count, or ``None`` if unchanged."""
         total = 0

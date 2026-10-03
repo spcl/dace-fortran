@@ -19,6 +19,7 @@ from .. import environments
 from typing import Any
 
 from dace import SDFG, SDFGState
+from dace_fortran.dace_types import library_node
 
 
 def c_string(text: str) -> str:
@@ -33,7 +34,7 @@ class ExpandWriteFortranIO(ExpandTransformation):
 
     @staticmethod
     def expansion(node: Write, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:  # type: ignore[override]  # dace's own library nodes narrow ``node`` the same way
-        items = node.ordered_items(parent_sdfg, parent_state, "_in_", edges_in=True)
+        items = node.ordered_items(parent_sdfg, parent_state, "_in_", edges_in=True, num_items=node.num_items)
         path = c_string(node.filename)
         lines = [f'int _u = dace_fio_open("{path}", {len(node.filename.encode())}, 1);']
         for conn, desc, count, is_value in items:
@@ -51,7 +52,7 @@ class ExpandWriteFortranIO(ExpandTransformation):
                              side_effects=True)
 
 
-@dace.library.node
+@library_node
 class Write(FortranIONode):
     """Write ``num_items`` connected inputs to ``filename`` (list-directed)."""
 

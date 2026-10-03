@@ -40,6 +40,7 @@ import dace.properties
 import dace.sdfg.nodes
 from dace import SDFGState
 from dace.transformation.transformation import ExpandTransformation
+from dace_fortran.dace_types import library_node
 
 if TYPE_CHECKING:
     from dace_fortran.external_functions import ExternalFunction
@@ -307,12 +308,14 @@ def _apply_linker_config() -> None:
     (verbatim shared-linker flags -- not the CMake-list ``DACE_LIBS``)."""
     import dace
 
-    if _STATE.orig_linker_args is None:
-        _STATE.orig_linker_args = dace.Config.get("compiler", "linker", "args") or ""
+    orig_args = _STATE.orig_linker_args
+    if orig_args is None:
+        orig_args = str(dace.Config.get("compiler", "linker", "args") or "")
+        _STATE.orig_linker_args = orig_args
     flags: List[str] = []
     for sig in _STATE.signatures.values():
         flags += _link_flags(sig.libraries)
-    merged = (_STATE.orig_linker_args + " " + " ".join(dict.fromkeys(flags))).strip()
+    merged = (orig_args + " " + " ".join(dict.fromkeys(flags))).strip()
     dace.Config.set("compiler", "linker", "args", value=merged)
 
 
@@ -583,7 +586,7 @@ class ExpandExternalCallPure(ExpandTransformation):
         return tasklet
 
 
-@dace.library.node
+@library_node
 class ExternalCall(dace.sdfg.nodes.LibraryNode):
     """SDFG library node calling a separately-compiled external
     ``bind(c)`` function.

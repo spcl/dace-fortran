@@ -111,7 +111,7 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
     # The two SDFGs share a name, and the build folder is keyed on it -- compiling both would put
     # them in one directory and the second would clobber the first.
     reference = copy.deepcopy(reference)
-    reference.name = f"{reference.name}_preopt"
+    reference.name = f"{reference.name}_preopt"  # type: ignore[assignment]  # dace declares SDFG.name as a Property
 
     def fresh() -> Dict[str, Any]:
         return {
