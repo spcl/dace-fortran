@@ -41,12 +41,12 @@ jobs:
     #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean}, including those that need ICON built from source
     #               (both builds cached per icon-model commit)
     #   heavy-atmo  long atmosphere tests; the single-TU extractions run one at a time (~9 GB each)
-    #   heavy-ocean-a / heavy-ocean-b  long ocean tests, split in two: one at a time, they take ~40 minutes
+    #   heavy-ocean long ocean tests (~25 minutes)
     strategy:
       fail-fast: false
       matrix:
         llvm: ['21', '22']
-        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-atmo, heavy-ocean-a, heavy-ocean-b]
+        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-atmo, heavy-ocean]
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
     # A cold ICON cache adds two ICON builds to heavy-icon.
@@ -56,7 +56,6 @@ jobs:
       ICON_BUILD: ${{ github.workspace }}/../icon_build/stock_cpu
       PYTEST_OPTS: --maxfail=20 -p no:cacheprovider --tb=short --durations=30
       LONG: long and not mpi and not integration and not e2e
-      OCEAN_A: inlined or ppm_vflux or numerical
     steps:
     - uses: actions/checkout@v4
 
@@ -146,10 +145,6 @@ jobs:
       if: ${{ matrix.lane == 'heavy-atmo' }}
       run: pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS tests/icon/atmosphere
 
-    - name: heavy-ocean-a
-      if: ${{ matrix.lane == 'heavy-ocean-a' }}
-      run: pytest -n auto --dist loadgroup -m "$LONG" -k "$OCEAN_A" $PYTEST_OPTS tests/icon/ocean
-
-    - name: heavy-ocean-b
-      if: ${{ matrix.lane == 'heavy-ocean-b' }}
-      run: pytest -n auto --dist loadgroup -m "$LONG" -k "not ($OCEAN_A)" $PYTEST_OPTS tests/icon/ocean
+    - name: heavy-ocean
+      if: ${{ matrix.lane == 'heavy-ocean' }}
+      run: pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS tests/icon/ocean
