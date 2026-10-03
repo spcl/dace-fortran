@@ -998,7 +998,13 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         if v.fortran_name in sdfg.arrays or v.fortran_name in sdfg.symbols:
             continue
         if v.intent == '':
-            # Local transient scalar.
+            # Local transient scalar.  It is declared WITHOUT an initializer, exactly like the Fortran local:
+            # the frontend emits a read only where the source reads it.  gcc's ``-Wmaybe-uninitialized`` can
+            # still fire for a local the source assigns under one condition and reads under a correlated one
+            # (graupel: ``eta`` / ``ice_dep`` are assigned on every path that reaches the ``IF (sig)`` read,
+            # and ``eflx`` is zeroed by the ``k == kstart`` first iteration of the loop that reads it).  Those
+            # are false positives of the flow analysis, not a read before a definite write, so the warnings are
+            # left visible rather than masked by a zero-init that would hide a genuine source-level bug.
             sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)
         elif v.intent in ('out', 'inout'):
             # Scalar OUTPUT must remain a length-1 array on the SDFG
