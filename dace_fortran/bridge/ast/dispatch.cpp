@@ -2466,8 +2466,13 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             if (tgt.empty()) tgt = traceToDecl(dst);
             if (!tgt.empty() && !xName.empty() && !yName.empty()) {
               // A subset containing ``[`` reads an array element in a bound (``s(ia):e(ia)``) -- not expressible as a
-              // libcall memlet.  Lower the dot as an explicit reduction loop instead.
-              if (xSub.find('[') != std::string::npos || ySub.find('[') != std::string::npos) {
+              // libcall memlet.  When the element is promoted to a value symbol (``__sym_s_2``) the subset parses, but
+              // the slice extent is still data-dependent: the libcall would size-check it against the other operand,
+              // which ``ddot`` only reads ``n`` elements of.  Lower both forms as an explicit reduction loop.
+              auto const dataDependent = [](const std::string& sub) {
+                return sub.find('[') != std::string::npos || sub.find("__sym_") != std::string::npos;
+              };
+              if (dataDependent(xSub) || dataDependent(ySub)) {
                 if (auto dyn = buildDdotDynamicSliceNodes(tgt, args[0], args[1], xName, args[3], yName); !dyn.empty()) {
                   for (auto& nd : dyn) nodes.push_back(std::move(nd));
                   continue;
