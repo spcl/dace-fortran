@@ -23,6 +23,8 @@ so the project's ``USE`` lines resolve.  The emitted directory feeds
 :func:`dace_fortran.build_sdfg_from_hlfir` /
 :func:`dace_fortran.build_sdfg_from_project`.
 """
+
+from __future__ import annotations
 import argparse
 import json
 import re
@@ -31,9 +33,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence, Tuple
 
+from dace_fortran.entry_names import split_qualified_entry
 from dace_fortran.llvm_toolchain import require_flang
+
+#: (source_path, include_dirs, cpp_defines) of one Fortran translation unit.
+CompileEntry = Tuple[Path, List[str], List[str]]
 
 #: ``MODULE <name>`` opener at the top of a Fortran source.  Used for
 #: the (fallback) ``--source`` topo-sort when no ``compile_commands.json``
@@ -64,7 +70,7 @@ def _topo_order(sources: Sequence[Path]) -> List[Path]:
     order: list = []
     state: dict = {}
 
-    def _visit(src: Path):
+    def _visit(src: Path) -> None:
         if state.get(src) == "done":
             return
         if state.get(src) == "visiting":
@@ -82,7 +88,7 @@ def _topo_order(sources: Sequence[Path]) -> List[Path]:
     return order
 
 
-def _parse_compile_commands(cc_path: Path):
+def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
     """Return ``[(source_path, include_dirs, cpp_defines), ...]``
     in the order cmake / ninja recorded -- they topo-sort Fortran
     via the same scanner the regular build uses, so reusing that
@@ -96,7 +102,7 @@ def _parse_compile_commands(cc_path: Path):
     """
     with open(cc_path) as f:
         entries = json.load(f)
-    out: list = []
+    out: List[CompileEntry] = []
     for e in entries:
         src = Path(e["file"])
         # Fortran TUs only -- a mixed project's C/C++ entries (yaxt,
@@ -115,8 +121,8 @@ def _parse_compile_commands(cc_path: Path):
         # Recorded command may be a string ("cc -I/x foo.c") or a list.
         cmd = e["command"] if "command" in e else " ".join(e.get("arguments", []))
         tokens = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
-        includes: list = []
-        defines: list = []
+        includes: List[str] = []
+        defines: List[str] = []
         i = 0
         while i < len(tokens):
             t = tokens[i]
@@ -167,7 +173,7 @@ _SUBR_DEF_RE = re.compile(r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+
                           re.IGNORECASE)
 
 
-def _scan_subroutine_defs(text: str):
+def _scan_subroutine_defs(text: str) -> List[Tuple[str, Optional[str]]]:
     """``[(subroutine_lower, enclosing_module_lower_or_None), ...]`` for the
     subroutine *definitions* in ``text``.  Tracks ``MODULE`` / ``END MODULE``
     for the qualifier and skips ``INTERFACE`` blocks (those are declarations,
@@ -198,7 +204,7 @@ def _scan_subroutine_defs(text: str):
     return defs
 
 
-def _resolve_entry_with_module(name: str, sources):
+def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tuple[str, Optional[str]]:
     """``(proc, module_or_None)`` for a Fortran entry, scanning ``sources``
     for the subroutine definition.
 
@@ -224,8 +230,7 @@ def _resolve_entry_with_module(name: str, sources):
         m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) \
             or re.match(r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE)
         return (m.group(1).lower() if m else name), mod
-    want_mod, _, want_proc = name.lower().rpartition("::")
-    want_mod = want_mod or None
+    want_mod, want_proc = split_qualified_entry(name)
 
     matches = set()
     for src in sources:
@@ -247,7 +252,7 @@ def _resolve_entry_with_module(name: str, sources):
     return matches.pop()
 
 
-def resolve_entry(name: str, sources) -> str:
+def resolve_entry(name: str, sources: Iterable[str | Path]) -> str:
     """Validate a Fortran procedure name against ``sources`` and return its
     PLAIN Fortran name (never the flang ``_QM...`` mangling).
 
@@ -272,7 +277,7 @@ def resolve_entry(name: str, sources) -> str:
     return proc
 
 
-def _select_use_closure(parsed, root_module: str):
+def _select_use_closure(parsed: List[CompileEntry], root_module: str) -> List[CompileEntry]:
     """Filter parsed ``(src, includes, defines)`` entries down to the TU
     that defines ``root_module`` plus the transitive ``USE``-closure it
     needs, preserving the original (build) order.
@@ -309,7 +314,7 @@ def _select_use_closure(parsed, root_module: str):
     return [t for t in parsed if t[0] in needed]
 
 
-def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], defines: Sequence[str]):
+def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], defines: Sequence[str]) -> None:
     """Run one ``flang -fc1 -emit-hlfir`` invocation.  ``cwd`` and
     ``-J/-I`` all point at ``out_dir`` so flang only ever sees the
     ``.mod`` files it wrote itself -- with ``cwd`` set to ``out_dir`` the
@@ -389,7 +394,7 @@ def emit(*,
         emitted.append(out_dir / f"{src.stem}.hlfir")
     # 2. project sources.
     if compile_commands is not None:
-        parsed = _parse_compile_commands(Path(compile_commands))
+        parsed = parse_compile_commands(Path(compile_commands))
         if entry is not None:
             # Accept a plain Fortran name / ``module::proc`` / a mangled
             # symbol; keep ``entry`` plain and use its enclosing module
@@ -409,7 +414,7 @@ def emit(*,
     return emitted
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m dace_fortran.emit_hlfir",
                                 description="Emit HLFIR for a Fortran project so "
                                 "dace_fortran.build_sdfg_from_hlfir can consume it.")

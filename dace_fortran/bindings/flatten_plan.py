@@ -13,13 +13,15 @@ expressions stand for the N loop indices the copy nest declares;
 :func:`substitute_indices` fills in concrete names.
 """
 
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Tuple
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenRecipe:
     """One recorded unpacking.  Three emitter shapes, by flag combo:
     ``aliasable=True`` zero-copy ``c_f_pointer`` alias;
@@ -104,7 +106,7 @@ class FlattenRecipe:
         return cls(**d)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenEntry:
     """One outer dummy / storage path that was unpacked.
 
@@ -140,7 +142,7 @@ class FlattenEntry:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyntheticGlobal:
     """One scalar struct member ``hlfir-flatten-global-scalar-reads`` lifted
     out of a module-global record into a standalone ``fir.global``.
@@ -185,7 +187,7 @@ class SyntheticGlobal:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenPlan:
     """All unpacks ``hlfir-flatten-structs`` performed for one entry
     subroutine.  One entry per flattened outer dummy; untouched
@@ -216,7 +218,7 @@ class FlattenPlan:
             synthetic_globals=tuple(SyntheticGlobal.from_dict(s) for s in d.get('synthetic_globals', [])),
         )
 
-    def to_json(self, path: str):
+    def to_json(self, path: str) -> None:
         """Write the plan to ``path`` as indented JSON."""
         with open(path, 'w') as fh:
             json.dump(self.to_dict(), fh, indent=2)

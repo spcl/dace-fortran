@@ -6,6 +6,8 @@ libs ship gfortran-format ``.mod``s only, so :func:`prepare_flang_translation_un
 resolves the USE graph, stubs those libraries, patches flang-21 false positives,
 and replays the project's own ``-D``/``-I`` flags.
 """
+
+from __future__ import annotations
 import os
 import re
 import shutil
@@ -18,6 +20,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .llvm_toolchain import require_flang
 from .preprocess import merge_used_modules
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # 1. Library stubs.
@@ -169,7 +172,7 @@ def netcdf_stub_source(fortran_dir: Path) -> str:
 # Registry: name -> (stub source provider, include-path provider).  The
 # stub source goes into the merged TU; the include-path provider
 # returns a list of ``-I<dir>`` flags to append to flang's command line.
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LibraryStub:
     """A pluggable wrapper for an upstream Fortran library that ships
     only binary ``.mod`` files.  See :data:`LIBRARY_STUBS` for the
@@ -181,7 +184,7 @@ class LibraryStub:
     flags: Callable[..., List[str]]
 
 
-def _mpi_flags(openmpi_include: Optional[str] = None, **_) -> List[str]:
+def _mpi_flags(openmpi_include: Optional[str] = None, **_: Any) -> List[str]:
     """``-I`` flags for the MPI stub.  Auto-probes a standard OpenMPI
     install when ``openmpi_include`` isn't passed."""
     inc = openmpi_include or find_openmpi_include()
@@ -192,7 +195,7 @@ def _mpi_flags(openmpi_include: Optional[str] = None, **_) -> List[str]:
     return [f"-I{inc}"]
 
 
-def _netcdf_source(cache_dir: Optional[Path] = None, **_) -> str:
+def _netcdf_source(cache_dir: Optional[Path] = None, **_: Any) -> str:
     """Source for the netcdf stub.  Requires ``cache_dir`` to vendor
     the upstream tarball."""
     if cache_dir is None:
@@ -201,7 +204,7 @@ def _netcdf_source(cache_dir: Optional[Path] = None, **_) -> str:
     return netcdf_stub_source(vendor_netcdf_fortran(cache_dir))
 
 
-def _netcdf_flags(cache_dir: Optional[Path] = None, **_) -> List[str]:
+def _netcdf_flags(cache_dir: Optional[Path] = None, **_: Any) -> List[str]:
     """``-I`` flags for the netcdf stub.  Same ``cache_dir`` as
     :func:`_netcdf_source`."""
     if cache_dir is None:

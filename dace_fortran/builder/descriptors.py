@@ -9,13 +9,21 @@ scalars (``__sc_N`` / ``__al_N``) that weren't in the original variable
 classification.
 """
 
+from __future__ import annotations
+
 import re
-from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Sequence
 
 import dace
 from dace import SDFG
 
 from dace_fortran.builder.access import resolve_object_member_expr
+from dace_fortran.builder.records import NodeLike, SyntheticVar, VarLike
+
+if TYPE_CHECKING:
+    from dace.sdfg.state import ControlFlowRegion
+    from dace_fortran.builder import SDFGBuilder
+    from dace_fortran.builder.context import Ctx
 
 #: A pointer-ASSOCIATION right-hand side: a bare identifier or a flattened
 #: member chain (``patch_2d % edges % in_domain`` -> ``patch_2d_edges_in_domain``),
@@ -51,7 +59,7 @@ def _is_synth_scalar(name: str) -> bool:
     return name.startswith(_SYNTH_SCALAR_PREFIXES)
 
 
-def is_character_dtype(dtype) -> bool:
+def is_character_dtype(dtype: object) -> bool:
     """True for any Fortran ``CHARACTER`` datum (``!fir.char<...>``): a local
     string, a named constant, or a flang literal-pool entry.
 
@@ -64,7 +72,7 @@ def is_character_dtype(dtype) -> bool:
     return str(dtype).startswith("!fir.char")
 
 
-def is_character_data(builder, name: str) -> bool:
+def is_character_data(builder: SDFGBuilder, name: str) -> bool:
     """True when ``name`` is a bridge variable of ``CHARACTER`` type, i.e. one
     :func:`add_descriptors` deliberately left without an SDFG descriptor.
 
@@ -80,7 +88,7 @@ def is_character_data(builder, name: str) -> bool:
     return v is not None and is_character_dtype(v.dtype)
 
 
-def _infer_component_aliases(builder) -> tuple[dict[str, str], dict[str, set[str]]]:
+def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict[str, set[str]]]:
     """Recover pointer-object aliases the bridge inlining chain dissolved.
 
     When Fortran source contains ``p_pat_fn2 => p_patch % comm_pat_c``,
@@ -104,17 +112,17 @@ def _infer_component_aliases(builder) -> tuple[dict[str, str], dict[str, set[str
     known = set(builder.arrays) | set(builder.scalars) | set(builder.symbols)
     unresolved: set[str] = set()
 
-    def walk(nodes):
+    def walk(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
-            for ac in getattr(c, 'accesses', None) or []:
-                for expr in getattr(ac, 'index_exprs', None) or []:
+            for ac in c.accesses or []:
+                for expr in ac.index_exprs or []:
                     if isinstance(expr, str):
                         for m in re.finditer(r'([A-Za-z_]\w*)\[', expr):
                             n = m.group(1)
                             if n not in known and '_' in n:
                                 unresolved.add(n)
             walk(c.children)
-            walk(getattr(c, 'else_children', []))
+            walk(c.else_children)
 
     walk(builder.ast)
     if not unresolved:
@@ -157,7 +165,7 @@ def _infer_component_aliases(builder) -> tuple[dict[str, str], dict[str, set[str
     return aliases, prefix_suffixes
 
 
-def _synth_view_alias(src, fortran_name: str):
+def _synth_view_alias(src: VarLike, fortran_name: str) -> SyntheticVar:
     """Build a stand-in VarInfo for a phantom pointer-component array.
 
     The real storage descriptor is ``src`` (already in ``builder.arrays``);
@@ -165,93 +173,24 @@ def _synth_view_alias(src, fortran_name: str):
     pointing at it.  Only the fields actually consulted by
     ``add_descriptors`` and ``access.py`` are populated.
     """
-    return SimpleNamespace(
+    return SyntheticVar(
         fortran_name=fortran_name,
         role='view_alias',
         view_source=src.fortran_name,
         view_subset=[''],
-        view_dim_map=[],
         dtype=src.dtype,
         rank=src.rank,
         shape_symbols=list(src.shape_symbols),
         lower_bounds=list(src.lower_bounds),
         intent=src.intent,
         is_dynamic=src.is_dynamic,
-        bounds_remap_view=False,
-        bounds_remap_source='',
-        bounds_remap_source_subset=[],
-        bounds_remap_total_extent='',
     )
-
-
-def _rename_scalar_members(builder, aliases: dict[str, str], used_tokens: set[str]):
-    """Rewrite phantom scalar member names to their real flattened names.
-
-    Scalar members of a dissolved pointer object (``p_pat_fn1_comm``) have no
-    descriptor, so the SDFG must reference the real storage
-    (``p_patch_comm_pat_e_comm``) instead of fabricating a parallel symbol.
-    The rewrite is a whole-word substitution that deliberately skips
-    underscore-adjacent matches so internal ``__sym_...`` names are untouched.
-    """
-    renames: dict[str, str] = {}
-    for prefix, real_prefix in aliases.items():
-        for src_dict in (builder.scalars, builder.symbols):
-            for real_name in list(src_dict):
-                if not real_name.startswith(real_prefix + '_'):
-                    continue
-                suffix = real_name[len(real_prefix) + 1:]
-                phantom = f"{prefix}_{suffix}"
-                if phantom not in used_tokens:
-                    continue
-                # Only rename when the phantom is not already a real descriptor.
-                if phantom in builder.arrays or phantom in builder.scalars or phantom in builder.symbols:
-                    continue
-                renames[phantom] = real_name
-    if not renames:
-        return
-
-    def _subst(s: str) -> str:
-        # Longest phantom first so a short phantom doesn't eat a longer one.
-        for phantom in sorted(renames, key=len, reverse=True):
-            real = renames[phantom]
-            s = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(phantom)}(?![A-Za-z0-9_])', real, s)
-        return s
-
-    def _walk(nodes):
-        for c in nodes:
-            for attr in dir(c):
-                if not attr or attr.startswith('_') or attr in ('children', 'else_children', 'accesses'):
-                    continue
-                val = getattr(c, attr, None)
-                if isinstance(val, str):
-                    try:
-                        setattr(c, attr, _subst(val))
-                    except AttributeError:
-                        pass
-            for ac in getattr(c, 'accesses', None) or []:
-                if hasattr(ac, 'index_exprs') and ac.index_exprs:
-                    for i, e in enumerate(ac.index_exprs):
-                        if isinstance(e, str):
-                            ac.index_exprs[i] = _subst(e)
-                if hasattr(ac, 'index_vars') and ac.index_vars:
-                    for i, v in enumerate(ac.index_vars):
-                        if isinstance(v, str):
-                            ac.index_vars[i] = _subst(v)
-            call_args = getattr(c, 'call_args', None)
-            if call_args:
-                for i, arg in enumerate(call_args):
-                    if isinstance(arg, str):
-                        call_args[i] = _subst(arg)
-            _walk(c.children)
-            _walk(getattr(c, 'else_children', []))
-
-    _walk(builder.ast)
 
 
 _POINTER_ASSOC_RE = re.compile(r'(?<!\w)([A-Za-z_]\w*)\s*=>\s*([A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)*)', re.IGNORECASE)
 
 
-def _pointer_aliases_from_source(builder, source: str) -> dict[str, str]:
+def _pointer_aliases_from_source(builder: SDFGBuilder, source: str) -> dict[str, str]:
     """Parse the original Fortran source for pointer-association statements.
 
     The bridge's inlining pass dissolves object aliases such as
@@ -291,7 +230,7 @@ def _pointer_aliases_from_source(builder, source: str) -> dict[str, str]:
     return out
 
 
-def scan_object_aliases(builder) -> None:
+def scan_object_aliases(builder: SDFGBuilder) -> None:
     """Collect whole-derived-type-OBJECT pointer rebinds (``obj_ptr => src_obj``)
     the bridge lowered as plain scalar ``assign`` nodes.
 
@@ -329,7 +268,7 @@ def scan_object_aliases(builder) -> None:
     # so the rebind classifier below is O(1).
     read_names: set = set()
 
-    def collect_reads(nodes):
+    def collect_reads(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             for a in (c.accesses or []):
                 if a.is_read and a.array_name:
@@ -343,7 +282,7 @@ def scan_object_aliases(builder) -> None:
 
     collect_reads(builder.ast)
 
-    def visit(nodes):
+    def visit(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             if c.kind == "assign" and not c.target_is_array and c.target not in known \
                     and not _is_synth_scalar(c.target):
@@ -432,7 +371,7 @@ def scan_object_aliases(builder) -> None:
     # and materialise phantom pointer-component names as mirrors of the real
     # flattened storage.  This must happen before ``add_descriptors`` registers the
     # SDFG symbols/arrays because the synthetic views need their own offset symbols.
-    source_aliases = _pointer_aliases_from_source(builder, getattr(builder, '_fortran_source', None) or '')
+    source_aliases = _pointer_aliases_from_source(builder, builder.fortran_source)
     inferred_aliases, inferred_suffixes = _infer_component_aliases(builder)
     all_aliases: dict[str, str] = {**inferred_aliases, **source_aliases}
     for prefix, real_prefix in all_aliases.items():
@@ -451,27 +390,24 @@ def scan_object_aliases(builder) -> None:
     used_tokens: set[str] = set()
     _ident_re = re.compile(r'\b[A-Za-z_]\w*\b')
 
-    def _collect_tokens(nodes):
+    def _collect_tokens(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             # Scan every string attribute of the AST node (loop bounds,
             # conditions, expressions, ...) plus nested AccessInfo strings.
-            for attr in dir(c):
-                if attr.startswith('_') or attr in ('children', 'else_children', 'accesses'):
-                    continue
-                val = getattr(c, attr, None)
-                if isinstance(val, str):
-                    used_tokens.update(_ident_re.findall(val))
-            for ac in getattr(c, 'accesses', None) or []:
-                for expr in getattr(ac, 'index_exprs', None) or []:
+            for val in (c.kind, c.loop_iter, c.loop_bound, c.loop_lower_expr, c.loop_step_expr, c.target, c.expr,
+                        c.condition, c.callee, c.reduce_src, c.reduce_wcr, c.reduce_identity):
+                used_tokens.update(_ident_re.findall(val))
+            for ac in c.accesses or []:
+                for expr in ac.index_exprs or []:
                     if isinstance(expr, str):
                         used_tokens.update(_ident_re.findall(expr))
-                for iv in getattr(ac, 'index_vars', None) or []:
+                for iv in ac.index_vars or []:
                     if isinstance(iv, str):
                         used_tokens.update(_ident_re.findall(iv))
-            for arg in getattr(c, 'call_args', None) or []:
+            for arg in c.call_args or []:
                 used_tokens.update(_ident_re.findall(str(arg)))
             _collect_tokens(c.children)
-            _collect_tokens(getattr(c, 'else_children', []))
+            _collect_tokens(c.else_children)
 
     _collect_tokens(builder.ast)
 
@@ -569,7 +505,7 @@ def dt(s: str) -> dace.typeclass:
     return DTYPE.get(s, dace.float64)
 
 
-def sdfg_name(builder) -> str:
+def sdfg_name(builder: SDFGBuilder) -> str:
     """Derive the SDFG name -- and therefore the generated ``.so``
     library name -- from the procedure being built.
 
@@ -584,7 +520,7 @@ def sdfg_name(builder) -> str:
     so a registered external callee can be linked against it by
     function-keyed library name.
     """
-    entry = getattr(builder, "entry", None)
+    entry = builder.entry
     if entry:
         proc = entry.rsplit("P", 1)[-1] if "P" in entry else entry
         if proc:
@@ -596,7 +532,7 @@ def sdfg_name(builder) -> str:
     return "sdfg"
 
 
-def _fortran_strides(dims):
+def _fortran_strides(dims: Sequence[Any]) -> list[Any]:
     """Column-major strides: ``stride[i]`` is the product of
     ``dims[0..i-1]``.  Fortran's declaration ``real :: a(nproma, nlev,
     nblks_e)`` has nproma as the fastest-varying index (stride 1),
@@ -615,7 +551,7 @@ def _fortran_strides(dims):
     return strides
 
 
-def add_descriptors(builder, sdfg: SDFG):
+def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
     """Add symbols, arrays, and scalars to ``sdfg`` from ``builder``'s
     classified variable dicts.
 
@@ -666,7 +602,7 @@ def add_descriptors(builder, sdfg: SDFG):
     # rebind.
     rebind_srcs: dict = {}
 
-    def _scan_rebinds(nodes):
+    def _scan_rebinds(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             # A whole-array ``ptr => src`` rebind surfaces as an ``assign`` whose
             # RHS is the bare source name and which carries
@@ -758,7 +694,7 @@ def add_descriptors(builder, sdfg: SDFG):
             if s not in known and s not in sdfg.symbols:
                 sdfg.add_symbol(s, dace.int64)
 
-    def _dim(s: str):
+    def _dim(s: str) -> Any:
         if s.lstrip('-').isdigit():
             return int(s)
         if _is_expr(s):
@@ -785,7 +721,7 @@ def add_descriptors(builder, sdfg: SDFG):
     # symbol stays free on the SDFG signature.  Populated here so
     # ``builder.offset_values`` is fully filled before any AST emission
     # references the symbols in memlet subsets.
-    def _offset_value(s: str):
+    def _offset_value(s: str) -> int | str | None:
         s = s.strip()
         if s == "?" or not s:
             # Unresolved lower bound -- left free ON PURPOSE for a dummy
@@ -809,7 +745,7 @@ def add_descriptors(builder, sdfg: SDFG):
     for v in builder.arrays.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
             continue
-        if v.fortran_name in getattr(builder, 'complex_component_aliases', {}):
+        if v.fortran_name in builder.complex_component_aliases:
             # Complex-as-2-reals component alias (``REAL(2,N)`` dummy bound to a
             # ``COMPLEX`` element, QE ``qvan2``'s ``qg(2, ngy)`` <- ``qgm(1,
             # ijh)``).  Register it as a SAME-dtype COMPLEX View of the source
@@ -817,7 +753,7 @@ def add_descriptors(builder, sdfg: SDFG):
             # descriptor (handled per-access by the ``re``/``im`` mask), so the
             # view is plain ``complex`` of ``complex`` -- expressible, unlike the
             # bridge's invalid float-of-complex view.  The source->view linking
-            # memlet (``acc`` / ``_ensure_view_writeback_link``) carries the
+            # memlet (``acc`` / ``ensure_view_writeback_link``) carries the
             # slab; ``qg(c, i)`` lowers to ``re/im(qg[i-1])`` in emit.
             from dace_fortran.builder.access import cc_alias_view_spec
             spec = cc_alias_view_spec(builder, v.fortran_name)
@@ -905,7 +841,7 @@ def add_descriptors(builder, sdfg: SDFG):
                     strides=[1],
                 )
             else:
-                view_strides = _fortran_strides(dims)
+                view_strides: list[Any] | None = _fortran_strides(dims)
                 sdfg.add_view(
                     v.fortran_name,
                     shape=dims,
@@ -979,15 +915,15 @@ def add_descriptors(builder, sdfg: SDFG):
             # transient backed by ``add_constant`` data; every other
             # intent-empty global is a caller kwarg (non-transient
             # (1,)-Array surfacing on the SDFG signature).
-            from dace_fortran.builder import _global_is_baked_constant
-            transient = (v.intent == '' and _global_is_baked_constant(v))
+            from dace_fortran.builder import global_is_baked_constant
+            transient = (v.intent == '' and global_is_baked_constant(v))
             # An inlined-callee dummy bound to an unrepresentable struct-
             # component section (AoS-global ``becxx(ikq)%k``) is the kernel's
             # OWN internal data, never a true external input -- register it as a
             # read-only transient (full-view SoA, no copy-back) instead of
             # leaking it onto the SDFG signature as a required argument.  Its
             # reads are dead on every path that doesn't allocate the global.
-            if getattr(v, 'unbindable_section', False):
+            if v.unbindable_section:
                 transient = True
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
@@ -1034,7 +970,7 @@ def add_descriptors(builder, sdfg: SDFG):
     # length-1 Array survives the later scalar-folding cleanup.
     scalar_view_sources = {
         a.view_source
-        for a in builder.arrays.values() if getattr(a, 'role', '') == 'view_alias' and a.view_source in builder.scalars
+        for a in builder.arrays.values() if a.role == 'view_alias' and a.view_source in builder.scalars
     }
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
@@ -1095,7 +1031,7 @@ def add_descriptors(builder, sdfg: SDFG):
             sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=False)
 
 
-def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
+def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], dtype: str, ctx: Ctx) -> None:
     """Register a bridge-synthesised transient array on the SDFG and in
     ``builder.arrays``.  Used by the ``kind="declare_transient"`` AST
     handler: when the bridge emits a per-element loop that fills a
@@ -1150,12 +1086,10 @@ def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
         ctx.sdfg.add_array(name, shape=dims, dtype=dt(dtype), transient=True, strides=strides)
     # Mirror the entry into ``builder.arrays`` so subsequent emit_assign
     # / emit_libcall calls find it via the existing arrays-dict lookups.
-    builder.arrays[name] = SimpleNamespace(
+    builder.arrays[name] = SyntheticVar(
         fortran_name=name,
-        intent='',
         dtype=dtype,
         rank=len(shape),
-        is_dynamic=False,
         role='array',
         shape_symbols=[str(s) for s in shape],
         lower_bounds=['1'] * len(shape),
@@ -1169,7 +1103,7 @@ def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
         builder.offset_values[sym_name] = 1
 
 
-def emit_declare_transient(builder, ctx, n, region):
+def emit_declare_transient(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Handler for ASTNode kind=\"declare_transient\".
 
     Reads ``n.target`` (name), ``n.expr`` (dtype as string), and shape
@@ -1201,7 +1135,7 @@ def emit_declare_transient(builder, ctx, n, region):
     declare_synth_array(builder, n.target, resolved, n.expr or "int32", ctx)
 
 
-def auto_declare_synth(builder, name: str, ctx):
+def auto_declare_synth(builder: SDFGBuilder, name: str, ctx: Ctx) -> None:
     """Lazy-declare a synthetic scalar minted by the bridge's faithful
     scf.while walker.  ``__sc_N`` names materialise ``scf.if -> T``
     results; ``__al_N`` names come from bare ``fir.alloca`` ops that
@@ -1217,8 +1151,7 @@ def auto_declare_synth(builder, name: str, ctx):
     if not _is_synth_scalar(name):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
-    # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
-    # ``.intent`` and ``.dtype``.
+    # A ``SyntheticVar`` is enough  --  scalar dispatch only reads ``.intent`` and ``.dtype``.
     # ``__al_<N>`` is the lift-cf-to-scf scratch counter that drives the
     # ``do istep = 1, niter`` shape (NPB LU's ssor istep loop): each
     # iteration DECREMENTS it on an interstate edge (``__al = __al - 1``)
@@ -1234,14 +1167,7 @@ def auto_declare_synth(builder, name: str, ctx):
     # that a scalar reads correctly on a ConditionalBlock branch /
     # interstate edge in d-face 2.0.0a3 -- no length-1 array needed; the
     # earlier "scalar = free-symbol 0 on the edge" belief was wrong).
-    v = SimpleNamespace(fortran_name=name,
-                        intent='',
-                        dtype='int32',
-                        rank=0,
-                        is_dynamic=False,
-                        role='symbol' if is_sym else 'scalar',
-                        shape_symbols=[],
-                        lower_bounds=[])
+    v = SyntheticVar(fortran_name=name, dtype='int32', role='symbol' if is_sym else 'scalar')
     if is_sym:
         builder.symbols[name] = v
         if name not in ctx.sdfg.symbols:

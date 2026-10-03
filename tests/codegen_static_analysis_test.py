@@ -11,7 +11,7 @@ runs them and routine local sweeps skip the cost with ``-m "not long"``.
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.codegen_check import CRITICAL_WARNINGS, analyze
+from codegen_check import CRITICAL_WARNINGS, analyze
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 

@@ -45,16 +45,16 @@ def test_return_block_wired_at_top_level(tmp_path):
     builder.arrays = {}
     builder.symbols = {}
     builder.scalars = {}
-    builder._id_counter = 0
+    builder.init_emit_state()
     sdfg = SDFG("early_ret")
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
 
-    from dace_fortran.hlfir_to_sdfg import _Ctx
-    ctx = _Ctx(sdfg, builder)
+    from dace_fortran.hlfir_to_sdfg import Ctx
+    ctx = Ctx(sdfg, builder)
 
     ast = [_Node(kind="return")]
-    builder._emit(ctx, ast, sdfg)
+    builder.emit_nodes(ctx, ast, sdfg)
     ctx.flush(builder, sdfg)
     sdfg.validate()
 
@@ -71,14 +71,14 @@ def test_break_block_inside_loop_region(tmp_path):
     import dace
     from dace import SDFG
     from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
-    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, _Ctx
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, Ctx
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
     builder.variables = []
     builder.arrays = {}
     builder.symbols = {}
     builder.scalars = {}
-    builder._id_counter = 0
+    builder.init_emit_state()
 
     sdfg = SDFG("early_break")
     sdfg.add_symbol("i", dace.int64)
@@ -98,7 +98,7 @@ def test_break_block_inside_loop_region(tmp_path):
 
     break_region = ControlFlowRegion("exit_branch", sdfg=sdfg)
     cond_block.add_branch("(a[i - 1] > 100)", break_region)
-    builder._emit(_Ctx(sdfg, builder), [_Node(kind="break")], break_region)
+    builder.emit_nodes(Ctx(sdfg, builder), [_Node(kind="break")], break_region)
 
     else_region = ControlFlowRegion("body_branch", sdfg=sdfg)
     else_region.add_state("body_noop", is_start_block=True)

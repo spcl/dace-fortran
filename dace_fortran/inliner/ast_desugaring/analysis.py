@@ -1,12 +1,16 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 import contextlib
 import math
 import operator
 import sys
 from copy import copy
-from typing import Optional, Tuple, List, Dict, Union, Set
+from typing import Iterable, Iterator, Optional, Tuple, List, Dict, Union, Set
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
@@ -210,29 +214,39 @@ def identifier_specs(ast: f03.Program) -> types.SPEC_TABLE:
     return ident_map
 
 
-#: When True, :func:`alias_specs` does not assert on a ``USE`` of a module
-#: (or of a name from a module) that is absent from the parsed sources --
-#: it skips aliasing that import and leaves the name unresolved.  This lets
-#: the inliner ingest a kernel whose enclosing module ``USE``s an external
-#: library that has no Fortran source on the search path (ICON: ``netcdf``,
-#: ``mpi``, ``cdi`` ...): the import is left dangling and the reachability
-#: pruning then drops the (unused) procedures that referenced it.  Enabled
-#: only around the inliner pipeline (see
-#: :func:`dace_fortran.fparser_inliner.inline_to_ast`); default-off keeps the
-#: strict resolution the upstream desugaring tests rely on.
-TOLERATE_EXTERNAL_USES = False
+class AnalysisOptions:
+    """Process-wide switches of the inliner analysis passes."""
+
+    __slots__ = ("tolerate_external_uses", )
+
+    #: When True, :func:`alias_specs` does not assert on a ``USE`` of a module
+    #: (or of a name from a module) that is absent from the parsed sources --
+    #: it skips aliasing that import and leaves the name unresolved.  This lets
+    #: the inliner ingest a kernel whose enclosing module ``USE``s an external
+    #: library that has no Fortran source on the search path (ICON: ``netcdf``,
+    #: ``mpi``, ``cdi`` ...): the import is left dangling and the reachability
+    #: pruning then drops the (unused) procedures that referenced it.  Enabled
+    #: only around the inliner pipeline (see
+    #: :func:`dace_fortran.fparser_inliner.inline_to_ast`); default-off keeps the
+    #: strict resolution the upstream desugaring tests rely on.
+    tolerate_external_uses: bool
+
+    def __init__(self) -> None:
+        self.tolerate_external_uses = False
+
+
+OPTIONS = AnalysisOptions()
 
 
 @contextlib.contextmanager
-def tolerate_external_uses(enabled: bool = True):
-    """Temporarily toggle :data:`TOLERATE_EXTERNAL_USES` (see its docstring)."""
-    global TOLERATE_EXTERNAL_USES
-    prev = TOLERATE_EXTERNAL_USES
-    TOLERATE_EXTERNAL_USES = enabled
+def tolerate_external_uses(enabled: bool = True) -> Iterator[None]:
+    """Temporarily set ``OPTIONS.tolerate_external_uses`` (see its docstring)."""
+    prev = OPTIONS.tolerate_external_uses
+    OPTIONS.tolerate_external_uses = enabled
     try:
         yield
     finally:
-        TOLERATE_EXTERNAL_USES = prev
+        OPTIONS.tolerate_external_uses = prev
 
 
 def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
@@ -258,7 +272,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
             # An external module with no Fortran source on the search path
             # (e.g. ICON's ``netcdf`` / ``mpi``).  When tolerating, leave its
             # imports unresolved and let pruning drop the code that used them.
-            if TOLERATE_EXTERNAL_USES:
+            if OPTIONS.tolerate_external_uses:
                 continue
             assert mod_spec in ident_map, mod_spec
         # The module's name cannot be used as an identifier in this scope anymore, so just point to the module.
@@ -298,7 +312,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
                     # A specific name imported from a module that is present but
                     # does not define it (e.g. a partial external/stub module).
                     # Tolerate as above: leave it unresolved for pruning to drop.
-                    if TOLERATE_EXTERNAL_USES:
+                    if OPTIONS.tolerate_external_uses:
                         continue
                     assert tgt_spec in alias_map, f"{src_spec} => {tgt_spec}"
                 alias_map[src_spec] = alias_map[tgt_spec]
@@ -387,16 +401,16 @@ def find_real_ident_spec_tolerant(ident: str,
                                   alias_map: types.SPEC_TABLE,
                                   node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
     """Resolve ``ident`` to its canonical spec with a single lookup.  Under
-    :data:`TOLERATE_EXTERNAL_USES` an unresolved external symbol returns ``None``
+    :data:`OPTIONS` an unresolved external symbol returns ``None``
     (the caller substitutes a match-anything type) instead of asserting;
     otherwise this asserts exactly like :func:`find_real_ident_spec`."""
     spec = search_real_ident_spec(ident, in_spec, alias_map, node_types)
-    if spec is None and not TOLERATE_EXTERNAL_USES:
+    if spec is None and not OPTIONS.tolerate_external_uses:
         raise AssertionError(f"cannot find {ident} / {in_spec}")
     return spec
 
 
-def _find_type_decl_node(node: f03.Entity_Decl):
+def _find_type_decl_node(node: f03.Entity_Decl) -> Optional[Base]:
     anc = node.parent
     while anc and not ast_utils.atmost_one(
             ast_utils.children_of_type(anc, (f03.Intrinsic_Type_Spec, f03.Declaration_Type_Spec))):
@@ -433,7 +447,7 @@ def _eval_selected_real_kind(p: int, r: int) -> int:
     return 2
 
 
-def _cdiv(x, y):
+def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
     """Performs integer or real division based on operand types."""
     return operator.floordiv(x, y) \
         if (isinstance(x, types.NUMPY_INTS) and isinstance(y, types.NUMPY_INTS)) \
@@ -522,7 +536,7 @@ def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_
         if kind_spec:
             kind_decl = alias_map[kind_spec]
             kind_node, _, _, _ = kind_decl.children
-            kind = _const_eval_basic_type(kind_node, alias_map)
+            kind = const_eval_basic_type(kind_node, alias_map)
             assert isinstance(kind, np.int32)
     assert kind in {1, 2, 4, 8}
     if kind == 1: return np.int8(num)
@@ -557,12 +571,12 @@ def _eval_real_literal(x: Union[f03.Signed_Real_Literal_Constant, f03.Real_Liter
             return None
         kind_decl = alias_map[kind_spec]
         kind_node, _, _, _ = kind_decl.children
-        kind = _const_eval_basic_type(kind_node, alias_map)
+        kind = const_eval_basic_type(kind_node, alias_map)
         if not isinstance(kind, np.int32):
             return None
     else:
         # Numeric kind literal (``1.0_8``): evaluate the kind expression directly.
-        kind_val = _const_eval_basic_type(kind, alias_map)
+        kind_val = const_eval_basic_type(kind, alias_map)
         if not isinstance(kind_val, (np.int32, np.int64)):
             return None
         kind = int(kind_val)
@@ -572,7 +586,7 @@ def _eval_real_literal(x: Union[f03.Signed_Real_Literal_Constant, f03.Real_Liter
     if kind == 8: return np.float64(num)
 
 
-def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[types.NUMPY_TYPES]:
+def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[types.NUMPY_TYPES]:
     """
     Recursively evaluates a constant expression tree.
 
@@ -592,7 +606,7 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
         init = ast_utils.atmost_one(ast_utils.children_of_type(decl, f03.Initialization))
         _, iexpr = init.children
         if f"{iexpr}" == 'NULL()': return None
-        val = _const_eval_basic_type(iexpr, alias_map)
+        val = const_eval_basic_type(iexpr, alias_map)
         if val is None:
             # A self-contained program's PARAMETER always has a constant
             # initializer (the assert is a real invariant); in a large
@@ -600,43 +614,43 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
             # unresolved external entity, so the entity is simply not a
             # compile-time constant here -- return None per this evaluator's
             # contract instead of asserting.
-            assert TOLERATE_EXTERNAL_USES
+            assert OPTIONS.tolerate_external_uses
             return None
-        return optimizations._val_2_np_lit(val, typ.spec)
+        return optimizations.val_2_np_lit(val, typ.spec)
     elif isinstance(expr, f03.Intrinsic_Function_Reference):
         intr, args = expr.children
         args = args.children if args else tuple()
         if intr.string == 'EPSILON':
             a, = args
-            a = _const_eval_basic_type(a, alias_map)
+            a = const_eval_basic_type(a, alias_map)
             if isinstance(a, types.NUMPY_REALS):
                 return type(a)(sys.float_info.epsilon)
         elif intr.string in INTR_FNS:
-            avals = tuple(_const_eval_basic_type(a, alias_map) for a in args)
+            avals = tuple(const_eval_basic_type(a, alias_map) for a in args)
             if all(isinstance(a, types.NUMPY_REALS) for a in avals):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == 'SELECTED_REAL_KIND':
             p, r = args
-            p, r = _const_eval_basic_type(p, alias_map), _const_eval_basic_type(r, alias_map)
+            p, r = const_eval_basic_type(p, alias_map), const_eval_basic_type(r, alias_map)
             if p is None or r is None: return None
             return np.int32(_eval_selected_real_kind(int(p), int(r)))
         elif intr.string == 'SELECTED_INT_KIND':
             p, = args
-            p = _const_eval_basic_type(p, alias_map)
+            p = const_eval_basic_type(p, alias_map)
             if p is None: return None
             return np.int32(_eval_selected_int_kind(int(p)))
         elif intr.string == 'INT':
             kind = 4
             if len(args) == 2:
-                kind = _const_eval_basic_type(args[-1], alias_map)
-            num = _const_eval_basic_type(args[0], alias_map)
+                kind = const_eval_basic_type(args[-1], alias_map)
+            num = const_eval_basic_type(args[0], alias_map)
             if num is None or kind is None: return None
             return _eval_int_literal(f03.Int_Literal_Constant(f"{int(num)}_{int(kind)}"), alias_map)
         elif intr.string == 'REAL':
             kind = 4
             if len(args) == 2:
-                kind = _const_eval_basic_type(args[-1], alias_map)
-            num = _const_eval_basic_type(args[0], alias_map)
+                kind = const_eval_basic_type(args[-1], alias_map)
+            num = const_eval_basic_type(args[0], alias_map)
             if num is None or kind is None: return None
             valstr = str(num)
             if kind == 8:
@@ -651,8 +665,8 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
     elif isinstance(expr, BinaryOpBase):
         lv, op, rv = expr.children
         if op in BINARY_OPS:
-            lv = _const_eval_basic_type(lv, alias_map)
-            rv = _const_eval_basic_type(rv, alias_map)
+            lv = const_eval_basic_type(lv, alias_map)
+            rv = const_eval_basic_type(rv, alias_map)
             if op == '.AND.' and (lv is np.bool_(False) or rv is np.bool_(False)): return np.bool_(False)
             if op == '.OR.' and (lv is np.bool_(True) or rv is np.bool_(True)): return np.bool_(True)
             if lv is None or rv is None: return None
@@ -660,12 +674,12 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
     elif isinstance(expr, UnaryOpBase):
         op, val = expr.children
         if op in UNARY_OPS:
-            val = _const_eval_basic_type(val, alias_map)
+            val = const_eval_basic_type(val, alias_map)
             if val is None: return None
             return UNARY_OPS[op](val)
     elif isinstance(expr, f03.Parenthesis):
         _, x, _ = expr.children
-        return _const_eval_basic_type(x, alias_map)
+        return const_eval_basic_type(x, alias_map)
     elif isinstance(expr, f03.Hex_Constant):
         x = expr.string
         assert f"{x[:2]}{x[-1:]}" in {'Z""', "Z''"}
@@ -709,7 +723,7 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
             # ``(KIND = expr)`` parses to 3 children ('(', expr, ')'); the
             # star-kind form ``TYPE*N`` to 2 children ('*', expr).
             kind = kind.children[1] if len(kind.children) == 3 else kind.children[-1]
-            kind_val = _const_eval_basic_type(kind, alias_map) or 4
+            kind_val = const_eval_basic_type(kind, alias_map) or 4
             # For COMPLEX the kind names the width of EACH real component
             # (COMPLEX(4) -> COMPLEX4 -> 2xFP32; COMPLEX(8) -> COMPLEX8 -> 2xFP64),
             # matching the REAL suffix convention.
@@ -753,8 +767,8 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
     return tspec
 
 
-def _dataref_root(dref: Union[f03.Name, f03.Data_Ref, f03.Data_Pointer_Object], scope_spec: types.SPEC,
-                  alias_map: types.SPEC_TABLE):
+def dataref_root(dref: Union[f03.Name, f03.Data_Ref, f03.Data_Pointer_Object], scope_spec: types.SPEC,
+                 alias_map: types.SPEC_TABLE) -> Tuple[Base, types.TYPE_SPEC, List[Base]]:
     """
     Helper function to deconstruct a data reference (e.g., `a % b % c`) into its root variable
     and the list of subsequent component accesses.
@@ -793,14 +807,14 @@ def find_dataref_component_spec(dref: Union[f03.Name, f03.Data_Ref], scope_spec:
     :param alias_map: The alias map.
     :return: The canonical spec of the final component.
     """
-    _, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
+    _, root_type, rest = dataref_root(dref, scope_spec, alias_map)
     cur_type = root_type
     for comp in rest[:-1]:
         if cur_type.spec == MATCH_ALL.spec:
             # A component of an externalised/unresolvable type (MATCH_ALL has no
             # members to resolve against) is itself unknown -- return MATCH_ALL,
             # mirroring find_type_dataref. Strict mode keeps the assert.
-            assert TOLERATE_EXTERNAL_USES
+            assert OPTIONS.tolerate_external_uses
             return MATCH_ALL.spec
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
@@ -809,7 +823,7 @@ def find_dataref_component_spec(dref: Union[f03.Name, f03.Data_Ref], scope_spec:
         assert cur_type
 
     if cur_type.spec == MATCH_ALL.spec:
-        assert TOLERATE_EXTERNAL_USES
+        assert OPTIONS.tolerate_external_uses
         return MATCH_ALL.spec
     comp = rest[-1]
     part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
@@ -829,16 +843,17 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
     :param alias_map: The alias map.
     :return: A TYPE_SPEC object for the final component in the data reference.
     """
-    _, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
+    _, root_type, rest = dataref_root(dref, scope_spec, alias_map)
     cur_type = root_type
 
-    def _subscripted_type(t: types.TYPE_SPEC, pref: f03.Part_Ref):
+    def _subscripted_type(t: types.TYPE_SPEC, pref: f03.Part_Ref) -> types.TYPE_SPEC:
         pname, subs = pref.children
         if not t.shape:
             # A match-anything type (external / ``CLASS(*)`` under tolerance) has
             # an unknown rank, so allow subscripts on it; a genuine scalar cannot
             # be indexed and still asserts.
-            assert not subs or (TOLERATE_EXTERNAL_USES and t.spec == ('*', )), f"{t} / {pname}, {t.spec}, {dref}"
+            assert not subs or (OPTIONS.tolerate_external_uses
+                                and t.spec == ('*', )), f"{t} / {pname}, {t.spec}, {dref}"
         elif subs:
             t.shape = tuple(s.tofortran() for s in subs.children if ':' in s.tofortran())
         return t
@@ -847,7 +862,7 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
         return _subscripted_type(cur_type, dref)
     for comp in rest:
         assert isinstance(comp, (f03.Name, f03.Part_Ref))
-        if TOLERATE_EXTERNAL_USES and cur_type.spec == ('*', ):
+        if OPTIONS.tolerate_external_uses and cur_type.spec == ('*', ):
             # Cannot trace a component of a match-anything type; stay match-anything.
             return MATCH_ALL
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
@@ -858,7 +873,7 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
             # A component whose declaration carries no resolvable type (an
             # externalized / opaque member reached under tolerance): stay
             # match-anything, consistent with the spec==('*',) branch above.
-            assert TOLERATE_EXTERNAL_USES, f"{comp_spec} / {dref} in {scope_spec}"
+            assert OPTIONS.tolerate_external_uses, f"{comp_spec} / {dref} in {scope_spec}"
             return MATCH_ALL
         if isinstance(comp, f03.Part_Ref):
             cur_type = _subscripted_type(cur_type, comp)
@@ -959,20 +974,20 @@ def interface_specs(ast: f03.Program, alias_map: types.SPEC_TABLE) -> Dict[types
     return iface_map
 
 
-def _compute_argument_signature(args, scope_spec: types.SPEC,
-                                alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
+def compute_argument_signature(args: Optional[Base], scope_spec: types.SPEC,
+                               alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
     if not args:
         return tuple()
 
     args_sig = []
     for c in args.children:
 
-        def _deduct_type(x) -> types.TYPE_SPEC:
+        def _deduct_type(x: Base) -> types.TYPE_SPEC:
             if isinstance(x, (f03.Real_Literal_Constant, f03.Signed_Real_Literal_Constant)):
                 return types.TYPE_SPEC('REAL')
             elif isinstance(x, (f03.Int_Literal_Constant, f03.Signed_Int_Literal_Constant)):
                 val = _eval_int_literal(x, alias_map)
-                return types.TYPE_SPEC(f"INTEGER{types._count_bytes(type(val))}")
+                return types.TYPE_SPEC(f"INTEGER{types.count_bytes(type(val))}")
             elif isinstance(x, f03.Char_Literal_Constant):
                 return types.TYPE_SPEC('CHARACTER', 'DIMENSION(:)')
             elif isinstance(x, f03.Logical_Literal_Constant):
@@ -986,7 +1001,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                     # match-anything so signature computation proceeds.
                     return MATCH_ALL
                 t = find_type_of_entity(alias_map[x_spec], alias_map)
-                if t is None and TOLERATE_EXTERNAL_USES:
+                if t is None and OPTIONS.tolerate_external_uses:
                     # The name resolves to a non-data entity (e.g. a type-bound
                     # procedure such as ``group_id`` used as an actual argument):
                     # it has no value type, so treat it as match-anything.
@@ -999,7 +1014,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 orig_type = find_type_dataref(part_name, scope_spec, alias_map)
                 if not orig_type.shape:
                     # A match-anything type has unknown rank, so tolerate subscripts.
-                    assert not subsc or (TOLERATE_EXTERNAL_USES and orig_type.spec == ('*', ))
+                    assert not subsc or (OPTIONS.tolerate_external_uses and orig_type.spec == ('*', ))
                     return orig_type
                 if not subsc:
                     return orig_type
@@ -1020,7 +1035,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 if fname.string in {'SIZE'}: return types.TYPE_SPEC('INTEGER')
                 kind = 4
                 if len(_args) == 2:
-                    kind_val = _const_eval_basic_type(_args[-1], alias_map)
+                    kind_val = const_eval_basic_type(_args[-1], alias_map)
                     if kind_val is not None:
                         kind = int(kind_val)
                 if fname.string in {'REAL'}: return types.TYPE_SPEC(f"REAL{kind}")
@@ -1054,8 +1069,8 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
     return tuple(args_sig)
 
 
-def _compute_candidate_argument_signature(args, cand_spec: types.SPEC,
-                                          alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
+def compute_candidate_argument_signature(args: Iterable[f03.Name], cand_spec: types.SPEC,
+                                         alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
     cand_args_sig: List[types.TYPE_SPEC] = []
     for ca in args:
         ca_decl = alias_map[cand_spec + (ca.string, )]
@@ -1072,21 +1087,21 @@ def _find_real_ident_spec(node: f03.Name, alias_map: types.SPEC_TABLE) -> types.
     return ident_spec(alias_map[loc])
 
 
-def _lookup_dataref(dr: (f03.Data_Ref, f03.Data_Pointer_Object), alias_map: types.SPEC_TABLE) -> Optional[Tuple[
+def lookup_dataref(dr: (f03.Data_Ref, f03.Data_Pointer_Object), alias_map: types.SPEC_TABLE) -> Optional[Tuple[
         f03.Name, types.SPEC]]:
     scope_spec = find_scope_spec(dr)
-    root, root_tspec, rest = _dataref_root(dr, scope_spec, alias_map)
+    root, root_tspec, rest = dataref_root(dr, scope_spec, alias_map)
     while not isinstance(root, f03.Name):
-        root, root_tspec, nurest = _dataref_root(root, scope_spec, alias_map)
+        root, root_tspec, nurest = dataref_root(root, scope_spec, alias_map)
         rest = nurest + rest
     return root, tuple(rest)
 
 
-MATCH_ALL = types.TYPE_SPEC(('*', ), '')  # TODO: Hacky; `_does_type_signature_match()` will match anything with this.
+MATCH_ALL = types.TYPE_SPEC(('*', ), '')  # TODO: Hacky; `does_type_signature_match()` will match anything with this.
 
 
 def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
-    if c.spec == ('*', ) or (TOLERATE_EXTERNAL_USES and g.spec == ('*', )):
+    if c.spec == ('*', ) or (OPTIONS.tolerate_external_uses and g.spec == ('*', )):
         # A match-anything candidate parameter matches any argument; under
         # tolerance an unresolved external argument matches any parameter.  Use
         # a value check on the spec (TYPE_SPEC has no value ``__eq__``, so an
@@ -1138,7 +1153,7 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
     return _subsumes(c.spec, g.spec)
 
 
-def _does_type_signature_match(got_sig: Tuple[types.TYPE_SPEC, ...], cand_sig: Tuple[types.TYPE_SPEC, ...]):
+def does_type_signature_match(got_sig: Tuple[types.TYPE_SPEC, ...], cand_sig: Tuple[types.TYPE_SPEC, ...]) -> bool:
     # Assumptions (Fortran rules):
     # 1. `got_sig` will not have any positional argument after keyworded arguments start.
     # 2. `got_sig` may have keyworded arguments that are actually required arguments, and in different orders.
@@ -1203,14 +1218,14 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[int]:
     return None
 
 
-def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TABLE,
+def track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TABLE,
                         plus: Optional[Dict[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]], types.LITERAL_TYPES]] = None,
                         minus: Optional[Set[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]]]] = None) \
         -> Tuple[Dict[types.SPEC, types.LITERAL_TYPES], Set[types.SPEC]]:
     plus: Dict[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]], types.LITERAL_TYPES] = copy(plus) if plus else {}
     minus: Set[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]]] = copy(minus) if minus else set()
 
-    def _root_comp(dref: (f03.Data_Ref, f03.Data_Pointer_Object)):
+    def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> Optional[Tuple[types.SPEC, types.SPEC]]:
         scope_spec = search_scope_spec(dref)
         assert scope_spec
         if walk(dref, f03.Part_Ref):
@@ -1218,7 +1233,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             # pessimistic path.
             # TODO: Handle the `cfg % a(1:5) % b(1:5) % c` type cases better.
             return None
-        root, _, _ = _dataref_root(dref, scope_spec, alias_map)
+        root, _, _ = dataref_root(dref, scope_spec, alias_map)
         loc = search_real_local_alias_spec(root, alias_map)
         if not loc:
             # A data-ref rooted in a module global or an externalized/stubbed
@@ -1231,7 +1246,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
         return root_spec, comp_spec
 
-    def _integrate_subresults(tp: Dict[types.SPEC, types.LITERAL_TYPES], tm: Set[types.SPEC]):
+    def _integrate_subresults(tp: Dict[types.SPEC, types.LITERAL_TYPES], tm: Set[types.SPEC]) -> None:
         assert not (tm & tp.keys())
         for k in tm:
             if k in plus:
@@ -1242,7 +1257,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
                 minus.remove(k)
             plus[k] = v
 
-    def _subst_and_renorm(target: Base, value: Base):
+    def _subst_and_renorm(target: Base, value: Base) -> None:
         """Replace ``target`` with a copy of ``value`` and renormalize the
         enclosing data/part-ref by reparsing its text.
 
@@ -1265,7 +1280,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
                 return
             utils.replace_node(par, normalized)
 
-    def _inject_knowns(x: Base, value: bool = True, pointer: bool = True):
+    def _inject_knowns(x: Base, value: bool = True, pointer: bool = True) -> None:
         if isinstance(x, (*types.LITERAL_CLASSES, f03.Char_Literal_Constant, f03.Write_Stmt, f03.Close_Stmt,
                           f03.Goto_Stmt, f03.Cycle_Stmt)):
             pass
@@ -1337,7 +1352,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
 
     if isinstance(node, list):
         for c in node:
-            tp, tm = _track_local_consts(c, alias_map, plus, minus)
+            tp, tm = track_local_consts(c, alias_map, plus, minus)
             _integrate_subresults(tp, tm)
     elif isinstance(node, f03.Execution_Part):
         scpart = ast_utils.atmost_one(ast_utils.children_of_type(node.parent, f03.Specification_Part))
@@ -1358,7 +1373,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         for op in node.children:
             # TODO: We wouldn't need the exception handling once we implement for all node types.
             try:
-                tp, tm = _track_local_consts(op, alias_map, plus, minus)
+                tp, tm = track_local_consts(op, alias_map, plus, minus)
                 _integrate_subresults(tp, tm)
             except NotImplementedError:
                 plus, minus = {}, set()
@@ -1383,14 +1398,14 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
-            rval = _const_eval_basic_type(rv, alias_map)
+            rval = const_eval_basic_type(rv, alias_map)
             if rval is None:
                 _integrate_subresults({}, {lspec})
             elif not ltyp.shape:
                 plus[lspec] = types.numpy_type_to_literal(rval)
                 if lspec in minus:
                     minus.remove(lspec)
-        tp, tm = _track_local_consts(rv, alias_map)
+        tp, tm = track_local_consts(rv, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.Pointer_Assignment_Stmt):
         lv, _, rv = node.children
@@ -1413,16 +1428,16 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             plus[lspec] = rv
             if lspec in minus:
                 minus.remove(lspec)
-        tp, tm = _track_local_consts(rv, alias_map)
+        tp, tm = track_local_consts(rv, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.If_Stmt):
         cond, body = node.children
         _inject_knowns(cond)
         _inject_knowns(body)
         cond, body = node.children
-        tp, tm = _track_local_consts(cond, alias_map)
+        tp, tm = track_local_consts(cond, alias_map)
         _integrate_subresults(tp, tm)
-        tp, tm = _track_local_consts(body, alias_map)
+        tp, tm = track_local_consts(body, alias_map)
         _integrate_subresults({}, tm | tp.keys())
     elif isinstance(node, f03.If_Construct):
         for c in ast_utils.children_of_type(node, (f03.If_Then_Stmt, f03.Else_If_Stmt)):
@@ -1448,7 +1463,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         # Otherwise, we add it to `tm_net`.
         tp_net, tm_net = None, set()
         for b in blocks:
-            tp, tm = _track_local_consts(b, alias_map, plus, minus)
+            tp, tm = track_local_consts(b, alias_map, plus, minus)
             if tp_net is None:
                 tp_net = tp
             else:
@@ -1468,7 +1483,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
 
         net_tpm = set()
         for op in do_ops:
-            tp, tm = _track_local_consts(op, alias_map, {}, set())
+            tp, tm = track_local_consts(op, alias_map, {}, set())
             net_tpm.update(tp.keys())
             net_tpm.update(tm)
         loop_control = ast_utils.singular(ast_utils.children_of_type(do_stmt, f03.Loop_Control))
@@ -1484,9 +1499,9 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             if not has_pointer_asgns:
                 # We're assuming that all the non-literals in the dictionary are pointers.
                 pointers = {k: v for k, v in plus.items() if not isinstance(v, types.LITERAL_CLASSES)}
-                tp, tm = _track_local_consts(op, alias_map, pointers, set())
+                tp, tm = track_local_consts(op, alias_map, pointers, set())
                 _integrate_subresults(tp, tm)
-            tp, tm = _track_local_consts(op, alias_map, {
+            tp, tm = track_local_consts(op, alias_map, {
                 k: v
                 for k, v in plus.items() if k not in net_tpm
             }, net_tpm | minus)
@@ -1531,7 +1546,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
     elif isinstance(node, UnaryOpBase):
         _inject_knowns(node)
         op, val = node.children
-        tp, tm = _track_local_consts(val, alias_map)
+        tp, tm = track_local_consts(val, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, BinaryOpBase):
         assert not isinstance(node, f03.Assignment_Stmt)
@@ -1539,13 +1554,13 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         _inject_knowns(lv)
         _inject_knowns(rv)
         lv, op, rv = node.children
-        tp, tm = _track_local_consts(lv, alias_map)
+        tp, tm = track_local_consts(lv, alias_map)
         _integrate_subresults(tp, tm)
-        tp, tm = _track_local_consts(rv, alias_map)
+        tp, tm = track_local_consts(rv, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.Parenthesis):
         _, val, _ = node.children
-        tp, tm = _track_local_consts(val, alias_map)
+        tp, tm = track_local_consts(val, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, (f03.Function_Reference, f03.Call_Stmt, f03.Intrinsic_Function_Reference)):
         # TODO: For now, we assume that all arguments are writable.
@@ -1563,7 +1578,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
-            tp, tm = _track_local_consts(a, alias_map)
+            tp, tm = track_local_consts(a, alias_map)
             _integrate_subresults({}, tm | tp.keys())
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")

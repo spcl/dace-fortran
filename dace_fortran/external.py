@@ -27,16 +27,22 @@ wrapper that surfaces the intent ("leave this procedure external;
 do not inline its body").  It registers the same way -- the bridge
 treats every entry uniformly.
 """
+
+from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Dict, Mapping, Iterable, List, Optional, Tuple
 
 import dace
 import dace.library
 import dace.properties
 import dace.sdfg.nodes
+from dace import SDFGState
 from dace.transformation.transformation import ExpandTransformation
+
+if TYPE_CHECKING:
+    from dace_fortran.external_functions import ExternalFunction
 
 #: ``Arg.dtype`` -> the C scalar type used in the ``extern "C"``
 #: declaration.  Array args take the pointer form (``<ctype> *``).
@@ -54,7 +60,7 @@ _C_TYPES = {
 _OPAQUE_COMM_DTYPE = "MPI_Comm"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Arg:
     """One argument of a registered external function.
 
@@ -174,7 +180,7 @@ class Arg:
         return f"{base} *" if self.kind == "array" else base
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExternalSignature:
     """Signature of a registered external ``bind(c)`` function.
 
@@ -254,13 +260,24 @@ class ExternalSignature:
         return f'extern "C" void {self.c_name}({params});'
 
 
-_REGISTRY: Dict[str, ExternalSignature] = {}
+class _RegistryState:
+    """Process-wide external registry: the signatures plus the linker config they mutated."""
 
-#: Snapshot of ``compiler.linker.args`` before the first registration
-#: that contributes libraries -- restored by
-#: :func:`clear_external_registry` so the global config mutation does
-#: not leak past the registry's lifetime.
-_ORIG_LINKER_ARGS: Optional[str] = None
+    __slots__ = ("signatures", "orig_linker_args")
+
+    signatures: Dict[str, ExternalSignature]
+    #: Snapshot of ``compiler.linker.args`` before the first registration
+    #: that contributes libraries -- restored by
+    #: :func:`clear_external_registry` so the global config mutation does
+    #: not leak past the registry's lifetime.
+    orig_linker_args: Optional[str]
+
+    def __init__(self) -> None:
+        self.signatures = {}
+        self.orig_linker_args = None
+
+
+_STATE = _RegistryState()
 
 
 def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
@@ -283,24 +300,23 @@ def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
     return (["-Wl,--no-as-needed"] + [str(p) for p in so_paths] + [f"-Wl,-rpath,{d}" for d in rpath_dirs])
 
 
-def _apply_linker_config():
+def _apply_linker_config() -> None:
     """Recompute ``compiler.linker.args`` = original + the dedup'd link
     flags of every registration's libraries.  This is the global,
     register/clear-scoped config mutation the chosen design accepts
     (verbatim shared-linker flags -- not the CMake-list ``DACE_LIBS``)."""
     import dace
 
-    global _ORIG_LINKER_ARGS
-    if _ORIG_LINKER_ARGS is None:
-        _ORIG_LINKER_ARGS = dace.Config.get("compiler", "linker", "args") or ""
+    if _STATE.orig_linker_args is None:
+        _STATE.orig_linker_args = dace.Config.get("compiler", "linker", "args") or ""
     flags: List[str] = []
-    for sig in _REGISTRY.values():
+    for sig in _STATE.signatures.values():
         flags += _link_flags(sig.libraries)
-    merged = (_ORIG_LINKER_ARGS + " " + " ".join(dict.fromkeys(flags))).strip()
+    merged = (_STATE.orig_linker_args + " " + " ".join(dict.fromkeys(flags))).strip()
     dace.Config.set("compiler", "linker", "args", value=merged)
 
 
-def register_external(name: str, signature: ExternalSignature):
+def register_external(name: str, signature: ExternalSignature) -> None:
     """Register ``name`` (the Fortran call-site name) as an external
     ``bind(c)`` function with ``signature``.
 
@@ -313,20 +329,22 @@ def register_external(name: str, signature: ExternalSignature):
         (for a ``bind(c, name=foo)`` interface this is ``foo``).
     :param signature: its :class:`ExternalSignature`.
     """
-    _REGISTRY[name] = signature
+    _STATE.signatures[name] = signature
     if signature.libraries:
         _apply_linker_config()
 
 
-def keep_external(name: str,
-                  *,
-                  c_name: Optional[str] = None,
-                  args: Tuple[Arg, ...] = (),
-                  libraries: Tuple[str, ...] = (),
-                  stub: bool = False,
-                  dynamic_extents_abi: bool = False,
-                  module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = (),
-                  callee_ptr_scalar_members: frozenset = frozenset()):
+def keep_external(
+    name: str,
+    *,
+    c_name: Optional[str] = None,
+    args: Tuple[Arg, ...] = (),
+    libraries: Tuple[str, ...] = (),
+    stub: bool = False,
+    dynamic_extents_abi: bool = False,
+    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = (),
+    callee_ptr_scalar_members: frozenset = frozenset()
+) -> None:
     """Mark ``name`` to be left external -- the bridge emits an
     :class:`ExternalCall` library node for every ``CALL name(...)``
     instead of inlining ``name`` 's body.
@@ -429,7 +447,12 @@ def apply_external_functions(external_functions: Iterable["ExternalFunction"] = 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:
     """Return the registered signature for ``name``, or ``None``."""
-    return _REGISTRY.get(name)
+    return _STATE.signatures.get(name)
+
+
+def require_external(name: str) -> ExternalSignature:
+    """Return the registered signature for name; KeyError when it is not registered."""
+    return _STATE.signatures[name]
 
 
 def registered_names() -> List[str]:
@@ -442,7 +465,7 @@ def registered_names() -> List[str]:
 
     :returns: the registry keys (Fortran call-site names).
     """
-    return list(_REGISTRY)
+    return list(_STATE.signatures)
 
 
 def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> int:
@@ -523,15 +546,14 @@ def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> i
     return replaced
 
 
-def clear_external_registry():
+def clear_external_registry() -> None:
     """Drop all registrations and restore ``compiler.linker.args`` to
     its pre-registration value (test isolation / no global leak)."""
-    global _ORIG_LINKER_ARGS
-    _REGISTRY.clear()
-    if _ORIG_LINKER_ARGS is not None:
+    _STATE.signatures.clear()
+    if _STATE.orig_linker_args is not None:
         import dace
-        dace.Config.set("compiler", "linker", "args", value=_ORIG_LINKER_ARGS)
-        _ORIG_LINKER_ARGS = None
+        dace.Config.set("compiler", "linker", "args", value=_STATE.orig_linker_args)
+        _STATE.orig_linker_args = None
 
 
 @dace.library.expansion
@@ -545,10 +567,11 @@ class ExpandExternalCallPure(ExpandTransformation):
     surrounding dataflow is unchanged.
     """
 
-    environments = []
+    environments: ClassVar[list[type]] = []
 
     @staticmethod
-    def expansion(node, parent_state, parent_sdfg, **_kwargs):
+    def expansion(node: ExternalCall, parent_state: SDFGState, parent_sdfg: dace.SDFG,
+                  **_kwargs: Any) -> dace.nodes.Tasklet:
         if node.c_decl:
             parent_sdfg.append_global_code(node.c_decl)
         tasklet = dace.sdfg.nodes.Tasklet(node.label,
@@ -593,7 +616,16 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
     #: undeclared symbol.
     symbol_deps = dace.properties.ListProperty(element_type=str, default=[])
 
-    def __init__(self, name, *, c_name="", c_decl="", body="", symbol_deps=None, inputs=None, outputs=None, **kwargs):
+    def __init__(self,
+                 name: str,
+                 *,
+                 c_name: str = "",
+                 c_decl: str = "",
+                 body: str = "",
+                 symbol_deps: Iterable[str] | None = None,
+                 inputs: Collection[str] | Mapping[str, Any] | None = None,
+                 outputs: Collection[str] | Mapping[str, Any] | None = None,
+                 **kwargs: Any) -> None:
         super().__init__(name=name, inputs=inputs or set(), outputs=outputs or set(), **kwargs)
         self.c_name = c_name
         self.c_decl = c_decl
@@ -606,7 +638,7 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
         fsyms.update(self.symbol_deps)
         return fsyms
 
-    def validate(self, sdfg, state):
+    def validate(self, sdfg: dace.SDFG, state: SDFGState) -> None:
         """Reject the node if the C body does not actually call ``c_name``
         or leaves a connector unreferenced.
 

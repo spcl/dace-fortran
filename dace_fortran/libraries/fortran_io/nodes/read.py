@@ -6,6 +6,8 @@ Lowers a Fortran ``read`` statement (fused with its ``open``/``close``) to a
 C++ tasklet calling the shipped ``dace_fio_*`` wrappers, so the real Fortran
 runtime performs the transfer.
 """
+
+from __future__ import annotations
 import dace.library
 import dace.properties
 from dace import dtypes
@@ -13,8 +15,11 @@ from dace.sdfg import nodes
 from dace.transformation.transformation import ExpandTransformation
 
 from .node import FortranIONode, fio_type
-from .write import _c_string
+from .write import c_string
 from .. import environments
+from typing import Any
+
+from dace import SDFG, SDFGState
 
 
 @dace.library.expansion
@@ -23,9 +28,9 @@ class ExpandReadFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node, parent_state, parent_sdfg):
-        items = node._ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
-        path = _c_string(node.filename)
+    def expansion(node: Read, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
+        items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
+        path = c_string(node.filename)
         lines = [f'int _u = dace_fio_open("{path}", {len(node.filename.encode())}, 0);']
         for conn, desc, count, is_value in items:
             suffix, ctype = fio_type(desc.dtype)
@@ -52,7 +57,7 @@ class Read(FortranIONode):
     filename = dace.properties.Property(dtype=str, default="", desc="Input file path")
     num_items = dace.properties.Property(dtype=int, default=0, desc="Number of items read")
 
-    def __init__(self, name, filename: str = "", num_items: int = 0, **kwargs):
+    def __init__(self, name: str, filename: str = "", num_items: int = 0, **kwargs: Any) -> None:
         super().__init__(name, inputs=set(), outputs={f"_out_{i}" for i in range(num_items)}, **kwargs)
         self.filename = filename
         self.num_items = num_items

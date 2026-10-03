@@ -8,7 +8,11 @@ actual per-element compute lives in ``emit_tasklet``; this module only
 stitches states and regions together.
 """
 
+from __future__ import annotations
+
 import re
+from collections import Counter
+from typing import TYPE_CHECKING, Sequence
 
 import dace
 from dace import InterstateEdge
@@ -26,14 +30,20 @@ from dace_fortran.builder.access import (
     resolve_object_member,
     resolve_object_member_expr,
 )
-from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.context import Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth, is_character_data
 from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_complex_component_assign, emit_tasklet
+from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticNode, SyntheticVar
+
+if TYPE_CHECKING:
+    from dace import SDFG
+    from dace.sdfg.state import SDFGState
+    from dace_fortran.builder import SDFGBuilder
 
 _DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
 
 
-def _strip_dace_casts(expr):
+def _strip_dace_casts(expr: str) -> str:
     """Drop tasklet-style ``dace.<dtype>(...)`` casts from a symbolic
     interstate-edge expression.
 
@@ -66,7 +76,8 @@ def _strip_dace_casts(expr):
         expr = expr[:m.start()] + "(" + expr[open_paren + 1:i] + ")" + expr[i + 1:]
 
 
-def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):
+def _anchor_views_referenced_in_expr(builder: SDFGBuilder, expr: str, region: ControlFlowRegion, pre: SDFGState,
+                                     sdfg: SDFG) -> SDFGState:
     """Ensure every ``view_alias`` array referenced (by name) in ``expr``
     has at least one real AccessNode in a state upstream of the
     interstate edge that will carry ``expr``.
@@ -87,7 +98,7 @@ def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):
     """
     if not isinstance(expr, str):
         return pre
-    view_aliases = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'view_alias'}
+    view_aliases = {nm for nm, v in builder.arrays.items() if v.role == 'view_alias'}
     if not view_aliases:
         return pre
     referenced = [nm for nm in view_aliases if re.search(rf'\b{re.escape(nm)}\b', expr)]
@@ -100,7 +111,7 @@ def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):
     return anchor
 
 
-def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
+def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
     """Rewrite ``dummy[i, j]`` to ``source[i, j, k_const]`` for every
     section_alias dummy referenced in ``expr``.
 
@@ -123,7 +134,7 @@ def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
     expr = resolve_object_member_expr(builder, expr)
     if '[' not in expr:
         return expr
-    section_dummies = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'section_alias'}
+    section_dummies = {nm for nm, v in builder.arrays.items() if v.role == 'section_alias'}
     if not section_dummies:
         return expr
     resolver = lambda n: resolve_object_member(builder, n)
@@ -145,7 +156,7 @@ def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
     return out
 
 
-def emit_assign(builder, ctx: '_Ctx', n, region):
+def emit_assign(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Scalar or symbol assignment.
 
     Routes by target kind:
@@ -211,7 +222,7 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         # the first ``used_symbols`` walk of any post-gen pass.  See
         # :func:`is_character_data`.
         return
-    if n.target in getattr(builder, 'complex_component_aliases', {}):
+    if n.target in builder.complex_component_aliases:
         # Complex-as-2-reals component alias write (``qg(c, i) = ...``): a
         # staged read-modify-write on the complex source's element, setting
         # component ``c`` (re/im).  No descriptor / no View -- handled wholly
@@ -313,7 +324,7 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
     ctx.pending.append((n.target, n.expr))
 
 
-def emit_symbol_init(builder, ctx: '_Ctx', n, region):
+def emit_symbol_init(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Stage a position-array -> SDFG-symbol read at SDFG entry.
 
     The bridge mints one of these for every ``arr(consts)`` it sees used
@@ -331,7 +342,7 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     # the real flattened SDFG symbol/array; read the symbol-init value from
     # there so the interstate edge doesn't carry an unregistered name.
     arr = resolve_object_member(builder, n.expr) or n.expr
-    idxs = list(getattr(n, "pos_indices", None) or [])
+    idxs = list(n.pos_indices or [])
     if not idxs:  # back-compat: scalar mirror on loop_lower
         idxs = [int(n.loop_lower)]
     if sym not in ctx.sdfg.symbols:
@@ -360,7 +371,7 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     ctx.cur = dst
 
 
-def _fortran_subs_to_dace(expr, builder):
+def _fortran_subs_to_dace(expr: str, builder: SDFGBuilder) -> str:
     """Rewrite every ``<arr>[<idx>, ...]`` substring in ``expr`` to
     DaCe 0-based form ``<arr>[(<idx>) - offset_<arr>_d<i>, ...]`` for
     each known array.  Used by ``emit_loop`` to convert Fortran-form
@@ -392,7 +403,7 @@ def _fortran_subs_to_dace(expr, builder):
     return "".join(out)
 
 
-def _is_trivial_bound(expr: str, builder=None) -> bool:
+def _is_trivial_bound(expr: str, builder: SDFGBuilder | None = None) -> bool:
     """A bound / condition expression is trivial when it's a bare
     identifier or a single integer literal -- hoisting it to a symbol
     would be pure ceremony.  Anything with operators, brackets, or
@@ -416,7 +427,7 @@ def _is_trivial_bound(expr: str, builder=None) -> bool:
     return False
 
 
-def routine_write_set(builder) -> set:
+def routine_write_set(builder: SDFGBuilder) -> set:
     """Every name the routine may STORE INTO, walked once and memoised.
 
     Deliberately over-approximate: a name is counted as written when it is an
@@ -432,7 +443,7 @@ def routine_write_set(builder) -> set:
 
     written: set = set()
 
-    def visit(nodes):
+    def visit(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             if c.target:
                 written.add(c.target)
@@ -451,7 +462,7 @@ def routine_write_set(builder) -> set:
     return written
 
 
-def cond_reuse_key(builder, cond: str):
+def cond_reuse_key(builder: SDFGBuilder, cond: str) -> str | None:
     """The cache key under which ``cond`` may be reused, or ``None``.
 
     Reuse is sound only when re-evaluating the condition later is guaranteed to
@@ -475,7 +486,7 @@ def cond_reuse_key(builder, cond: str):
     return cond
 
 
-def _deref_scalar_arrays_for_interstate(expr_str: str, ctx) -> str:
+def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: Ctx) -> str:
     """Rewrite bare references to scalar ``(1,)``-shape SDFG data
     descriptors as ``name[0]``.
 
@@ -536,7 +547,8 @@ def _deref_scalar_arrays_for_interstate(expr_str: str, ctx) -> str:
     return "".join(out)
 
 
-def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
+def _hoist_bound_to_symbol(ctx: Ctx, region: ControlFlowRegion, builder: SDFGBuilder, expr_str: str,
+                           prefix: str) -> str | None:
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
     edge, so the LoopRegion's init / cond carry only a symbol name.
@@ -559,7 +571,7 @@ def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
     return sym
 
 
-def _sibling_rw_hazard(assigns) -> bool:
+def _sibling_rw_hazard(assigns: Sequence[NodeLike]) -> bool:
     """Sequential-semantics hazard test over a list of sibling assign
     ASTNodes (the AST-list form of the invariant ``emit_assign``'s
     in-state guard enforces on the realised graph).
@@ -578,7 +590,7 @@ def _sibling_rw_hazard(assigns) -> bool:
     :returns: ``True`` if any name-sharing R/W pair would race in one
         state.
     """
-    write_names_so_far = set()
+    write_names_so_far: set[str] = set()
     for a in assigns:
         reads = {ac.array_name for ac in a.accesses if ac.is_read}
         if reads & write_names_so_far:
@@ -594,7 +606,7 @@ def _sibling_rw_hazard(assigns) -> bool:
                 write_names_so_far.add(ac.array_name)
     # Also catch later-writer / earlier-reader patterns that would
     # otherwise race within a single state.
-    later_writes = set()
+    later_writes: set[str] = set()
     for a in reversed(assigns):
         reads = {ac.array_name for ac in a.accesses if ac.is_read}
         if reads & later_writes:
@@ -605,7 +617,7 @@ def _sibling_rw_hazard(assigns) -> bool:
     return False
 
 
-def _rhs_free_symbols(rhs) -> set:
+def _rhs_free_symbols(rhs: str) -> set[str]:
     """Names an interstate-assignment RHS reads.
 
     Symbolic parse first -- robust to substrings and to the ``int32(...)`` typecast, which is a
@@ -618,7 +630,7 @@ def _rhs_free_symbols(rhs) -> set:
         return set(re.findall(r'[A-Za-z_]\w*', str(rhs)))
 
 
-def _hoist_hazard_targets(hoisted_pairs, later_targets) -> set:
+def _hoist_hazard_targets(hoisted_pairs: Sequence[tuple[str, str]], later_targets: set[str]) -> set[str]:
     """Targets in ``hoisted_pairs`` that MUST NOT be hoisted ahead of ``later_targets``.
 
     An assignment lifted onto a pre-``body`` interstate edge runs BEFORE everything the hoist
@@ -627,7 +639,7 @@ def _hoist_hazard_targets(hoisted_pairs, later_targets) -> set:
     tasklet) and ``i0 = INT(qm) + 1`` a symbol -- hoisting ``i0`` rotates it by one iteration.
     Closes transitively: an assignment reading a hazardous target is hazardous too (``i1 = i0 + 1``).
     """
-    hazardous: set = set()
+    hazardous: set[str] = set()
     while True:
         grown = False
         for tgt, rhs in hoisted_pairs:
@@ -638,7 +650,7 @@ def _hoist_hazard_targets(hoisted_pairs, later_targets) -> set:
             return hazardous
 
 
-def _scalar_reassign_in_state(state, a, builder) -> bool:
+def _scalar_reassign_in_state(state: SDFGState, a: NodeLike, builder: SDFGBuilder) -> bool:
     """True if emitting assign ``a`` would RE-WRITE a scalar whose prior
     value is still live (already read or written) in ``state``.
 
@@ -662,7 +674,7 @@ def _scalar_reassign_in_state(state, a, builder) -> bool:
     into one-state-per-assign).  Mirror of ``emit_assign``'s realised-graph
     guard for the ``has_structured`` / IF-body path; keep the two in sync.
     """
-    tgt = getattr(a, 'target', None)
+    tgt = a.target
     if tgt is None or tgt not in builder.scalars:
         return False
     from dace.sdfg.nodes import Tasklet, AccessNode
@@ -676,7 +688,11 @@ def _scalar_reassign_in_state(state, a, builder) -> bool:
     return False
 
 
-def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
+def emit_loop(builder: SDFGBuilder,
+              ctx: 'Ctx',
+              n: NodeLike,
+              region: ControlFlowRegion,
+              iter_map: dict[str, str] | None = None) -> None:
     """Fortran DO loop -> LoopRegion with exact Fortran bounds."""
     # Flush any pending scalar assigns from earlier siblings INTO the
     # parent region.  Without ``region`` here, ``ctx.flush`` would land
@@ -729,8 +745,8 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     # passes them through as ``loop_lower`` and ``loop_bound`` without
     # reordering, so emit_loop is responsible for picking the right
     # one as init.
-    step = getattr(n, 'loop_step', 1)
-    step_expr = getattr(n, 'loop_step_expr', '') or ''
+    step = n.loop_step
+    step_expr = n.loop_step_expr or ''
 
     if step_expr:
         # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
@@ -797,14 +813,14 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     has_structured = any(c.kind not in ("loop", "assign") for c in children)
 
     if has_structured:
-        inner_ctx = _Ctx(ctx.sdfg, builder)
+        inner_ctx = Ctx(ctx.sdfg, builder)
         inner_ctx.iter_map = iter_map
         body_start = loop.add_state(f"body_{builder.nid()}", is_start_block=True)
         inner_ctx.cur = body_start
-        builder._emit(inner_ctx, list(children), loop)
+        builder.emit_nodes(inner_ctx, list(children), loop)
         inner_ctx.flush(builder, loop)
     elif child_loops:
-        inner_ctx = _Ctx(ctx.sdfg, builder)
+        inner_ctx = Ctx(ctx.sdfg, builder)
         inner_ctx.iter_map = iter_map
         for c in children:
             if c.kind == "loop":
@@ -855,10 +871,10 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
         for a in symbol_assigns:
             symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg)))
 
-        def _emit_one(st, a, i):
+        def _emit_one(st: SDFGState, a: NodeLike, i: int) -> None:
             # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
             # staged re/im RMW on the complex source, not a normal tasklet.
-            if a.target in getattr(builder, 'complex_component_aliases', {}):
+            if a.target in builder.complex_component_aliases:
                 emit_complex_component_assign(builder, st, a, i, iter_map, indirect_syms)
             else:
                 emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
@@ -882,8 +898,8 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             materialize_indirect_view_sources(builder, pre, indirect_syms)
             cur = pre
             edge = InterstateEdge()
-            batch_lhs: set = set()
-            emitted_syms: set = set()
+            batch_lhs: set[str] = set()
+            emitted_syms: set[str] = set()
             sym_i = compute_i = 0
             for a in child_assigns:
                 # This statement's inline indirect symbols, innermost-first.  NEVER a blanket
@@ -952,7 +968,7 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             # via the RHS's SYMBOLIC free-symbols (robust to substrings /
             # the ``int32(...)`` typecast function, which is not a symbol).
             edge = InterstateEdge()
-            batch_lhs: set = set()
+            batch_lhs = set()
             for tgt, rhs in symbol_assign_pairs:
                 if edge.assignments and (_rhs_free_symbols(rhs) & batch_lhs):
                     nxt = loop.add_state(f"sym_chain_{builder.nid()}")
@@ -993,7 +1009,8 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
                 _emit_one(prev, a, idx)
 
 
-def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):
+def _stage_cond_scalar(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, pre: SDFGState, sym: str, cond: str,
+                       cond_accesses: list[AccessLike]) -> tuple[SDFGState, str]:
     """Compute an array-dependent control-flow condition into a SCALAR
     transient via a tasklet; return ``(new_pre_state, scalar_name)``.
 
@@ -1005,29 +1022,19 @@ def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):
     array reads still wire through per-occurrence ``_in_<arr>_<n>``
     connectors + memlets.
     """
-    from types import SimpleNamespace
     if sym not in ctx.sdfg.arrays:
         ctx.sdfg.add_scalar(sym, dace.int64, transient=True, find_new_name=False)
-    builder.scalars.setdefault(
-        sym,
-        SimpleNamespace(fortran_name=sym,
-                        intent='',
-                        dtype='int64',
-                        rank=0,
-                        is_dynamic=False,
-                        role='scalar',
-                        shape_symbols=[],
-                        lower_bounds=[]))
+    builder.scalars.setdefault(sym, SyntheticVar(fortran_name=sym, dtype='int64', role='scalar'))
     pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
     nxt = region.add_state(f"pre_{sym}")
     region.add_edge(pre, nxt, InterstateEdge())
     ctx.cur = nxt
-    synth = SimpleNamespace(kind='assign', target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
+    synth = SyntheticNode(kind='assign', target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
     emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
     return nxt, sym
 
 
-def emit_while(builder, ctx: '_Ctx', n, region):
+def emit_while(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``DO WHILE``  --  lifted by ``lift-cf-to-scf`` into scf.while
     and extracted as ``kind="while"``.  Emit a DaCe LoopRegion whose
     condition is ``True`` (the bridge's faithful walker folds any
@@ -1065,12 +1072,11 @@ def emit_while(builder, ctx: '_Ctx', n, region):
     cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
     will_lift = bool(cond_array_reads)
     if will_lift:
-        from collections import Counter
-        text_occ = Counter()
+        text_occ: Counter[str] = Counter()
         for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
             if tok in builder.arrays:
                 text_occ[tok] += 1
-        access_count = Counter()
+        access_count: Counter[str] = Counter()
         for ac in cond_array_reads:
             access_count[ac.array_name] += 1
         mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
@@ -1097,23 +1103,24 @@ def emit_while(builder, ctx: '_Ctx', n, region):
     ctx.cur = loop
 
     body_start = loop.add_state(f"while_body_{builder.nid()}", is_start_block=True)
-    inner_ctx = _Ctx(ctx.sdfg, builder)
+    inner_ctx = Ctx(ctx.sdfg, builder)
     inner_ctx.cur = body_start
-    builder._emit(inner_ctx, list(n.children), loop)
+    builder.emit_nodes(inner_ctx, list(n.children), loop)
     inner_ctx.flush(builder, loop)
 
 
-def _prepare_cond_expr(builder, ctx: '_Ctx', region, pre, n):
+def _prepare_cond_expr(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, pre: SDFGState,
+                       n: NodeLike) -> tuple[SDFGState, str]:
     """Return ``(pre_state, cond_expr)`` for a single ``conditional`` branch.
 
     Mirrors the staging logic previously inline in ``emit_cond``:
     section-alias rewriting, scalar-output subscripting, tasklet-lifting for
     array-reading conditions, and caching of never-written conditions.
     """
-    cond = n.condition if getattr(n, 'condition', None) and n.condition != "?" else "True"
+    cond = n.condition if n.condition and n.condition != "?" else "True"
     cond = _rewrite_section_aliases_in_expr(builder, cond)
 
-    accesses = getattr(n, 'accesses', None)
+    accesses = n.accesses
     will_lift = bool(accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in accesses)
     if not will_lift:
         for nm, v in builder.scalars.items():
@@ -1134,12 +1141,11 @@ def _prepare_cond_expr(builder, ctx: '_Ctx', region, pre, n):
             cond_accesses.append(ac)
     cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
     if cond_array_reads:
-        from collections import Counter
-        text_occ = Counter()
+        text_occ: Counter[str] = Counter()
         for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
             if tok in builder.arrays:
                 text_occ[tok] += 1
-        access_count = Counter()
+        access_count: Counter[str] = Counter()
         for ac in cond_array_reads:
             access_count[ac.array_name] += 1
         mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
@@ -1168,7 +1174,7 @@ def _prepare_cond_expr(builder, ctx: '_Ctx', region, pre, n):
     return pre, cond
 
 
-def emit_cond(builder, ctx: '_Ctx', n, region):
+def emit_cond(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.
@@ -1185,8 +1191,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
         pre, cond = _prepare_cond_expr(builder, ctx, region, pre, cur)
         branches.append((cond, list(cur.children)))
         else_children = list(cur.else_children)
-        if (len(else_children) == 1 and getattr(else_children[0], 'kind', None) == 'conditional'
-                and getattr(else_children[0], 'condition', None)):
+        if (len(else_children) == 1 and else_children[0].kind == 'conditional' and else_children[0].condition):
             cur = else_children[0]
             continue
         tail_children = else_children
@@ -1200,9 +1205,9 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
 
     def _populate_branch(label: str, children: list) -> ControlFlowRegion:
         branch = ControlFlowRegion(label, sdfg=ctx.sdfg)
-        inner = _Ctx(ctx.sdfg, builder)
+        inner = Ctx(ctx.sdfg, builder)
         inner.iter_map = ctx.iter_map
-        builder._emit(inner, children, branch)
+        builder.emit_nodes(inner, children, branch)
         inner.flush(builder, branch)
         # An empty branch (e.g. the EXIT arm of a Flang-lowered DO+EXIT)
         # still needs a start block, otherwise the validator complains.

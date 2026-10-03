@@ -233,7 +233,7 @@ END MODULE
 
 
 # ===========================================================================
-# User ``im`` INTEGER var vs COMPLEX ``%im`` accessor: _RESERVED_DACE_NAMES
+# User ``im`` INTEGER var vs COMPLEX ``%im`` accessor: RESERVED_DACE_NAMES
 # shield handles the SymPy collision; the two paths must stay independent.
 # ===========================================================================
 def test_user_integer_im_does_not_conflict_with_complex_im_accessor(tmp_path):

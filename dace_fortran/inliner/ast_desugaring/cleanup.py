@@ -5,6 +5,8 @@ parsing and desugaring: disambiguates language constructs, standardizes
 identifier names, drops constructs irrelevant to dataflow analysis, and
 restructures global data.
 """
+
+from __future__ import annotations
 from typing import Union, Set, Dict, List, Optional, Tuple
 
 import fparser.two.Fortran2003 as f03
@@ -23,7 +25,7 @@ from .. import ast_utils
 EXTERNAL_BUILTIN_PROCEDURES = frozenset({"rand", "irand", "srand"})
 
 
-def correct_for_function_calls(ast: f03.Program):
+def correct_for_function_calls(ast: f03.Program) -> f03.Program:
     """Disambiguates array accesses from function calls: `A(i)` and `F(x)` parse
     identically, and fparser defaults to `Part_Ref` (array access), so this uses
     type analysis to reclassify unresolved `Part_Ref`/`Structure_Constructor`
@@ -112,7 +114,7 @@ def correct_for_function_calls(ast: f03.Program):
                 continue
             # Unresolved constructor/call name (e.g. ICON's external `p_mpi_wtime`) -- under
             # tolerance leave it for pruning to drop; strict mode asserts as before.
-            if not analysis.TOLERATE_EXTERNAL_USES:
+            if not analysis.OPTIONS.tolerate_external_uses:
                 raise AssertionError(f"cannot find {sc_type.string} / {scope_spec}")
             continue
         sc_decl = alias_map[sc_type_spec]
@@ -143,7 +145,7 @@ def correct_for_function_calls(ast: f03.Program):
     return ast
 
 
-def remove_access_and_bind_statements(ast: f03.Program):
+def remove_access_and_bind_statements(ast: f03.Program) -> f03.Program:
     """Removes access-control (`PUBLIC`/`PRIVATE`/`Private_Components_Stmt`) and
     `BIND(C, ...)` statements -- irrelevant to dataflow analysis and codegen."""
     # TODO: This can get us into ambiguity and unintended shadowing.
@@ -266,7 +268,7 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
         while cmod and not isinstance(cmod, (f03.Module, f03.Main_Program)):
             cmod = cmod.parent
         if cmod:
-            stmt, _, _, _ = utils._get_module_or_program_parts(cmod)
+            stmt, _, _, _ = utils.get_module_or_program_parts(cmod)
             cmod = ast_utils.singular(ast_utils.children_of_type(stmt, f03.Name)).string.lower()
         else:
             # If not in a module/main program, it must be a nested subprogram.
@@ -320,7 +322,7 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
     return ast
 
 
-def add_use_to_specification(scdef: utils.SCOPE_OBJECT_TYPES, clause: str):
+def add_use_to_specification(scdef: utils.SCOPE_OBJECT_TYPES, clause: str) -> None:
     """Prepends a `USE` statement (`clause`) to `scdef`'s specification part, creating one if absent."""
     specification_part = ast_utils.atmost_one(ast_utils.children_of_type(scdef, f03.Specification_Part))
     if not specification_part:
@@ -581,7 +583,7 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
             while par and isinstance(par.parent, (f03.Part_Ref, f03.Data_Ref)):
                 par = par.parent
             scope_spec = analysis.search_scope_spec(par)
-            root, _, _ = analysis._dataref_root(par, scope_spec, alias_map)
+            root, _, _ = analysis.dataref_root(par, scope_spec, alias_map)
             if root is not nm:
                 continue
         local_spec = analysis.search_real_local_alias_spec(nm, alias_map)
@@ -675,7 +677,7 @@ def create_global_initializers(ast: f03.Program, entry_points: List[types.SPEC])
     created_init_fns: Set[str] = set()
     used_init_fns: Set[str] = set()
 
-    def _make_init_fn(fn_name: str, inited_vars: List[types.SPEC], this: Optional[types.SPEC]):
+    def _make_init_fn(fn_name: str, inited_vars: List[types.SPEC], this: Optional[types.SPEC]) -> None:
         if this:
             assert this in ident_map and isinstance(ident_map[this], f03.Derived_Type_Stmt)
             box = ident_map[this]

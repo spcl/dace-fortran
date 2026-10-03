@@ -29,14 +29,14 @@ Entry point: :func:`specialize_at_source` (runs the subprogram-call + function-r
 inliners to a fixpoint).
 """
 import re
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import logging
 
 from fparser.two import Fortran2003 as f03
 from fparser.two.utils import walk
 
-from dace_fortran.inliner.ast_desugaring import analysis, pruning, utils
+from dace_fortran.inliner.ast_desugaring import analysis, pruning, types, utils
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 from dace_fortran.inliner.ast_utils import children_of_type
 
@@ -72,16 +72,6 @@ def _dummy_arg_names(sub_stmt: f03.Base) -> List[str]:
     if dal is None:
         return []
     return [str(c) for c in dal.children]
-
-
-def _entity_names(spec: f03.Base) -> Set[str]:
-    """Every entity name DECLARED in a Specification_Part (lower-cased)."""
-    names: Set[str] = set()
-    for ed in walk(spec, (f03.Entity_Decl, f03.Component_Decl)):
-        nm = next(children_of_type(ed, f03.Name), None)
-        if nm is not None:
-            names.add(str(nm).lower())
-    return names
 
 
 #: A keyword-argument NAME position: ``(kw =`` or ``, kw =`` (but not ``==``).  The
@@ -599,7 +589,7 @@ def _inline_one_funcref(ref: f03.Base, callee_sub: f03.Base, counter: int) -> bo
     return True
 
 
-def _target_defs(ast: f03.Program, want: Set[str], stmt_type) -> Dict[str, f03.Base]:
+def _target_defs(ast: f03.Program, want: Set[str], stmt_type: Union[type, Tuple[type, ...]]) -> Dict[str, f03.Base]:
     """Map each target NAME to its (unique) subprogram definition.  A fallback for
     resolving a target call whose CALLER-LOCAL alias scope does not reach it -- once
     an outer wrapper is inlined, its forwarded ``CALL mixprec`` lands in the caller's
@@ -619,8 +609,9 @@ def _target_defs(ast: f03.Program, want: Set[str], stmt_type) -> Dict[str, f03.B
     return out
 
 
-def _resolve_target_callee(procname: f03.Name, alias_map, want: Set[str], target_defs: Dict[str, f03.Base],
-                           stmt_type) -> Optional[f03.Base]:
+def _resolve_target_callee(procname: f03.Name, alias_map: types.SPEC_TABLE, want: Set[str],
+                           target_defs: Dict[str, f03.Base], stmt_type: Union[type, Tuple[type,
+                                                                                          ...]]) -> Optional[f03.Base]:
     """Resolve a call/reference name to a TARGET subprogram definition: first via the
     caller's local alias scope (handles USE-renamed ``deconiface`` specifics), then
     by direct target-name match (handles a forwarded call that landed cross-module)."""

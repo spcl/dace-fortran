@@ -69,7 +69,7 @@ def make_practically_constant_global_vars_constants(ast: f03.Program) -> f03.Pro
                 # MPI handle like ``mpi_comm_world`` passed to ``mpi_abort``).
                 # When tolerating externals it cannot be a local constant
                 # candidate anyway -- skip it.
-                if analysis.TOLERATE_EXTERNAL_USES:
+                if analysis.OPTIONS.tolerate_external_uses:
                     continue
                 assert loc
             var = alias_map[loc]
@@ -151,7 +151,7 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
             # MPI routine like ``mpi_abort`` reached through a stubbed error
             # path).  When tolerating externals, its argument usage cannot be
             # analysed -- skip it (pruning drops the dead path later).
-            if analysis.TOLERATE_EXTERNAL_USES:
+            if analysis.OPTIONS.tolerate_external_uses:
                 continue
             assert fnspec, fn
         fnstmt = alias_map[fnspec]
@@ -248,7 +248,7 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
 
             # If the passed value is a literal, record it. Otherwise, mark as undecidable.
             if isinstance(v, types.LITERAL_CLASSES):
-                v = analysis._const_eval_basic_type(v, alias_map)
+                v = analysis.const_eval_basic_type(v, alias_map)
                 assert v is not None
                 if aspec not in fnargs_possible_values:
                     fnargs_possible_values[aspec] = set()
@@ -336,7 +336,7 @@ def exploit_locally_constant_variables(ast: f03.Program) -> f03.Program:
     for expart in walk(ast, f03.Execution_Part):
         # Tracks variables that are assigned a constant value within this execution part
         # and replaces their uses with that constant value.
-        analysis._track_local_consts(expart, alias_map)
+        analysis.track_local_consts(expart, alias_map)
 
     return ast
 
@@ -374,7 +374,7 @@ def const_eval_nodes(ast: f03.Program) -> f03.Program:
         :param n: The AST node to evaluate.
         :return: True if the node was successfully constant-evaluated and replaced, False otherwise.
         """
-        val = analysis._const_eval_basic_type(n, alias_map)
+        val = analysis.const_eval_basic_type(n, alias_map)
         if val is None:
             return False
         assert not np.isnan(val)
@@ -434,7 +434,7 @@ def const_eval_nodes(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def _val_2_np_lit(val, type_spec: types.SPEC) -> types.NUMPY_TYPES:
+def val_2_np_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.NUMPY_TYPES:
     """
     Converts a string value to a NumPy scalar of a specific Fortran type.
     :param val: The string representation of the value (e.g., "123", "true").
@@ -463,14 +463,14 @@ def _val_2_np_lit(val, type_spec: types.SPEC) -> types.NUMPY_TYPES:
     return val
 
 
-def _val_2_lit(val, type_spec: types.SPEC) -> types.LITERAL_TYPES:
+def _val_2_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.LITERAL_TYPES:
     """
     Converts a string value to a Fortran literal node of a specific type.
     :param val: The string representation of the value (e.g., "123", "true").
     :param type_spec: The target Fortran type specification (e.g., ('INTEGER4',)).
     :return: An fparser literal node representing the value.
     """
-    return types.numpy_type_to_literal(_val_2_np_lit(val, type_spec))
+    return types.numpy_type_to_literal(val_2_np_lit(val, type_spec))
 
 
 def _item_comp_matches_actual_comp(item_comp: str, actual_comp: str) -> bool:
@@ -612,7 +612,7 @@ def _find_items_applicable_to_instance(items: Iterable[types.ConstInjection],
     if isinstance(inst_ref, f03.Entity_Decl):
         defn_spec, comp_spec, local_spec = analysis.ident_spec(inst_ref), tuple(), None
     else:
-        root, rest = analysis._lookup_dataref(inst_ref, alias_map) or (None, None)
+        root, rest = analysis.lookup_dataref(inst_ref, alias_map) or (None, None)
         if not root:
             return None
 

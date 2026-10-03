@@ -6,6 +6,8 @@ to Fortran/C's integer-power codegen and drifts across real(8) reduction chains.
 Only the exponent literal is rewritten; base and fractional exponents are untouched.
 """
 
+from __future__ import annotations
+
 import ast
 from typing import Optional
 
@@ -17,7 +19,7 @@ from dace.transformation.transformation import explicit_cf_compatible
 class _ExponentIntegerizer(ast.NodeTransformer):
     """Rewrite integer-valued float ``**`` exponents to ``int`` literals."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.rewrites = 0
 
     @staticmethod
@@ -58,7 +60,7 @@ class IntegerizePowerExponents(ppl.Pass):
         """One-shot: the retype doesn't re-trigger the pass."""
         return False
 
-    def apply_pass(self, sdfg: dace.SDFG, _) -> Optional[int]:
+    def apply_pass(self, sdfg: dace.SDFG, _: dict) -> Optional[int]:
         """Rewrite every Python tasklet's integer-valued float ``**`` exponents
         to ``int``, recursively including nested SDFGs. Returns rewrite count, or ``None`` if unchanged."""
         total = 0

@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from copy import deepcopy
 from typing import Union, Tuple, Optional, List, Iterable
@@ -12,7 +16,6 @@ from .. import ast_utils
 
 # Type Aliases for common node groupings
 # Represents program entry points like the main program, subroutines, and functions.
-ENTRY_POINT_OBJECT_TYPES = Union[f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram]
 ENTRY_POINT_OBJECT_CLASSES = (f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram)
 # Represents nodes that define a new scope (e.g., modules, functions, derived types).
 SCOPE_OBJECT_TYPES = Union[f03.Main_Program, f03.Module, f03.Function_Subprogram, f03.Subroutine_Subprogram,
@@ -99,28 +102,27 @@ def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
     return lin + (des, )
 
 
-def _reparent_children(node: Base):
+def _reparent_children(node: Base) -> None:
     """Fixes up `parent` pointers on all children to point back to `node`."""
     for c in node.children:
         if isinstance(c, Base):
             c.parent = node
 
 
-def set_children(par: Base, children: Iterable[Union[Base, str]]):
+def set_children(par: Base, children: Iterable[Union[Base, str]]) -> None:
     """Replaces `par`'s children, handling both `.items`- and `.content`-based nodes."""
-    assert hasattr(par, 'content') != hasattr(par, 'items')
-    if hasattr(par, 'items'):
-        par.items = tuple(children)
-    elif hasattr(par, 'content'):
+    if isinstance(par, BlockBase):
         if not children:
             remove_self(par)
         else:
             par.content = list(children)
+    else:
+        par.items = tuple(children)
     if children:
         _reparent_children(par)
 
 
-def remove_self(nodes: Union[Base, List[Base]]):
+def remove_self(nodes: Union[Base, List[Base]]) -> None:
     """Removes one or more nodes from their parent's children."""
     if isinstance(nodes, Base):
         nodes = [nodes]
@@ -128,7 +130,7 @@ def remove_self(nodes: Union[Base, List[Base]]):
         remove_children(n.parent, n)
 
 
-def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
+def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     """Replaces `node` with `subst` (None deletes it; can be a single node or iterable)."""
     # Ensure substituted nodes aren't the same object reused at multiple sites.
     par = node.parent
@@ -151,21 +153,21 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
     set_children(par, repls)
 
 
-def append_children(par: Base, children: Union[Base, List[Base]]):
+def append_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Appends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, list(par.children) + children)
 
 
-def prepend_children(par: Base, children: Union[Base, List[Base]]):
+def prepend_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Prepends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, children + list(par.children))
 
 
-def remove_children(par: Base, children: Union[Base, List[Base]]):
+def remove_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Removes specific children (a single node or a list) from `par`."""
     if isinstance(children, Base):
         children = [children]
@@ -188,7 +190,7 @@ def copy_fparser_node(n: Base) -> Base:
         return deepcopy(n)
 
 
-def _get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
+def get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
         -> Tuple[
             Union[f03.Module_Stmt, f03.Program_Stmt],
             Optional[f03.Specification_Part],

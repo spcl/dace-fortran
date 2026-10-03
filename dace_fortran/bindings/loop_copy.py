@@ -30,7 +30,7 @@ _DTYPE_TO_F = {
 }
 
 
-def _fortran_type(dtype: str) -> str:
+def fortran_scalar_type(dtype: str) -> str:
     """Map a DaCe dtype string to its Fortran iso_c_binding form."""
     return _DTYPE_TO_F.get(dtype, 'real(c_double)')
 

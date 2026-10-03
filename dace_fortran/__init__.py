@@ -8,6 +8,8 @@ cheap -- the C++ bridge builds on first use, not at import time. See
 README "Building an SDFG from a real project" for worked examples.
 """
 
+from typing import Any
+
 _LAZY = {
     # Public build entry points (the documented surface).
     "build_sdfg": "dace_fortran.build",
@@ -56,7 +58,7 @@ _LAZY = {
 __all__ = list(_LAZY)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """PEP 562 lazy attribute access -- defers importing the builder (and its C++-bridge build) until first use."""
     target = _LAZY.get(name)
     if target is None:
@@ -68,5 +70,5 @@ def __getattr__(name: str):
     return value
 
 
-def __dir__():
+def __dir__() -> list[str]:
     return sorted(__all__)

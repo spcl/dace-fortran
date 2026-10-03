@@ -794,17 +794,6 @@ def _arm_index(plan: MonomorphizationPlan, type_name: str) -> Optional[int]:
     return None
 
 
-def _specific_binding_targets(program: f03.Program) -> dict:
-    """``{binding_name: target_proc}`` for every specific (non-deferred) type-bound
-    procedure in the program -- maps an ``obj%binding`` dispatch to its procedure."""
-    out = {}
-    for binding in walk(program, f03.Specific_Binding):
-        _, _, _, bname, target = binding.children
-        if target is not None:
-            out[str(bname).lower()] = str(target).lower()
-    return out
-
-
 def _dummy_arg_names(sub: f03.Base) -> List[str]:
     """Ordered dummy-argument names of subprogram ``sub``."""
     stmt = ast_utils.atmost_one(ast_utils.children_of_type(sub, (f03.Subroutine_Stmt, f03.Function_Stmt)))
@@ -1346,7 +1335,7 @@ LADDER = 'ladder'
 RETYPE = 'retype'
 
 
-@dataclass
+@dataclass(slots=True)
 class AxisSpec:
     """One polymorphic dispatch axis and how to collapse it.
 
@@ -1358,7 +1347,7 @@ class AxisSpec:
     concrete: Optional[str] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class MonomorphizationSpec:
     """The per-translation-unit monomorphisation plan: each polymorphic axis
     paired with its collapse strategy.  Hand-written first; auto-generated later.
@@ -1367,7 +1356,7 @@ class MonomorphizationSpec:
     axes: List[AxisSpec]
 
 
-@dataclass
+@dataclass(slots=True)
 class MonomorphizationStats:
     """Per-strategy counts of what the driver rewrote, so a caller can detect a
     no-op axis or assert the expected amount of rewriting happened."""

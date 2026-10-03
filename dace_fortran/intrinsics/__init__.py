@@ -5,14 +5,13 @@
 Emitter code should only talk to this module, never import the per-family
 registries directly -- adding an intrinsic means editing one file under this
 package.  Families: elementwise.py (sin/cos/exp/...), reduction.py
-(sum/product/minval/maxval), linalg.py (matmul/transpose/dot_product),
-direct.py (SIZE/LBOUND/... stub).
+(sum/product/minval/maxval), linalg.py (matmul/transpose/dot_product).
 """
 
 from dace_fortran.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
 from dace_fortran.intrinsics.reduction import REDUCTIONS
+from dace_fortran.intrinsics.base import LibNodeIntrinsic
 from dace_fortran.intrinsics.linalg import LINALG, STANDARD
-from dace_fortran.intrinsics.direct import DIRECT_INTRINSICS
 
 
 def is_elementwise(name: str) -> bool:
@@ -30,26 +29,7 @@ def is_libnode(name: str) -> bool:
     return name in LINALG or name in STANDARD
 
 
-def is_intrinsic(name: str) -> bool:
-    """True if ``name`` is a known Fortran intrinsic in any family."""
-    return (is_elementwise(name) or is_reduction(name) or is_libnode(name) or name in DIRECT_INTRINSICS)
-
-
-def render_call(name: str, args: list[str]) -> str:
-    """Return ``name(arg0, arg1, ...)`` verbatim.  Only validates elementwise
-    arity today; reduction/libnode callers get their own render helpers later."""
-    spec = ELEMENTWISE_INTRINSICS.get(name)
-    if spec is not None:
-        assert len(args) == spec.arity, (f"{name} expects {spec.arity} arg(s), got {len(args)}")
-    return f"{name}({', '.join(args)})"
-
-
-def reduction_spec(name: str):
-    """Return the ``ReductionIntrinsic`` for ``name`` or ``None``."""
-    return REDUCTIONS.get(name)
-
-
-def libnode_spec(name: str):
+def libnode_spec(name: str) -> LibNodeIntrinsic | None:
     """Return the ``LibNodeIntrinsic`` for ``name`` or ``None``.  Looks up both
     the linalg registry (matmul/transpose/dot_product) and the standard registry (count/merge/...)."""
     spec = LINALG.get(name)

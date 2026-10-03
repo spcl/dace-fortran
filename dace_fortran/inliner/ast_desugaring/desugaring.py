@@ -6,6 +6,8 @@ constructs into simpler, equivalent ones an SDFG can be built from --
 substitution, `DATA`->assignments, statement functions->internal functions,
 `GOTO`->structured control flow.
 """
+
+from __future__ import annotations
 import sys
 from typing import Tuple, Dict, List, Set, Union
 from io import StringIO
@@ -117,7 +119,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
         specification_part = ast_utils.atmost_one(ast_utils.children_of_type(subprog, f03.Specification_Part))
 
         ifc_spec = analysis.ident_spec(alias_map[fref_spec])
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis._compute_argument_signature(args, scope_spec, alias_map)
+        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         conc_spec = None
@@ -137,12 +139,12 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             # TODO: Add ref.
             _, _, cand_args, _ = cand_stmt.children
             if cand_args:
-                cand_args_sig = analysis._compute_candidate_argument_signature(cand_args.children, cand_spec, alias_map)
+                cand_args_sig = analysis.compute_candidate_argument_signature(cand_args.children, cand_spec, alias_map)
             else:
                 cand_args_sig = tuple()
             all_cand_sigs.append((cand_spec, cand_args_sig))
 
-            if analysis._does_type_signature_match(args_sig, cand_args_sig):
+            if analysis.does_type_signature_match(args_sig, cand_args_sig):
                 conc_spec = cand_spec
                 break
         if conc_spec not in alias_map:
@@ -221,7 +223,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         while cmod and not isinstance(cmod, (f03.Module, f03.Main_Program)):
             cmod = cmod.parent
         if cmod:
-            stmt, _, _, _ = utils._get_module_or_program_parts(cmod)
+            stmt, _, _, _ = utils.get_module_or_program_parts(cmod)
             cmod = ast_utils.singular(ast_utils.children_of_type(stmt, f03.Name)).string.lower()
         else:
             subp = list(ast_utils.children_of_type(ast, f03.Subroutine_Subprogram))
@@ -241,7 +243,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         fnref = pd.parent
         assert isinstance(fnref, (f03.Function_Reference, f03.Call_Stmt))
         _, args = fnref.children
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis._compute_argument_signature(args, scope_spec, alias_map)
+        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         bspec = dref_type.spec + (bname.string, )
@@ -267,33 +269,33 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                     cand = rcand
                 # External TBP candidate with no Fortran source (e.g. ICON's MPI halo
                 # `%exchange_data` -> `exchange_data_4de1_dp`) -- skip under tolerance; leave for pruning.
-                if analysis.TOLERATE_EXTERNAL_USES and proc_map.get(cand) not in alias_map:
+                if analysis.OPTIONS.tolerate_external_uses and proc_map.get(cand) not in alias_map:
                     continue
                 cand_stmt = alias_map[proc_map[cand]]
                 cand_spec = analysis.ident_spec(cand_stmt)
                 # TODO: Add ref.
                 _, _, cand_args, _ = cand_stmt.children
                 if cand_args:
-                    cand_args_sig = analysis._compute_candidate_argument_signature(cand_args.children[1:], cand_spec,
-                                                                                   alias_map)
+                    cand_args_sig = analysis.compute_candidate_argument_signature(cand_args.children[1:], cand_spec,
+                                                                                  alias_map)
                 else:
                     cand_args_sig = tuple()
                 all_cand_sigs.append((cand_spec, cand_args_sig))
 
-                if analysis._does_type_signature_match(args_sig, cand_args_sig):
+                if analysis.does_type_signature_match(args_sig, cand_args_sig):
                     bspec = cand
                     break
         if bspec not in proc_map:
             # No concrete procedure with source -- under tolerance leave for pruning
             # (a stubbed/unreachable wrapper, e.g. the halo-exchange path).
-            if analysis.TOLERATE_EXTERNAL_USES:
+            if analysis.OPTIONS.tolerate_external_uses:
                 continue
             cand_dump = "".join(f"\n...> {c}" for c in all_cand_sigs)
             raise AssertionError(f"[in mod: {cmod}/{callsite}] {bspec} not found for {args_sig}{cand_dump}")
         pname = proc_map[bspec]
         # Mirrors the generic-candidate guard above: a specific binding may name a sourceless
         # external (e.g. the MPI halo primitive) -- drop it rather than emit a use of a missing symbol.
-        if analysis.TOLERATE_EXTERNAL_USES and pname not in alias_map:
+        if analysis.OPTIONS.tolerate_external_uses and pname not in alias_map:
             continue
 
         # Assumes a subprogram defined directly inside a module.
@@ -477,10 +479,10 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
                 assert len(varz) == len(valz)
                 for k, v in zip(varz, valz):
                     scope_spec = analysis.find_scope_spec(k)
-                    kroot, ktyp, rest = analysis._dataref_root(k, scope_spec, alias_map)
+                    kroot, ktyp, rest = analysis.dataref_root(k, scope_spec, alias_map)
                     if isinstance(v, f03.Data_Stmt_Value):
                         repeat, elem = v.children
-                        repeat = 1 if not repeat else int(analysis._const_eval_basic_type(repeat, alias_map))
+                        repeat = 1 if not repeat else int(analysis.const_eval_basic_type(repeat, alias_map))
                         assert repeat
                     else:
                         elem = v
@@ -522,7 +524,7 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
         if args:
             args = args.children
 
-        def _get_typ(var: f03.Name):
+        def _get_typ(var: f03.Name) -> Base:
             _spec = scope_spec + (var.string, )
             _decl = alias_map[_spec]
             assert isinstance(_decl, f03.Entity_Decl)
@@ -691,8 +693,9 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram],
-                                        goto: f03.Goto_Stmt, target: f03.Continue_Stmt):
+def deconstruct_forward_goto_statements(
+        ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram], goto: f03.Goto_Stmt,
+        target: f03.Continue_Stmt) -> Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]:
     """
     Replaces forward-facing `GOTO` statements (i.e. forward jumps) with structured control flow by
     introducing boolean flag variables.
@@ -766,8 +769,9 @@ def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_
     return ancestor_subroutine
 
 
-def deconstruct_backward_goto_statements(ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram],
-                                         goto: f03.Goto_Stmt, target: f03.Continue_Stmt):
+def deconstruct_backward_goto_statements(
+        ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram], goto: f03.Goto_Stmt,
+        target: f03.Continue_Stmt) -> Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]:
     """
     Replaces backward-facing `GOTO` statements (i.e. forward jumps) with `DO WHILE` loop and structured
     control flow with an introduced boolean flag variables.
@@ -866,7 +870,8 @@ def deconstruct_backward_goto_statements(ancestor_subroutine: Union[f03.Function
     return ancestor_subroutine
 
 
-def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base, List[Base]]):
+def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base,
+                                                                                              List[Base]]) -> None:
     """
     Adds a condition to the execution of given nodes. Nodes are executed only if condition is evaluated
     as `.true.`.

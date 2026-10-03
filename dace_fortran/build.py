@@ -34,7 +34,6 @@ are declared through :mod:`dace_fortran.external`
 (``register_external``); they are re-exported here for convenience.
 """
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -43,6 +42,7 @@ from typing import List, Optional, Sequence, Union
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
+from dace_fortran.entry_names import split_qualified_entry
 from dace_fortran.external import (
     Arg,
     ExternalSignature,
@@ -143,7 +143,7 @@ _END_RE = re.compile(r"^\s*end\s*(module|interface|subroutine|function)?\b", re.
 _IFACE_RE = re.compile(r"^\s*(?:abstract\s+)?interface\b", re.IGNORECASE)
 
 
-def _resolve_entry(source: str, entry: Optional[str]) -> str:
+def resolve_entry_symbol(source: str, entry: Optional[str]) -> str:
     """Return the mangled Flang entry symbol for ``entry``.
 
     Three input forms, all keyed off a scan of ``source`` for procedure
@@ -189,14 +189,13 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
         if m_p:
             procs.append((cur_mod, m_p.group(2)))
 
-    def _mangle(mod, name):
+    def _mangle(mod: str | None, name: str) -> str:
         return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
 
     # Plain Fortran name given (``proc`` or ``mod::proc``): resolve against
     # the scanned definitions so callers need not hand-write the mangled symbol.
     if entry:
-        want_mod, _, want_proc = entry.lower().rpartition("::")
-        want_mod = want_mod or None
+        want_mod, want_proc = split_qualified_entry(entry)
         matches = {(m, n)
                    for (m, n) in procs
                    if n.lower() == want_proc and (want_mod is None or (m or "").lower() == want_mod)}
@@ -241,7 +240,7 @@ def _emit_hlfir(source: str,
                 merge_engine: str = "regex",
                 external_names: Sequence[str] = (),
                 defines: Sequence[str] = (),
-                kind_map: dict = None,
+                kind_map: dict | None = None,
                 kind_passthrough: bool = False) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
     (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
@@ -319,7 +318,7 @@ def make_builder(source: str,
                  out_dir: Optional[Union[str, Path]] = None,
                  preprocess: bool = False,
                  defines: Sequence[str] = (),
-                 kind_map: dict = None,
+                 kind_map: dict | None = None,
                  kind_passthrough: bool = False,
                  merge_engine: str = "regex") -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
@@ -330,13 +329,13 @@ def make_builder(source: str,
     goes through one real implementation (entry auto-resolution and
     all) while still wrapping the builder for per-test xdist naming.
 
-    ``entry`` may be ``None`` (:func:`_resolve_entry` derives it from the
+    ``entry`` may be ``None`` (:func:`resolve_entry_symbol` derives it from the
     single procedure in ``source``; error if none / ambiguous), a plain
     Fortran name (``proc`` or ``mod::proc`` ), or a mangled ``_Q...`` symbol.
     The ``.hlfir`` is parsed into the bridge module at ``SDFGBuilder``
     construction, so a temporary scratch dir is fine.
     """
-    # ``_resolve_entry`` validates the auto case (it raises when an
+    # ``resolve_entry_symbol`` validates the auto case (it raises when an
     # entry-less source has zero or >1 procedures -- the contract is no
     # "first of many") and resolves a plain Fortran name to its mangled
     # symbol.  ``entry=None`` is forwarded unchanged: a validated
@@ -345,7 +344,7 @@ def make_builder(source: str,
     # byte-identical).  A given entry (mangled or plain name) is forwarded
     # as the resolved symbol so multi-proc / multi-file builds privatise
     # the non-entry procedures.
-    resolved = _resolve_entry(source, entry)
+    resolved = resolve_entry_symbol(source, entry)
     fwd = None if entry is None else resolved
     pipeline = pipeline or DEFAULT_PIPELINE
     if out_dir is not None:
@@ -360,7 +359,7 @@ def make_builder(source: str,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
         builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder._fortran_source = source
+        builder.fortran_source = source
         return builder
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
         hlfir = _emit_hlfir(source,
@@ -374,7 +373,7 @@ def make_builder(source: str,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
         builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder._fortran_source = source
+        builder.fortran_source = source
         return builder
 
 
@@ -386,7 +385,7 @@ def build_sdfg(source: str,
                out_dir: Optional[Union[str, Path]] = None,
                preprocess: bool = False,
                defines: Sequence[str] = (),
-               kind_map: dict = None,
+               kind_map: dict | None = None,
                kind_passthrough: bool = False,
                merge_engine: str = "regex") -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
@@ -461,17 +460,16 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
     ``func.func @<sym>`` against the requested proc (and module, when
     qualified).  A ``_Q...`` entry matches the symbol verbatim.
     """
-    from dace_fortran.builder import _demangle_fortran_proc, _module_of_fortran_sym
+    from dace_fortran.builder import demangle_fortran_proc, module_of_fortran_sym
 
     mangled = entry.startswith("_Q")
-    want_mod, _, want_proc = entry.lower().rpartition("::")
-    want_mod = want_mod or None
+    want_mod, want_proc = split_qualified_entry(entry)
 
     def _is_entry(sym: str) -> bool:
         if mangled:
             return sym == entry
-        return _demangle_fortran_proc(sym) == want_proc \
-            and (want_mod is None or _module_of_fortran_sym(sym) == want_mod)
+        return demangle_fortran_proc(sym) == want_proc \
+            and (want_mod is None or module_of_fortran_sym(sym) == want_mod)
 
     matches = []
     for p in sorted(root.rglob("*.hlfir")):
@@ -580,12 +578,12 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
         LLVM flang on ``PATH``).
     :returns: a built, validated SDFG.
     """
-    from dace_fortran.emit_hlfir import emit, resolve_entry, _parse_compile_commands
+    from dace_fortran.emit_hlfir import emit, resolve_entry, parse_compile_commands
 
     # Accept a plain Fortran name (``solve_nh`` / ``mod::proc``) and resolve
     # it to the mangled symbol against the project's own sources, so callers
     # need not hand-write ``_QMmo_solve_nonhydroPsolve_nh``.
-    sources = [s for s, _, _ in _parse_compile_commands(Path(compile_commands))]
+    sources = [s for s, _, _ in parse_compile_commands(Path(compile_commands))]
     entry_sym = resolve_entry(entry, sources)
 
     def _do(d: Path) -> SDFG:

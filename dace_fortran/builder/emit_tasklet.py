@@ -7,12 +7,21 @@ plain scalar assigns (``i = i + 1``, ``c = 0.5``).  ``assign_reads_array``
 is the predicate ``emit_assign`` uses to pick between them.
 """
 
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING, Container, Sequence
 
 from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
                                          resolve_object_member, resolve_object_member_expr, resolve_section_alias)
+from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticVar, VarLike
+
+if TYPE_CHECKING:
+    from dace.sdfg.nodes import AccessNode
+    from dace.sdfg.state import SDFGState
+    from dace_fortran.builder import SDFGBuilder
 
 # Excludes the imaginary-unit suffix of a complex literal (``1j`` in
 # ``(0.0) + 1j*(0.0)``): negative lookbehind drops idents starting right after
@@ -27,35 +36,35 @@ def _ident_tokens(expr: str) -> set:
     return set(_IDENT_RE.findall(expr))
 
 
-def _is_len1_scalar_view(builder, nm: str) -> bool:
+def _is_len1_scalar_view(builder: SDFGBuilder, nm: str) -> bool:
     """True when ``nm`` is a length-1 ``view_alias`` (a scalar POINTER rebind
     ``tmp => x`` lowered as a length-1-array View).  Reads/writes like a scalar,
     so emit paths wire it as ``_in_<nm>``/``<nm>[0]``, not an indexed occurrence."""
     a = builder.arrays.get(nm)
-    return a is not None and getattr(a, 'role', '') == 'view_alias' \
+    return a is not None and a.role == 'view_alias' \
         and list(a.shape_symbols) == ['1']
 
 
-def _view_link_spec(builder, state, target: str):
+def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tuple[str, str, str] | None:
     """Resolve ``(src, src_subset, view_subset)`` for a View ``target``'s source
     linking memlet, or ``None`` if not a View.  Normalises all three View flavours
     (complex-component alias, ``bounds_remap_view``, plain ``view_alias``) so the
     read-link and write-back paths agree on the same subsets."""
-    if target in getattr(builder, 'complex_component_aliases', {}):
+    v: VarLike | None
+    if target in builder.complex_component_aliases:
         from dace_fortran.builder.access import cc_alias_view_spec
         v = cc_alias_view_spec(builder, target)
     else:
         v = builder.arrays.get(target)
     if v is None:
         return None
-    if getattr(v, 'bounds_remap_view', False) and v.bounds_remap_source \
+    if v.bounds_remap_view and v.bounds_remap_source \
             and v.bounds_remap_source in state.parent.arrays:
-        from types import SimpleNamespace
-        v = SimpleNamespace(role='view_alias',
-                            view_source=v.bounds_remap_source,
-                            view_subset=list(v.bounds_remap_source_subset) or [""],
-                            fortran_name=v.fortran_name)
-    if getattr(v, 'role', '') != 'view_alias':
+        v = SyntheticVar(role='view_alias',
+                         view_source=v.bounds_remap_source,
+                         view_subset=list(v.bounds_remap_source_subset) or [""],
+                         fortran_name=v.fortran_name)
+    if v.role != 'view_alias':
         return None
     if not v.view_source or v.view_source not in state.parent.arrays:
         return None
@@ -72,7 +81,7 @@ def _view_link_spec(builder, state, target: str):
     return src, src_subset, view_subset
 
 
-def _ensure_view_writeback_link(builder, state, write_node, target: str):
+def ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_node: AccessNode, target: str) -> None:
     """Add the missing view -> source writeback link when a fresh write-side
     access node is created for a view alias (else ``get_view_edge`` sees no
     edge and validation fails).  Two rules keep it happy: use a FRESH source
@@ -84,16 +93,16 @@ def _ensure_view_writeback_link(builder, state, write_node, target: str):
         return
     src, src_subset, view_subset = spec
     src_node = state.add_access(src)
-    cache = getattr(state, '_hlfir_access', None)
+    cache = builder.access_caches.get(state)
     if cache is not None:
         cache[src] = src_node
         cache.pop(target, None)
     state.add_edge(write_node, None, src_node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
-def _ensure_view_read_link(builder, state, read_node, target: str):
+def ensure_view_read_link(builder: SDFGBuilder, state: SDFGState, read_node: AccessNode, target: str) -> None:
     """Install the source -> view linking memlet on a GIVEN read node of View
-    ``target`` (read-direction counterpart of ``_ensure_view_writeback_link``).
+    ``target`` (read-direction counterpart of ``ensure_view_writeback_link``).
     Needed when a library node's input is a View (e.g. in-place FFT over
     ``bounds_remap_view``): sharing ``acc()``'s cached read node with the
     matching write would self-cycle, so this uses a FRESH node on both ends."""
@@ -105,7 +114,7 @@ def _ensure_view_read_link(builder, state, read_node, target: str):
     state.add_edge(src_node, None, read_node, 'views', Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
-def assign_reads_array(assign_node, arrays: dict) -> bool:
+def assign_reads_array(assign_node: NodeLike, arrays: Container[str]) -> bool:
     """True iff any ``accesses`` entry on ``assign_node`` reads an array.
     Promotes a nominally-scalar assign (``s = d(i) + 1``) onto the
     per-occurrence-connector tasklet path so the read gets a real memlet."""
@@ -115,7 +124,8 @@ def assign_reads_array(assign_node, arrays: dict) -> bool:
     return False
 
 
-def _rewrite_read_connectors(code: str, sorted_tokens, scalar_reads, array_occ: dict) -> str:
+def _rewrite_read_connectors(code: str, sorted_tokens: Sequence[str], scalar_reads: Container[str],
+                             array_occ: dict[str, int]) -> str:
     """Replace each read reference in a tasklet RHS with its per-occurrence
     input connector: scalar ``<name>`` -> ``_in_<name>``; Nth array occurrence
     ``<name>[...]`` -> ``_in_<name>_<N>`` with its balanced ``[...]`` consumed
@@ -157,7 +167,12 @@ def _rewrite_read_connectors(code: str, sorted_tokens, scalar_reads, array_occ: 
     return code
 
 
-def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect_syms: dict = None):
+def emit_tasklet(builder: SDFGBuilder,
+                 state: SDFGState,
+                 assign_node: NodeLike,
+                 idx: int,
+                 iter_map: dict[str, str],
+                 indirect_syms: dict[str, str] | None = None) -> None:
     """One Tasklet per array assignment.  Each RHS occurrence of an array
     (e.g. ``e_bln(jc,1)*z + e_bln(jc,2)*z``) gets its own input connector/memlet;
     collapsing them onto one connector would silently compute a wrong result."""
@@ -198,7 +213,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # ONE connector + ONE memlet per textual occurrence (never dedup'd) -- dedup
     # used to misalign occurrence-to-access mapping when the accesses list and
     # expr disagreed on count (e.g. MIN/MAX cmp+select).  1:1 is the contract now.
-    reads_by_name = {}
+    reads_by_name: dict[str, list[AccessLike]] = {}
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)
@@ -256,7 +271,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=eff_sc, subset="0"))
 
     # Write-side access-node selection for the tasklet's output edge.
-    # ``state._hlfir_access[name]`` caches the "live sink" -- the node later
+    # ``builder.access_caches[state][name]`` caches the "live sink" -- the node later
     # reads pull from.  A NEW node (not the cached sink) is needed when: (1) the
     # write pairs with a read of the SAME name in the SAME tasklet (e.g.
     # ``i = i + 1``, ``d(1) = d(1)*2.0``) -- reusing it would put an in-edge and
@@ -268,7 +283,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # bookkeeping keys off the source name.
     v_target = builder.arrays.get(target)
     eff_target = target
-    if v_target is not None and getattr(v_target, 'role', '') == 'section_alias':
+    if v_target is not None and v_target.role == 'section_alias':
         eff_target = v_target.view_source
     else:
         # Whole-object rebind member write: retarget onto the real flattened
@@ -276,7 +291,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         obj_real = resolve_object_member(builder, target)
         if obj_real is not None:
             eff_target = obj_real
-    cache = getattr(state, '_hlfir_access', None)
+    cache = builder.access_caches.get(state)
     is_self_update = (target in r_scl) or (target in reads_by_name) \
                   or (eff_target in reads_by_name)
     cached_has_readers = False
@@ -284,17 +299,16 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         cached_has_readers = state.out_degree(cache[eff_target]) > 0
     # View-edge rule: READ links source->view (``acc()``'s edge), WRITE links
     # view->source (writeback edge).  A WRITE to a View must go through
-    # ``_ensure_view_writeback_link``, not ``acc()`` -- else the write never
+    # ``ensure_view_writeback_link``, not ``acc()`` -- else the write never
     # propagates to the parent (parent looks uninitialised).  Covers the
     # pure-write case; self-update/cached-reader branch above handles RMW.
     v_eff = builder.arrays.get(eff_target)
-    is_view_write = v_eff is not None and (getattr(v_eff, 'bounds_remap_view', False)
-                                           or getattr(v_eff, 'role', '') == 'view_alias')
+    is_view_write = v_eff is not None and (v_eff.bounds_remap_view or v_eff.role == 'view_alias')
     if is_view_write or is_self_update or cached_has_readers:
         w = state.add_access(eff_target)
         if cache is not None:
             cache[eff_target] = w
-        _ensure_view_writeback_link(builder, state, w, eff_target)
+        ensure_view_writeback_link(builder, state, w, eff_target)
     else:
         w = acc(builder, state, eff_target)
 
@@ -302,13 +316,14 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         # Scalar target: no buildable index, subset is always element 0.
         state.add_edge(t, f"_out_{target}", w, None, Memlet(data=eff_target, subset="0"))
     else:
-        ac = get_access(accesses, target, is_read=False)
-        eff_nm, eff_ac = resolve_section_alias(builder, target, ac)
+        write_ac = get_access(accesses, target, is_read=False)
+        assert write_ac is not None, f"no write access recorded for {target!r}"
+        eff_nm, eff_ac = resolve_section_alias(builder, target, write_ac)
         ix = build_memlet_index(builder, eff_nm, eff_ac, iter_map, indirect_syms)
         state.add_edge(t, f"_out_{target}", w, None, Memlet(f"{eff_nm}[{ix}]"))
 
 
-def emit_scalar_assign(builder, state, target: str, value: str):
+def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, value: str) -> None:
     """Tasklet for ``target = value`` on a scalar target.  Identifier tokens
     naming an SDFG scalar each get their own input connector (so ``i = i + 1``
     self-updates work).  Whole-array fast path: when target and value are BOTH
@@ -328,7 +343,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     # would ``acc()`` a descriptor-less node that later crashes
     # ``prune_unused_arrays``.  Gate on REGISTERED rebind-store targets (not
     # merely-absent descriptor) so a genuinely-missing descriptor still surfaces.
-    if target in (vars(builder).get("object_alias_defs") or set()):
+    if target in builder.object_alias_defs:
         return
     # Bare ``?`` means the C++ AST builder couldn't trace an operand (designate
     # chain past ``kBuildIndexExprDepth``, missing indexStack entry, unresolved
@@ -341,15 +356,14 @@ def emit_scalar_assign(builder, state, target: str, value: str):
                                   "fallback returning ``?`` against this kernel's HLFIR.")
     src_name = value.strip()
     tgt_var = builder.arrays.get(target)
-    tgt_is_array = (tgt_var is not None and getattr(tgt_var, "rank", 0) > 0
-                    and len(tgt_var.shape_symbols) == tgt_var.rank)
+    tgt_is_array = (tgt_var is not None and tgt_var.rank > 0 and len(tgt_var.shape_symbols) == tgt_var.rank)
 
     # Bounds-remap-view rebind (``p(1:M,1:K) => arr1d``): the View descriptor +
     # source->view linking edge (access.py) already establish the alias, so this
     # bare ``p = arr1d`` store is redundant.  Skip it -- else ``set_<target>``
     # writes a rank-1 subset against a multi-D View and the validator rejects it.
-    if tgt_var is not None and getattr(tgt_var, "bounds_remap_view", False) \
-            and getattr(tgt_var, "bounds_remap_source", "") == src_name:
+    if tgt_var is not None and tgt_var.bounds_remap_view \
+            and tgt_var.bounds_remap_source == src_name:
         return
 
     # Plain section rebind (``p => a(:, j)``) lowered as view_alias: the
@@ -360,6 +374,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         return
 
     if tgt_is_array:
+        assert tgt_var is not None
         is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
         if is_whole_array_copy:
             src_var = builder.arrays[src_name]
@@ -368,10 +383,10 @@ def emit_scalar_assign(builder, state, target: str, value: str):
                 # collapse): AccessNode(src) -> AccessNode(tgt), full-shape subsets, no tasklet.
                 read = acc(builder, state, src_name)
                 write = state.add_access(target)
-                cache = getattr(state, '_hlfir_access', None)
+                cache = builder.access_caches.get(state)
                 if cache is not None:
                     cache[target] = write
-                _ensure_view_writeback_link(builder, state, write, target)
+                ensure_view_writeback_link(builder, state, write, target)
                 subset = ",".join(f"0:{s}" for s in src_var.shape_symbols)
                 state.add_edge(read, None, write, None, Memlet(f"{src_name}[{subset}]"))
                 return
@@ -384,14 +399,15 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         _val_toks = _ident_tokens(src_name)
         _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars) | set(builder.symbols)))
         if not _reads_data:
+            assert tgt_var is not None
             dims = tgt_var.shape_symbols
             ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
             idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
             w = state.add_access(target)
-            cache = getattr(state, '_hlfir_access', None)
+            cache = builder.access_caches.get(state)
             if cache is not None:
                 cache[target] = w
-            _ensure_view_writeback_link(builder, state, w, target)
+            ensure_view_writeback_link(builder, state, w, target)
             state.add_mapped_tasklet(
                 name=f"set_{target}",
                 map_ranges=ranges,
@@ -436,19 +452,19 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     # Velocity-tendencies triggers this across two lines:
     # ``max_vcfl_dyn = MAX(p_diag%max_vcfl_dyn, ...)`` then
     # ``p_diag%max_vcfl_dyn = max_vcfl_dyn`` (2nd write's target was 1st read).
-    cache = getattr(state, '_hlfir_access', None)
+    cache = builder.access_caches.get(state)
     cached_has_readers = (cache is not None and target in cache and state.out_degree(cache[target]) > 0)
     if (target in reads) or cached_has_readers:
         a = state.add_access(target)
         if cache is not None:
             cache[target] = a
-        _ensure_view_writeback_link(builder, state, a, target)
+        ensure_view_writeback_link(builder, state, a, target)
     else:
         a = acc(builder, state, target)
     state.add_edge(t, '_out', a, None, Memlet(data=target, subset='0'))
 
 
-def _cc_elem_subset(name, elem_exprs):
+def _cc_elem_subset(name: str, elem_exprs: Sequence[str]) -> str:
     """Element subset for a complex-component-alias access in the VIEW's own
     0-based coordinates: only subtracts the element dims' Fortran lower bound
     (``qg[(i) - offset_qg_d0, ...]``) -- the view's descriptor + linking memlet
@@ -456,13 +472,18 @@ def _cc_elem_subset(name, elem_exprs):
     return ", ".join(f"({e}) - offset_{name}_d{k}" for k, e in enumerate(elem_exprs))
 
 
-def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict, indirect_syms: dict = None):
+def emit_complex_component_assign(builder: SDFGBuilder,
+                                  state: SDFGState,
+                                  node: NodeLike,
+                                  idx: int,
+                                  iter_map: dict[str, str],
+                                  indirect_syms: dict[str, str] | None = None) -> None:
     """``qg(c, i...) = <rhs>`` where ``qg`` is a complex-as-2-reals component
     alias (``REAL(2,N)`` dummy bound to a COMPLEX element -- QE's ``qvan2``
     ``qg(2,ngy)`` aliasing ``qgm(1,ijh)``), registered as a SAME-dtype COMPLEX
     View.  Staged RMW: read the complex value, set component ``c`` (1=real,
     else imag) to the rhs (``qg`` reads replaced by CURRENT component
-    ``_cur``), write back via ``_ensure_view_writeback_link``.  Other rhs reads
+    ``_cur``), write back via ``ensure_view_writeback_link``.  Other rhs reads
     wire as ordinary per-occurrence connectors like ``emit_tasklet``."""
     indirect_syms = indirect_syms or {}
     name = node.target  # the COMPLEX view
@@ -499,7 +520,7 @@ def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict
         r_scl.add(comp_expr)
     comp_ref = f"_in_{comp_expr}" if comp_is_scalar else comp_expr
 
-    reads_by_name = {}
+    reads_by_name: dict[str, list[AccessLike]] = {}
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)
@@ -535,7 +556,7 @@ def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict
         r = acc(builder, state, sc)
         state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=sc, subset="0"))
     # Fresh write node so ``view_read -> tasklet -> view_write`` is a clean RMW
-    # chain; ``_ensure_view_writeback_link`` wires the view -> source direction.
+    # chain; ``ensure_view_writeback_link`` wires the view -> source direction.
     wz = state.add_access(name)
     state.add_edge(t, '_out_z', wz, None, Memlet(f"{name}[{elem_sub}]"))
-    _ensure_view_writeback_link(builder, state, wz, name)
+    ensure_view_writeback_link(builder, state, wz, name)

@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from typing import Optional, List, Iterable, Set, Tuple, Dict
 
@@ -308,7 +312,7 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
     binding was pruned with its type), so drop it; then remove any interface
     block emptied as a result.
 
-    Gated by the caller on :data:`analysis.TOLERATE_EXTERNAL_USES`: with full
+    Gated by the caller on :data:`analysis.OPTIONS.tolerate_external_uses`: with full
     resolution every ``IMPORT`` resolves, so this is a no-op."""
     alias_map = analysis.alias_specs(ast)
     for imp in list(walk(ast, f03.Import_Stmt)):
@@ -365,7 +369,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
     keeper_nodes = [alias_map[k] for k in keepers]
     assert all(isinstance(k, PRUNABLE_OBJECT_CLASSES) for k in keeper_nodes)
 
-    def _keep_from(node: Base):
+    def _keep_from(node: Base) -> None:
         for nm in walk(node, f03.Name):
             loc = analysis.search_real_local_alias_spec(nm, alias_map)
             scope_spec = analysis.search_scope_spec(nm.parent)
@@ -408,7 +412,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
         comp_refs: List[Base] = list(walk(node, f03.Data_Ref))
         comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if '%' in dpo.tofortran()]
         for dr in comp_refs:
-            root, rest = analysis._lookup_dataref(dr, alias_map)
+            root, rest = analysis.lookup_dataref(dr, alias_map)
             if rest and isinstance(rest[0], f03.Section_Subscript_List):
                 root, rest = f03.Part_Ref(f"{root.tofortran()}({rest[0].tofortran()})"), rest[1:]
             scope_spec = analysis.find_scope_spec(dr)
@@ -496,7 +500,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
             utils.replace_node(tstmt, (tstmt, f03.Data_Component_Def_Stmt("INTEGER :: pruned_type_placeholder")))
 
     for m in walk(ast, f03.Module):
-        _, sp, ex, subp = utils._get_module_or_program_parts(m)
+        _, sp, ex, subp = utils.get_module_or_program_parts(m)
         empty_spec = not sp or all(isinstance(c, (f03.Save_Stmt, f03.Implicit_Part)) for c in sp.children)
         empty_exec = not ex or not ex.children
         empty_subp = not subp or all(isinstance(c, f03.Contains_Stmt) for c in subp.children)
@@ -524,12 +528,12 @@ def prune_branches(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = Non
     return ast
 
 
-def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE):
+def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE) -> None:
     """Helper to prune an `If_Construct` (a multi-line IF block)."""
     ifthen = ib.children[0]
     assert isinstance(ifthen, f03.If_Then_Stmt)
     cond, = ifthen.children
-    cval = analysis._const_eval_basic_type(cond, alias_map)
+    cval = analysis.const_eval_basic_type(cond, alias_map)
     if cval is None:
         return
     assert isinstance(cval, np.bool_)
@@ -558,10 +562,10 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
     _prune_branches_in_ifblock(ib, alias_map)
 
 
-def _prune_branches_in_ifstmt(ib: f03.If_Stmt, alias_map: types.SPEC_TABLE):
+def _prune_branches_in_ifstmt(ib: f03.If_Stmt, alias_map: types.SPEC_TABLE) -> None:
     """Helper to prune an `If_Stmt` (a single-line IF statement)."""
     cond, actions = ib.children
-    cval = analysis._const_eval_basic_type(cond, alias_map)
+    cval = analysis.const_eval_basic_type(cond, alias_map)
     if cval is None:
         return
     assert isinstance(cval, np.bool_)

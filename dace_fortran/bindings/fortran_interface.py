@@ -34,7 +34,7 @@ _DTYPE_TO_FORTRAN_C = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Member:
     """One field of a Fortran derived type."""
     name: str  # 'u'
@@ -55,7 +55,7 @@ class Member:
     alloc: str = ''
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DerivedType:
     """Layout of one Fortran derived type referenced by the entry."""
     name: str  # 't_state'
@@ -63,7 +63,7 @@ class DerivedType:
     members: Tuple[Member, ...] = field(default_factory=tuple)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OriginalArg:
     """One dummy argument of the entry subroutine, outer view."""
     name: str  # 'st'  --  Fortran-source name
@@ -78,7 +78,7 @@ class OriginalArg:
     struct_type: Optional[str] = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OriginalInterface:
     """Caller-facing surface of the entry subroutine plus every
     derived type referenced by its dummies (transitively)."""
@@ -116,10 +116,11 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
             fortran_type = f"type({a['struct_name']})"
             struct_type = a["struct_name"]
         else:
-            fortran_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
-            if fortran_type is None:
+            mapped_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
+            if mapped_type is None:
                 raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
                                  f"for argument {a['name']!r}")
+            fortran_type = mapped_type
             struct_type = None
         rank = int(a["rank"])
         shape = tuple(a["shape"])

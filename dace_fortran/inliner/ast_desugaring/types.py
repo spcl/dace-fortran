@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict, Optional, List, Any, Type
@@ -33,18 +37,30 @@ class TYPE_SPEC:
     """Parses a Fortran variable's attribute string (e.g. 'DIMENSION(..)', 'INTENT(IN)') into shape/intent/etc properties."""
     NO_ATTRS = ''
 
-    def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False):
+    __slots__ = ('spec', 'shape', 'optional', 'pointer', 'inp', 'out', 'alloc', 'const', 'keyword')
+
+    spec: SPEC
+    shape: Tuple[str, ...]
+    optional: bool
+    pointer: bool
+    inp: bool
+    out: bool
+    alloc: bool
+    const: bool
+    keyword: Optional[str]
+
+    def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False) -> None:
         if isinstance(spec, str):
             spec = (spec, )
-        self.spec: SPEC = spec
-        self.shape: Tuple[str, ...] = self._parse_shape(attrs)
-        self.optional: bool = 'OPTIONAL' in attrs
-        self.pointer: bool = 'POINTER' in attrs
-        self.inp: bool = 'INTENT(IN)' in attrs or 'INTENT(INOUT)' in attrs
-        self.out: bool = 'INTENT(OUT)' in attrs or 'INTENT(INOUT)' in attrs
-        self.alloc: bool = 'ALLOCATABLE' in attrs
-        self.const: bool = 'PARAMETER' in attrs
-        self.keyword: Optional[str] = None
+        self.spec = spec
+        self.shape = self._parse_shape(attrs)
+        self.optional = 'OPTIONAL' in attrs
+        self.pointer = 'POINTER' in attrs
+        self.inp = 'INTENT(IN)' in attrs or 'INTENT(INOUT)' in attrs
+        self.out = 'INTENT(OUT)' in attrs or 'INTENT(INOUT)' in attrs
+        self.alloc = 'ALLOCATABLE' in attrs
+        self.const = 'PARAMETER' in attrs
+        self.keyword = None
         if is_arg and not self.inp and not self.out:
             # Argument with no explicit intent is both in and out.
             self.inp, self.out = True, True
@@ -86,7 +102,7 @@ class TYPE_SPEC:
                     part_start = i + 1
         return tuple(p.strip().lower() for p in parts)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         attrs = []
         if self.pointer:
             attrs.append("*")
@@ -136,7 +152,7 @@ class TYPE_SPEC:
         return f"{bits_str} :: {var}{shape_str}"
 
 
-@dataclass
+@dataclass(slots=True)
 class ConstTypeInjection:
     """Constant-value injection for a derived-type component, applied everywhere that type is used (optionally scoped)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
@@ -145,7 +161,7 @@ class ConstTypeInjection:
     value: Any  # Literal value to substitute with.
 
 
-@dataclass
+@dataclass(slots=True)
 class ConstInstanceInjection:
     """Constant-value injection for one variable instance's component (not all instances of its type)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
@@ -162,13 +178,13 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
     if isinstance(val, np.bool_):
         val = f03.Logical_Literal_Constant('.true.' if val else '.false.')
     elif isinstance(val, NUMPY_INTS):
-        bytez = _count_bytes(type(val))
+        bytez = count_bytes(type(val))
         if val < 0:
             val = f03.Signed_Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
         else:
             val = f03.Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
     elif isinstance(val, NUMPY_REALS):
-        bytez = _count_bytes(type(val))
+        bytez = count_bytes(type(val))
         valstr = str(val)
         if bytez == 8:
             if 'e' in valstr:
@@ -182,7 +198,7 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
     return val
 
 
-def _count_bytes(t: Type[NUMPY_TYPES]) -> int:
+def count_bytes(t: Type[NUMPY_TYPES]) -> int:
     """Byte size of a numpy numeric type."""
     if t is np.int8: return 1
     if t is np.int16: return 2

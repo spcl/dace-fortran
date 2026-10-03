@@ -77,7 +77,7 @@ from dace_fortran.external import clear_external_registry
 # that compiled the offending TU hundreds of times without ever reading a warning.
 from dace.sdfg import SDFG
 
-from dace_fortran.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
+from codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
 
 compile_without_check = SDFG.compile
 
