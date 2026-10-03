@@ -119,7 +119,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
         specification_part = ast_utils.atmost_one(ast_utils.children_of_type(subprog, f03.Specification_Part))
 
         ifc_spec = analysis.ident_spec(alias_map[fref_spec])
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis._compute_argument_signature(args, scope_spec, alias_map)
+        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         conc_spec = None
@@ -139,12 +139,12 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             # TODO: Add ref.
             _, _, cand_args, _ = cand_stmt.children
             if cand_args:
-                cand_args_sig = analysis._compute_candidate_argument_signature(cand_args.children, cand_spec, alias_map)
+                cand_args_sig = analysis.compute_candidate_argument_signature(cand_args.children, cand_spec, alias_map)
             else:
                 cand_args_sig = tuple()
             all_cand_sigs.append((cand_spec, cand_args_sig))
 
-            if analysis._does_type_signature_match(args_sig, cand_args_sig):
+            if analysis.does_type_signature_match(args_sig, cand_args_sig):
                 conc_spec = cand_spec
                 break
         if conc_spec not in alias_map:
@@ -223,7 +223,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         while cmod and not isinstance(cmod, (f03.Module, f03.Main_Program)):
             cmod = cmod.parent
         if cmod:
-            stmt, _, _, _ = utils._get_module_or_program_parts(cmod)
+            stmt, _, _, _ = utils.get_module_or_program_parts(cmod)
             cmod = ast_utils.singular(ast_utils.children_of_type(stmt, f03.Name)).string.lower()
         else:
             subp = list(ast_utils.children_of_type(ast, f03.Subroutine_Subprogram))
@@ -243,7 +243,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         fnref = pd.parent
         assert isinstance(fnref, (f03.Function_Reference, f03.Call_Stmt))
         _, args = fnref.children
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis._compute_argument_signature(args, scope_spec, alias_map)
+        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         bspec = dref_type.spec + (bname.string, )
@@ -276,13 +276,13 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                 # TODO: Add ref.
                 _, _, cand_args, _ = cand_stmt.children
                 if cand_args:
-                    cand_args_sig = analysis._compute_candidate_argument_signature(cand_args.children[1:], cand_spec,
-                                                                                   alias_map)
+                    cand_args_sig = analysis.compute_candidate_argument_signature(cand_args.children[1:], cand_spec,
+                                                                                  alias_map)
                 else:
                     cand_args_sig = tuple()
                 all_cand_sigs.append((cand_spec, cand_args_sig))
 
-                if analysis._does_type_signature_match(args_sig, cand_args_sig):
+                if analysis.does_type_signature_match(args_sig, cand_args_sig):
                     bspec = cand
                     break
         if bspec not in proc_map:
@@ -479,10 +479,10 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
                 assert len(varz) == len(valz)
                 for k, v in zip(varz, valz):
                     scope_spec = analysis.find_scope_spec(k)
-                    kroot, ktyp, rest = analysis._dataref_root(k, scope_spec, alias_map)
+                    kroot, ktyp, rest = analysis.dataref_root(k, scope_spec, alias_map)
                     if isinstance(v, f03.Data_Stmt_Value):
                         repeat, elem = v.children
-                        repeat = 1 if not repeat else int(analysis._const_eval_basic_type(repeat, alias_map))
+                        repeat = 1 if not repeat else int(analysis.const_eval_basic_type(repeat, alias_map))
                         assert repeat
                     else:
                         elem = v

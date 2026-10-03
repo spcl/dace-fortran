@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.emit_hlfir import _parse_compile_commands
+from dace_fortran.emit_hlfir import parse_compile_commands
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -28,7 +28,7 @@ def test_parse_compile_commands_cmake_command_string(tmp_path):
             "command": f"flang-new-21 -cpp -I/opt/inc -DUSE_DBL -D NPROMA=8 -c {src}",
             "file": str(src),
         }]))
-    parsed = _parse_compile_commands(cc)
+    parsed = parse_compile_commands(cc)
     assert len(parsed) == 1
     _, includes, defines = parsed[0]
     assert "/opt/inc" in includes
@@ -47,7 +47,7 @@ def test_parse_compile_commands_automake_arguments_list(tmp_path):
                           str(src)],
             "file": str(src),
         }]))
-    parsed = _parse_compile_commands(cc)
+    parsed = parse_compile_commands(cc)
     assert len(parsed) == 1
     _, includes, defines = parsed[0]
     assert "/usr/inc" in includes

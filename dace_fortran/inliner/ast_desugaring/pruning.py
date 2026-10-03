@@ -412,7 +412,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
         comp_refs: List[Base] = list(walk(node, f03.Data_Ref))
         comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if '%' in dpo.tofortran()]
         for dr in comp_refs:
-            root, rest = analysis._lookup_dataref(dr, alias_map)
+            root, rest = analysis.lookup_dataref(dr, alias_map)
             if rest and isinstance(rest[0], f03.Section_Subscript_List):
                 root, rest = f03.Part_Ref(f"{root.tofortran()}({rest[0].tofortran()})"), rest[1:]
             scope_spec = analysis.find_scope_spec(dr)
@@ -500,7 +500,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
             utils.replace_node(tstmt, (tstmt, f03.Data_Component_Def_Stmt("INTEGER :: pruned_type_placeholder")))
 
     for m in walk(ast, f03.Module):
-        _, sp, ex, subp = utils._get_module_or_program_parts(m)
+        _, sp, ex, subp = utils.get_module_or_program_parts(m)
         empty_spec = not sp or all(isinstance(c, (f03.Save_Stmt, f03.Implicit_Part)) for c in sp.children)
         empty_exec = not ex or not ex.children
         empty_subp = not subp or all(isinstance(c, f03.Contains_Stmt) for c in subp.children)
@@ -533,7 +533,7 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
     ifthen = ib.children[0]
     assert isinstance(ifthen, f03.If_Then_Stmt)
     cond, = ifthen.children
-    cval = analysis._const_eval_basic_type(cond, alias_map)
+    cval = analysis.const_eval_basic_type(cond, alias_map)
     if cval is None:
         return
     assert isinstance(cval, np.bool_)
@@ -565,7 +565,7 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
 def _prune_branches_in_ifstmt(ib: f03.If_Stmt, alias_map: types.SPEC_TABLE) -> None:
     """Helper to prune an `If_Stmt` (a single-line IF statement)."""
     cond, actions = ib.children
-    cval = analysis._const_eval_basic_type(cond, alias_map)
+    cval = analysis.const_eval_basic_type(cond, alias_map)
     if cval is None:
         return
     assert isinstance(cval, np.bool_)

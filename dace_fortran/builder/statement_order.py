@@ -14,7 +14,7 @@ so a later write must be sequenced after that consumer, not after the access nod
 
 This runs on the realised graph, so it needs no per-emitter cooperation and no name matching.  Both
 matter: ``emit_cfg``'s emit-time guards split states only on the paths that reach them (a scalar
-assign flushed from ``_Ctx.flush`` never does), and they compare Fortran names while ``access.acc``
+assign flushed from ``Ctx.flush`` never does), and they compare Fortran names while ``access.acc``
 has already resolved every alias onto the source container's access node.
 
 Source order is recovered from ``state.node_id``: access nodes are created while their statement is

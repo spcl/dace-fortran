@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from dace.sdfg.nodes import LibraryNode, Node
     from dace.sdfg.state import ControlFlowRegion
     from dace_fortran.builder import SDFGBuilder
-    from dace_fortran.builder.context import _Ctx
+    from dace_fortran.builder.context import Ctx
     from dace_fortran.external import Arg
 
 _N = TypeVar("_N", bound="LibraryNode")
@@ -124,7 +124,7 @@ def _parse_reduce_identity(s: str) -> bool | int | float:
         raise NotImplementedError(f"unsupported reduction identity {s!r}")
 
 
-def emit_copy(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_copy(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Whole-array ``b = a`` -> ``CopyLibraryNode``. Connector names come from the node class
     so this stays correct across libnode renames."""
     from dace.libraries.standard.nodes import CopyLibraryNode
@@ -150,7 +150,7 @@ def emit_copy(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
     state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)
 
 
-def emit_memset(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Scalar-zero fill -> ``FillLibraryNode``. Transitions to a fresh successor state so a
     later element write to the same array doesn't race the array-wide write in one state's DAG."""
     from dace.libraries.standard.nodes import FillLibraryNode
@@ -186,12 +186,12 @@ def emit_memset(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlo
     from dace.data import View
     if isinstance(tgt_desc, View):
         # View write needs the view -> source direction, not acc's source -> view read link;
-        # use a fresh write node + _ensure_view_writeback_link (same as tasklet RMW writes).
-        from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
+        # use a fresh write node + ensure_view_writeback_link (same as tasklet RMW writes).
+        from dace_fortran.builder.emit_tasklet import ensure_view_writeback_link
         view_node = state.add_access(tgt_name)
         state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,
                        Memlet.from_array(tgt_name, tgt_desc))
-        _ensure_view_writeback_link(builder, state, view_node, tgt_name)
+        ensure_view_writeback_link(builder, state, view_node, tgt_name)
         ctx.new_state(builder, region)
         return
 
@@ -202,7 +202,7 @@ def emit_memset(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlo
     ctx.new_state(builder, region)
 
 
-def emit_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``target = matmul(a, b)`` / ``transpose(a)`` / ``dot_product(x, y)`` -> matching DaCe
     library node. ``MatMul`` specializes to GEMM/GEMV/Dot by operand rank."""
     from dace_fortran.intrinsics import libnode_spec
@@ -409,7 +409,7 @@ def resolve_mpi_op(opname: str) -> str:
         "so the name survives to the builder.")
 
 
-def query_target(builder: SDFGBuilder, ctx: _Ctx, name: str) -> tuple[str, str | None]:
+def query_target(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, str | None]:
     """Pick the data name an ``MPI_Comm_rank`` / ``_size`` result writes into.
 
     Normally the Fortran integer itself.  But when that integer goes on to drive a branch
@@ -427,8 +427,7 @@ def query_target(builder: SDFGBuilder, ctx: _Ctx, name: str) -> tuple[str, str |
     return backing, name
 
 
-def bind_query_symbol(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, backing: str,
-                      sym: str | None) -> None:
+def bind_query_symbol(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, backing: str, sym: str | None) -> None:
     """Assign a promoted query symbol from the transient the library node wrote.
 
     A no-op unless :func:`query_target` had to redirect the write.
@@ -440,7 +439,7 @@ def bind_query_symbol(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion
     ctx.cur = nxt
 
 
-def emit_mpi(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
 
@@ -900,7 +899,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRe
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
 
-def emit_io(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_io(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran I/O statement (``kind == 'iocall'``) to a
     ``dace_fortran.libraries.fortran_io`` node.
 
@@ -944,7 +943,7 @@ def emit_io(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowReg
             state.add_edge(acc(builder, state, name), None, node, f"_in_{i}", memlet)
 
 
-def emit_fft_interpolate(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_fft_interpolate(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised QE ``fft_interpolate_*`` call to an
     :class:`dace_fortran.libraries.fft.nodes.FFTInterpolate` lib node.
 
@@ -969,7 +968,7 @@ def emit_fft_interpolate(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: C
     state.add_edge(node, "_out", state.add_write(vout), None, Memlet.from_array(vout, out_desc))
 
 
-def emit_unsupported_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_unsupported_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Raise a clear ``NotImplementedError`` for a Fortran call site that
     matches a recognised library's call convention (MPI / FFTW3 / BLAS /
     LAPACK) but isn't in the bridge's supported subset yet.
@@ -990,7 +989,7 @@ def emit_unsupported_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, regio
                               f"but is not in the bridge's supported subset.  To add support: {hint}.")
 
 
-def emit_blas(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran BLAS call (``kind == 'blascall'``) to a
     :mod:`dace.libraries.blas` library node.
 
@@ -1247,7 +1246,7 @@ def emit_blas(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
         return
 
 
-def emit_lapack(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran LAPACK call (``kind == 'lapackcall'``)
     to a :mod:`dace.libraries.lapack` library node.
 
@@ -1336,7 +1335,7 @@ def emit_lapack(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlo
         return
 
 
-def emit_fft(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised FFTW3 ``fftw_execute_dft`` call site
     (``kind == 'fftcall'``) to a :class:`dace.libraries.fft.nodes.FFT`
     (forward) or :class:`dace.libraries.fft.nodes.IFFT` (backward)
@@ -1386,7 +1385,7 @@ def emit_fft(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRe
     # SDFG validation rejects.  A fresh read + write pair binds to the same
     # underlying array but lets the dataflow stay acyclic.
     from dace.data import View
-    from dace_fortran.builder.emit_tasklet import _ensure_view_read_link, _ensure_view_writeback_link
+    from dace_fortran.builder.emit_tasklet import ensure_view_read_link, ensure_view_writeback_link
     in_node = state.add_read(in_arr)
     state.add_edge(in_node, None, node, "_inp", Memlet.from_array(in_arr, in_desc))
     out_node = state.add_write(out_arr)
@@ -1397,12 +1396,12 @@ def emit_fft(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRe
     # for the write -- or ``get_view_edge`` returns None at validation.  Fresh
     # (un-cached) source nodes on each side keep the in-place dataflow acyclic.
     if isinstance(in_desc, View):
-        _ensure_view_read_link(builder, state, in_node, in_arr)
+        ensure_view_read_link(builder, state, in_node, in_arr)
     if isinstance(out_desc, View):
-        _ensure_view_writeback_link(builder, state, out_node, out_arr)
+        ensure_view_writeback_link(builder, state, out_node, out_arr)
 
 
-def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a *registered* external ``bind(c)`` call to an
     :class:`dace_fortran.external.ExternalCall` library node.
 
@@ -1939,7 +1938,7 @@ def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
 
     import dace.data as _dd
     from dace_fortran.builder.access import acc as _acc
-    from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
+    from dace_fortran.builder.emit_tasklet import ensure_view_writeback_link
     for name, conn, direction in edges:
         if conn in comm_conns:
             # Comm: by-value opaque scalar (subset '0', single element).
@@ -1950,7 +1949,7 @@ def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
         # as a View of its target (the velocity-binding shallow-pass pattern).
         # A View access node needs the canonical source <-> view linking edge
         # or ``get_view_edge`` rejects it; reuse the same read-side (``acc``)
-        # and write-back (``_ensure_view_writeback_link``) helpers the tasklet
+        # and write-back (``ensure_view_writeback_link``) helpers the tasklet
         # emitter uses so the external reads / writes the target in place.
         is_view = isinstance(ctx.sdfg.arrays.get(name), _dd.View)
         if direction == 'r':
@@ -1960,7 +1959,7 @@ def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
             wnode = state.add_write(name)
             state.add_memlet_path(node, wnode, src_conn=conn, memlet=mem)
             if is_view:
-                _ensure_view_writeback_link(builder, state, wnode, name)
+                ensure_view_writeback_link(builder, state, wnode, name)
 
     # Array connectors carry a pointer; data scalars stay by-value;
     # ``comm`` connectors carry ``opaque(MPI_Comm)`` by value (matches
@@ -1976,7 +1975,7 @@ def emit_call(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowR
     node.out_connectors = {c: dace.pointer(ptr_of[c]) for c, d in node.out_connectors.items()}
 
 
-def emit_reduce(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``target = sum(src)`` (and product / minval / maxval) lowered as a
     DaCe ``standard.Reduce`` library node via
     ``state.add_reduce(wcr, axes, identity)``.
@@ -2091,7 +2090,7 @@ def emit_reduce(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlo
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
 
-def _emit_terminator_block(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, block_cls: type,
+def _emit_terminator_block(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, block_cls: type,
                            prefix: str) -> None:
     """Add a leaf control-flow terminator (``BreakBlock`` /
     ``ReturnBlock``) to ``region``, wired from ``ctx.cur`` -- or marked
@@ -2109,7 +2108,7 @@ def _emit_terminator_block(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowR
     ctx.cur = blk
 
 
-def emit_break(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_break(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``EXIT`` -> ``BreakBlock`` added to the current region.
     The block is a leaf and implicitly transfers control to the nearest
     enclosing loop's exit edge at codegen time.  When the break is the
@@ -2120,7 +2119,7 @@ def emit_break(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlow
     _emit_terminator_block(builder, ctx, region, BreakBlock, "break")
 
 
-def emit_return(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_return(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``RETURN`` -> ``ReturnBlock``.  Added to the current region
     so RETURNs nested inside a loop or conditional get placed correctly;
     codegen still emits a plain ``return`` that bails out of the whole

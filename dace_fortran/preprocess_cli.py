@@ -130,8 +130,8 @@ def _apply_passes(source: str, args: argparse.Namespace) -> tuple[str, dict]:
         args.rewrite_integer_powers = True
     if args.merge_modules:
         if args.merge_engine == "fparser":
-            from dace_fortran.preprocess import _fparser_merge
-            source = _fparser_merge(source, search_dirs=args.search_dirs, entry=args.merge_entry)
+            from dace_fortran.preprocess import fparser_merge
+            source = fparser_merge(source, search_dirs=args.search_dirs, entry=args.merge_entry)
         else:
             source = merge_used_modules(source, search_dirs=args.search_dirs)
     if args.strip_openmp:

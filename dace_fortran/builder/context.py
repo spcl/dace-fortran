@@ -1,6 +1,6 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``_Ctx``  --  per-region emission context.
+"""``Ctx``  --  per-region emission context.
 
 Tracks the "current" SDFG state, pending scalar assignments that need
 flushing as tasklets, and the active DO-loop iterator renames.
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from dace_fortran.builder import SDFGBuilder
 
 
-class _Ctx:
+class Ctx:
     """Tracks the current state and pending scalar assignments."""
 
     __slots__ = ('sdfg', 'builder', 'cur', 'pending', 'iter_map', 'mpi_req_posts', 'cond_cache')

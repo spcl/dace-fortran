@@ -11,14 +11,14 @@ from dace_fortran.builder import (
     SDFGBuilder,
     generate_sdfg,
 )
-from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.context import Ctx
 
 __all__ = [
     "SDFGBuilder",
     "DEFAULT_PIPELINE",
     "MULTI_FILE_PIPELINE",
     "generate_sdfg",
-    "_Ctx",
+    "Ctx",
 ]
 
 if __name__ == "__main__":

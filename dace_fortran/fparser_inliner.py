@@ -910,7 +910,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     ``make_practically_constant_arguments_constants``,
     ``exploit_locally_constant_variables``, ``const_eval_nodes``,
     ``prune_branches``).  This is the mode the HLFIR build path
-    (:func:`dace_fortran.preprocess._fparser_merge`) uses: flang and the
+    (:func:`dace_fortran.preprocess.fparser_merge`) uses: flang and the
     bridge do their own constant-folding / dead-branch elimination, so the
     merge only needs a valid inlined single TU -- and skipping the
     optimizers both matches the legacy regex merge's "splice and let flang
@@ -1175,8 +1175,8 @@ def _demangle_spec(mangled: str) -> types.SPEC:
 
     Self-contained so the inliner's unit tests need not import the C++
     bridge (which ``dace_fortran.builder`` pulls in eagerly).  Kept in
-    lock-step with ``dace_fortran.builder._demangle_fortran_proc`` /
-    ``_module_of_fortran_sym``: flang lower-cases every identifier, so the
+    lock-step with ``dace_fortran.builder.demangle_fortran_proc`` /
+    ``module_of_fortran_sym``: flang lower-cases every identifier, so the
     only upper-case markers are the structural ``M`` / ``P`` / ``F``."""
     if not mangled.startswith("_Q"):
         return (mangled.lower(), )
@@ -1196,16 +1196,16 @@ def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
     """Resolve ``entry`` (plain name / ``module::proc`` / mangled ``_Q...``)
     to an fparser entry-point SPEC ``(module, proc)`` or ``(proc,)``.
 
-    Resolution goes through dace-fortran's own ``_resolve_entry`` (so the
+    Resolution goes through dace-fortran's own ``resolve_entry_symbol`` (so the
     inliner agrees byte-for-byte with the HLFIR build path on which
     procedure is the root); the result is demangled locally to avoid
     importing the bridge-heavy ``dace_fortran.builder``.  ``None`` passes
     through (every top-level subprogram is kept as an entry point)."""
     if entry is None:
         return None
-    from dace_fortran.build import _resolve_entry
+    from dace_fortran.build import resolve_entry_symbol
 
-    return _demangle_spec(_resolve_entry(source, entry))
+    return _demangle_spec(resolve_entry_symbol(source, entry))
 
 
 #: One physical ``!$acc`` sentinel line (directive opener or continuation piece).

@@ -178,13 +178,13 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
     if isinstance(val, np.bool_):
         val = f03.Logical_Literal_Constant('.true.' if val else '.false.')
     elif isinstance(val, NUMPY_INTS):
-        bytez = _count_bytes(type(val))
+        bytez = count_bytes(type(val))
         if val < 0:
             val = f03.Signed_Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
         else:
             val = f03.Int_Literal_Constant(f"{val}" if bytez == 4 else f"{val}_{bytez}")
     elif isinstance(val, NUMPY_REALS):
-        bytez = _count_bytes(type(val))
+        bytez = count_bytes(type(val))
         valstr = str(val)
         if bytez == 8:
             if 'e' in valstr:
@@ -198,7 +198,7 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
     return val
 
 
-def _count_bytes(t: Type[NUMPY_TYPES]) -> int:
+def count_bytes(t: Type[NUMPY_TYPES]) -> int:
     """Byte size of a numpy numeric type."""
     if t is np.int8: return 1
     if t is np.int16: return 2

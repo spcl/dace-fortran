@@ -190,7 +190,7 @@ def copy_fparser_node(n: Base) -> Base:
         return deepcopy(n)
 
 
-def _get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
+def get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
         -> Tuple[
             Union[f03.Module_Stmt, f03.Program_Stmt],
             Optional[f03.Specification_Part],

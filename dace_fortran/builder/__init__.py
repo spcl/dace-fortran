@@ -24,13 +24,13 @@ Architecture:
 
 Per-emitter implementations live in sibling modules under this package.
 ``SDFGBuilder`` itself keeps only orchestration  --  ``__init__``, ``build``,
-``nid``, and the ``_emit`` dispatch.
+``nid``, and the ``emit_nodes`` dispatch.
 
 State-change rules:
     - Write to a symbol -> interstate edge with assignment (emit_assign).
     - Every other write -> tasklet in the current state.
     - LoopRegion / ConditionalBlock open a fresh region; their children
-      run in a nested ``_Ctx``.
+      run in a nested ``Ctx``.
 
 NOTE on nanobind bindings:
     Every read of a std::vector-typed attribute (e.g. ast_node.children,
@@ -55,7 +55,7 @@ from dace_fortran.build_bridge import hb
 from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import install_auto_dim_symbols
-from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.context import Ctx
 from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
@@ -423,12 +423,12 @@ MULTI_FILE_PIPELINE = (
 # The bridge renames any matching Fortran identifier to ``program_<name>``
 # at the SDFG layer; the binding emitter restores the original name on
 # the Python wrapper.
-_RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re", "ln", "limit"})
+RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re", "ln", "limit"})
 
-_DACE_NAME_PREFIX = "program_"
+DACE_NAME_PREFIX = "program_"
 
 
-def _global_is_baked_constant(v: VarLike) -> bool:
+def global_is_baked_constant(v: VarLike) -> bool:
     """Mirror of the ``hlfir-preserve-mutable-globals`` rule on the
     Python side.  A module-level Fortran global is "baked" (becomes a
     compile-time constant in the SDFG) iff the caller has no symbol to
@@ -513,14 +513,14 @@ def _rename_reserved_collisions(sdfg: SDFG) -> dict:
     """
     renames = {}
     for name in list(sdfg.arrays.keys()) + list(sdfg.symbols.keys()):
-        if name in _RESERVED_DACE_NAMES:
-            renames[name] = _DACE_NAME_PREFIX + name
+        if name in RESERVED_DACE_NAMES:
+            renames[name] = DACE_NAME_PREFIX + name
     for old, new in renames.items():
         sdfg.replace(old, new)
     return renames
 
 
-def _demangle_fortran_proc(sym: str) -> str:
+def demangle_fortran_proc(sym: str) -> str:
     """Plain Fortran procedure name from a flang-mangled func symbol.
 
     ``_QP<name>`` (free procedure) and ``_QM<mod>P<name>`` (module
@@ -536,7 +536,7 @@ def _demangle_fortran_proc(sym: str) -> str:
     return sym[p + 1:] if p > 1 else sym
 
 
-def _module_of_fortran_sym(sym: str) -> str | None:
+def module_of_fortran_sym(sym: str) -> str | None:
     """Module name from a flang module-procedure symbol
     ``_QM<mod>[P|F]<proc>``, or ``None`` for a free procedure / non-mangled
     name.  flang lower-cases identifiers, so the first ``P`` / ``F`` in the
@@ -570,14 +570,14 @@ def _resolve_entry_symbol(module: HlfirModule, entry: str) -> str:
     want_mod_opt, want_proc = split_qualified_entry(entry)
     funcs = list(module.list_functions())
     matches = [
-        s for s in funcs if _demangle_fortran_proc(s) == want_proc and (
-            want_mod_opt is None or _module_of_fortran_sym(s) == want_mod_opt)
+        s for s in funcs
+        if demangle_fortran_proc(s) == want_proc and (want_mod_opt is None or module_of_fortran_sym(s) == want_mod_opt)
     ]
     if len(matches) == 1:
         return matches[0]
     if not matches:
         raise RuntimeError(f"entry '{entry}': no Fortran procedure of that name in the module; "
-                           f"available: {sorted(set(_demangle_fortran_proc(s) for s in funcs))}")
+                           f"available: {sorted(set(demangle_fortran_proc(s) for s in funcs))}")
     raise RuntimeError(f"entry '{entry}' is ambiguous -- {len(matches)} procedures match "
                        f"({matches}); qualify it as module::proc or pass the mangled symbol")
 
@@ -919,7 +919,7 @@ class SDFGBuilder:
         # the source buffer) and the ``acc`` factory adds the per-state
         # linking memlets lazily on first access, so reads/writes hit
         # the source storage directly.
-        ctx = _Ctx(sdfg, self)
+        ctx = Ctx(sdfg, self)
         # Stamp array-element value-symbols (``__sym_<arr>_<idx>``, minted when
         # a runtime-indexed element like ``nrdmax(jg)`` is used as a symbol --
         # e.g. it sizes an array) FIRST, on the first interstate edge out of an
@@ -936,7 +936,7 @@ class SDFGBuilder:
         # the body runs.  Read-only module data / PARAMETERs stay in the
         # constant pool (see _register_constants).
         self._seed_written_inits(ctx, sdfg)
-        self._emit(ctx, self.ast, sdfg)
+        self.emit_nodes(ctx, self.ast, sdfg)
         ctx.flush(self)
         # User-source identifiers that collide with sympy module-level
         # names (``test`` / ``doctest`` are ``LazyFunction`` attributes
@@ -1246,7 +1246,7 @@ class SDFGBuilder:
             # global is a caller-overridable default (LU ``dt``, a
             # module lookup table the caller may override) and must
             # surface as a kwarg, not as a baked constant.
-            if not _global_is_baked_constant(v):
+            if not global_is_baked_constant(v):
                 continue
             if v.fortran_name not in sdfg.arrays:
                 continue
@@ -1278,7 +1278,7 @@ class SDFGBuilder:
                 arr = arr.reshape(shape, order='C')
             sdfg.add_constant(v.fortran_name, arr, desc)
 
-    def _seed_written_inits(self, ctx: _Ctx, sdfg: SDFG) -> None:
+    def _seed_written_inits(self, ctx: Ctx, sdfg: SDFG) -> None:
         """Seed globals the kernel WRITES that carry an init value
         (``is_written`` + ``const_data``) with that value at SDFG entry.
 
@@ -1348,7 +1348,7 @@ class SDFGBuilder:
         sdfg.add_edge(ctx.cur, nxt, edge)
         ctx.cur = nxt
 
-    def _seed_value_symbols(self, ctx: _Ctx, sdfg: SDFG) -> None:
+    def _seed_value_symbols(self, ctx: Ctx, sdfg: SDFG) -> None:
         """Stamp each array-element value-symbol (``__sym_<arr>_<idx>``, minted
         when a runtime-indexed element like ``nrdmax(jg)`` is used as a symbol)
         from its element read, so shapes and memlets referencing the symbol
@@ -1921,7 +1921,7 @@ class SDFGBuilder:
                            f'\n\n{hint}')
 
     def nid(self) -> int:
-        """Globally unique integer.  Shared across ``_Ctx`` instances so
+        """Globally unique integer.  Shared across ``Ctx`` instances so
         loop variable names (``jk_0``, ``jc_1``, ``jk_2``, ...) never
         collide.
         """
@@ -1952,7 +1952,7 @@ class SDFGBuilder:
         "symbol_init": emit_symbol_init,
     }
 
-    def _emit(self, ctx: _Ctx, nodes: Sequence[NodeLike], region: ControlFlowRegion) -> None:
+    def emit_nodes(self, ctx: Ctx, nodes: Sequence[NodeLike], region: ControlFlowRegion) -> None:
         """Recursive dispatcher  --  maps each ASTNode.kind to its emitter."""
         for n in nodes:
             fn = self._EMIT_DISPATCH.get(n.kind)
@@ -1962,11 +1962,11 @@ class SDFGBuilder:
             # an unregistered callee, a CPP tasklet for one registered
             # via ``dace_fortran.external``.
 
-    # Scalar-assign is called from _Ctx.flush; keep it as a method on the
+    # Scalar-assign is called from Ctx.flush; keep it as a method on the
     # builder for that caller's convenience.
     def emit_scalar_assign(self, state: SDFGState, target: str, value: str) -> None:
         """Emit ``target = value`` as a scalar assignment in ``state``
-        (method form so ``_Ctx.flush`` can call it on the builder)."""
+        (method form so ``Ctx.flush`` can call it on the builder)."""
         emit_scalar_assign(self, state, target, value)
 
 

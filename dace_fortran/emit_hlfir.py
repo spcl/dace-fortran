@@ -88,7 +88,7 @@ def _topo_order(sources: Sequence[Path]) -> List[Path]:
     return order
 
 
-def _parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
+def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
     """Return ``[(source_path, include_dirs, cpp_defines), ...]``
     in the order cmake / ninja recorded -- they topo-sort Fortran
     via the same scanner the regular build uses, so reusing that
@@ -394,7 +394,7 @@ def emit(*,
         emitted.append(out_dir / f"{src.stem}.hlfir")
     # 2. project sources.
     if compile_commands is not None:
-        parsed = _parse_compile_commands(Path(compile_commands))
+        parsed = parse_compile_commands(Path(compile_commands))
         if entry is not None:
             # Accept a plain Fortran name / ``module::proc`` / a mangled
             # symbol; keep ``entry`` plain and use its enclosing module

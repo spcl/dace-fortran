@@ -343,11 +343,11 @@ def _reserved_rewrite(name: str) -> str:
     """Map a single identifier to its ``program_<name>`` form when it
     collides with a sympy attribute (``im`` -> ``sympy.im`` is a
     ``FunctionClass``; arithmetic against a ``Symbol`` then fails).
-    See ``builder.__init__._RESERVED_DACE_NAMES`` for the full set.
+    See ``builder.__init__.RESERVED_DACE_NAMES`` for the full set.
     Imported lazily to avoid a circular import at module load."""
-    from dace_fortran.builder import _RESERVED_DACE_NAMES, _DACE_NAME_PREFIX
-    if name in _RESERVED_DACE_NAMES:
-        return _DACE_NAME_PREFIX + name
+    from dace_fortran.builder import RESERVED_DACE_NAMES, DACE_NAME_PREFIX
+    if name in RESERVED_DACE_NAMES:
+        return DACE_NAME_PREFIX + name
     return name
 
 

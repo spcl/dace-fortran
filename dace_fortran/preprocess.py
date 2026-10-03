@@ -1201,12 +1201,12 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
     return "".join(out), enum_maps
 
 
-def _fparser_merge(source: str,
-                   *,
-                   search_dirs: Sequence[str | Path] = (),
-                   entry: Optional[str] = None,
-                   external_names: Iterable[str] = (),
-                   keep_acc_directives: bool = False) -> str:
+def fparser_merge(source: str,
+                  *,
+                  search_dirs: Sequence[str | Path] = (),
+                  entry: Optional[str] = None,
+                  external_names: Iterable[str] = (),
+                  keep_acc_directives: bool = False) -> str:
     """Single-TU merge via the fparser inliner engine (opt-in via
     ``merge_engine="fparser"``; the regex splicer stays default).
 
@@ -1272,7 +1272,7 @@ def preprocess_fortran_source(source: str,
 
     1. ``merge_used_modules`` (if ``merge``) -- inline ``USE``-d modules into
        one TU.  ``merge_engine="fparser"`` routes through
-       :func:`_fparser_merge` instead (also desugars/prunes; ``merge_entry``
+       :func:`fparser_merge` instead (also desugars/prunes; ``merge_entry``
        scopes its pruning, ignored by the regex engine).
     2. ``strip_openmp_directives`` -- drop OpenMP/OpenACC sentinels + the
        ICON include (bridge runs no cpp, no ``-fopenmp``).
@@ -1293,11 +1293,11 @@ def preprocess_fortran_source(source: str,
     """
     if merge:
         if merge_engine == "fparser":
-            source = _fparser_merge(source,
-                                    search_dirs=search_dirs,
-                                    entry=merge_entry,
-                                    external_names=external_names,
-                                    keep_acc_directives=keep_acc_directives)
+            source = fparser_merge(source,
+                                   search_dirs=search_dirs,
+                                   entry=merge_entry,
+                                   external_names=external_names,
+                                   keep_acc_directives=keep_acc_directives)
         elif merge_engine == "regex":
             source = merge_used_modules(source, search_dirs=search_dirs, do_not_emit=external_names)
         else:

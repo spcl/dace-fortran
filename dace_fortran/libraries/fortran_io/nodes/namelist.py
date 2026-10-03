@@ -15,7 +15,7 @@ from dace.sdfg import nodes
 from dace.transformation.transformation import ExpandTransformation
 
 from .node import FortranIONode, fio_type
-from .write import _c_string
+from .write import c_string
 from .. import environments
 from typing import Any, Sequence
 
@@ -29,18 +29,18 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
 
     @staticmethod
     def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
-        items = node._ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
+        items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
         if len(node.members) != len(items):
             raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
                              f"for {len(items)} connected outputs")
-        path, group = _c_string(node.filename), _c_string(node.group)
+        path, group = c_string(node.filename), c_string(node.group)
         lines = [
             f'int _h = dace_nml_open("{path}", {len(node.filename.encode())}, '
             f'"{group}", {len(node.group.encode())});'
         ]
         for (conn, desc, count, is_value), member in zip(items, node.members):
             suffix, ctype = fio_type(desc.dtype)
-            name_arg = f'"{_c_string(member)}", {len(member.encode())}'
+            name_arg = f'"{c_string(member)}", {len(member.encode())}'
             if is_value:
                 lines.append(f'dace_nml_get_{suffix}(_h, {name_arg}, ({ctype} *)&{conn});')
             else:

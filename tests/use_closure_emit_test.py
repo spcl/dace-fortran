@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from _util import have_flang
-from dace_fortran.emit_hlfir import (_entry_module, _parse_compile_commands, _select_use_closure, emit)
+from dace_fortran.emit_hlfir import (_entry_module, parse_compile_commands, _select_use_closure, emit)
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -55,7 +55,7 @@ def test_parse_compile_commands_skips_missing_sources(tmp_path):
             "command": f"flang-new-21 -c {p}",
             "file": str(p)
         } for p in (real, gone)]))
-    parsed = _parse_compile_commands(cc)
+    parsed = parse_compile_commands(cc)
     assert [t[0] for t in parsed] == [real]  # gone dropped
 
 

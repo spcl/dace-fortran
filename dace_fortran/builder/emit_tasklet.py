@@ -81,7 +81,7 @@ def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tupl
     return src, src_subset, view_subset
 
 
-def _ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_node: AccessNode, target: str) -> None:
+def ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_node: AccessNode, target: str) -> None:
     """Add the missing view -> source writeback link when a fresh write-side
     access node is created for a view alias (else ``get_view_edge`` sees no
     edge and validation fails).  Two rules keep it happy: use a FRESH source
@@ -100,9 +100,9 @@ def _ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_no
     state.add_edge(write_node, None, src_node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
-def _ensure_view_read_link(builder: SDFGBuilder, state: SDFGState, read_node: AccessNode, target: str) -> None:
+def ensure_view_read_link(builder: SDFGBuilder, state: SDFGState, read_node: AccessNode, target: str) -> None:
     """Install the source -> view linking memlet on a GIVEN read node of View
-    ``target`` (read-direction counterpart of ``_ensure_view_writeback_link``).
+    ``target`` (read-direction counterpart of ``ensure_view_writeback_link``).
     Needed when a library node's input is a View (e.g. in-place FFT over
     ``bounds_remap_view``): sharing ``acc()``'s cached read node with the
     matching write would self-cycle, so this uses a FRESH node on both ends."""
@@ -299,7 +299,7 @@ def emit_tasklet(builder: SDFGBuilder,
         cached_has_readers = state.out_degree(cache[eff_target]) > 0
     # View-edge rule: READ links source->view (``acc()``'s edge), WRITE links
     # view->source (writeback edge).  A WRITE to a View must go through
-    # ``_ensure_view_writeback_link``, not ``acc()`` -- else the write never
+    # ``ensure_view_writeback_link``, not ``acc()`` -- else the write never
     # propagates to the parent (parent looks uninitialised).  Covers the
     # pure-write case; self-update/cached-reader branch above handles RMW.
     v_eff = builder.arrays.get(eff_target)
@@ -308,7 +308,7 @@ def emit_tasklet(builder: SDFGBuilder,
         w = state.add_access(eff_target)
         if cache is not None:
             cache[eff_target] = w
-        _ensure_view_writeback_link(builder, state, w, eff_target)
+        ensure_view_writeback_link(builder, state, w, eff_target)
     else:
         w = acc(builder, state, eff_target)
 
@@ -386,7 +386,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
                 cache = builder.access_caches.get(state)
                 if cache is not None:
                     cache[target] = write
-                _ensure_view_writeback_link(builder, state, write, target)
+                ensure_view_writeback_link(builder, state, write, target)
                 subset = ",".join(f"0:{s}" for s in src_var.shape_symbols)
                 state.add_edge(read, None, write, None, Memlet(f"{src_name}[{subset}]"))
                 return
@@ -407,7 +407,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
             cache = builder.access_caches.get(state)
             if cache is not None:
                 cache[target] = w
-            _ensure_view_writeback_link(builder, state, w, target)
+            ensure_view_writeback_link(builder, state, w, target)
             state.add_mapped_tasklet(
                 name=f"set_{target}",
                 map_ranges=ranges,
@@ -458,7 +458,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         a = state.add_access(target)
         if cache is not None:
             cache[target] = a
-        _ensure_view_writeback_link(builder, state, a, target)
+        ensure_view_writeback_link(builder, state, a, target)
     else:
         a = acc(builder, state, target)
     state.add_edge(t, '_out', a, None, Memlet(data=target, subset='0'))
@@ -483,7 +483,7 @@ def emit_complex_component_assign(builder: SDFGBuilder,
     ``qg(2,ngy)`` aliasing ``qgm(1,ijh)``), registered as a SAME-dtype COMPLEX
     View.  Staged RMW: read the complex value, set component ``c`` (1=real,
     else imag) to the rhs (``qg`` reads replaced by CURRENT component
-    ``_cur``), write back via ``_ensure_view_writeback_link``.  Other rhs reads
+    ``_cur``), write back via ``ensure_view_writeback_link``.  Other rhs reads
     wire as ordinary per-occurrence connectors like ``emit_tasklet``."""
     indirect_syms = indirect_syms or {}
     name = node.target  # the COMPLEX view
@@ -556,7 +556,7 @@ def emit_complex_component_assign(builder: SDFGBuilder,
         r = acc(builder, state, sc)
         state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=sc, subset="0"))
     # Fresh write node so ``view_read -> tasklet -> view_write`` is a clean RMW
-    # chain; ``_ensure_view_writeback_link`` wires the view -> source direction.
+    # chain; ``ensure_view_writeback_link`` wires the view -> source direction.
     wz = state.add_access(name)
     state.add_edge(t, '_out_z', wz, None, Memlet(f"{name}[{elem_sub}]"))
-    _ensure_view_writeback_link(builder, state, wz, name)
+    ensure_view_writeback_link(builder, state, wz, name)

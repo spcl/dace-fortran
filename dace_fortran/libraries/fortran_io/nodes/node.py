@@ -37,8 +37,8 @@ class FortranIONode(nodes.LibraryNode):
     def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 
-    def _ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str,
-                       edges_in: bool) -> List[Tuple[str, data.Data, str, bool]]:
+    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str,
+                      edges_in: bool) -> List[Tuple[str, data.Data, str, bool]]:
         """Resolve the connected I/O items in connector order, as ``(connector,
         descriptor, count, is_value)``.  ``is_value`` marks a scalar/single-element
         connector (emitted by value, so the call site takes its address)."""

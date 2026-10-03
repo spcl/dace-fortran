@@ -50,7 +50,7 @@ from dace_fortran.bindings.flatten_plan import (
 from dace_fortran.bindings.fortran_interface import DerivedType, OriginalArg, OriginalInterface
 from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 from dace_fortran.bindings.loop_copy import (
-    _fortran_type,
+    fortran_scalar_type,
     render_alias_calls,
     render_aos_alloc_pack_in,
     render_aos_alloc_pack_out,
@@ -383,7 +383,7 @@ def build_wrapper_head(frozen: FrozenSignature,
     max_loop_rank = 0
     for entry in live_entries(frozen, plan):
         r = entry.recipe
-        ftype = _fortran_type(r.scratch_dtype)
+        ftype = fortran_scalar_type(r.scratch_dtype)
         # Rank-0 member takes no array spec -- ``real :: x()`` is invalid Fortran.
         shape_dims = ("(" + ", ".join(":" for _ in range(r.rank)) + ")") if r.rank > 0 else ""
         # LOGICAL(KIND=N>1) member can't alias directly: c_loc+c_f_pointer as
@@ -401,7 +401,7 @@ def build_wrapper_head(frozen: FrozenSignature,
                 scratch_lines.append(f"    {ftype}, allocatable, target :: {flat}{shape_dims}")
 
     for dt in sorted(guard_scratch_dtypes):
-        flat_ptr_lines.append(f"    {_fortran_type(dt)}, target :: {_presence_scratch_name(dt)}(1)")
+        flat_ptr_lines.append(f"    {fortran_scalar_type(dt)}, target :: {_presence_scratch_name(dt)}(1)")
 
     # A free symbol that's also a frozen arg must use that arg's C type (e.g.
     # int64 extents) -- a hardcoded integer(c_int) local mismatches the bind(c) dummy.

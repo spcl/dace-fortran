@@ -268,7 +268,7 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
         while cmod and not isinstance(cmod, (f03.Module, f03.Main_Program)):
             cmod = cmod.parent
         if cmod:
-            stmt, _, _, _ = utils._get_module_or_program_parts(cmod)
+            stmt, _, _, _ = utils.get_module_or_program_parts(cmod)
             cmod = ast_utils.singular(ast_utils.children_of_type(stmt, f03.Name)).string.lower()
         else:
             # If not in a module/main program, it must be a nested subprogram.
@@ -583,7 +583,7 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
             while par and isinstance(par.parent, (f03.Part_Ref, f03.Data_Ref)):
                 par = par.parent
             scope_spec = analysis.search_scope_spec(par)
-            root, _, _ = analysis._dataref_root(par, scope_spec, alias_map)
+            root, _, _ = analysis.dataref_root(par, scope_spec, alias_map)
             if root is not nm:
                 continue
         local_spec = analysis.search_real_local_alias_spec(nm, alias_map)

@@ -30,7 +30,7 @@ from dace_fortran.builder.access import (
     resolve_object_member,
     resolve_object_member_expr,
 )
-from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.context import Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth, is_character_data
 from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_complex_component_assign, emit_tasklet
 from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticNode, SyntheticVar
@@ -156,7 +156,7 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
     return out
 
 
-def emit_assign(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_assign(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Scalar or symbol assignment.
 
     Routes by target kind:
@@ -324,7 +324,7 @@ def emit_assign(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlF
     ctx.pending.append((n.target, n.expr))
 
 
-def emit_symbol_init(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_symbol_init(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Stage a position-array -> SDFG-symbol read at SDFG entry.
 
     The bridge mints one of these for every ``arr(consts)`` it sees used
@@ -486,7 +486,7 @@ def cond_reuse_key(builder: SDFGBuilder, cond: str) -> str | None:
     return cond
 
 
-def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: _Ctx) -> str:
+def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: Ctx) -> str:
     """Rewrite bare references to scalar ``(1,)``-shape SDFG data
     descriptors as ``name[0]``.
 
@@ -547,7 +547,7 @@ def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: _Ctx) -> str:
     return "".join(out)
 
 
-def _hoist_bound_to_symbol(ctx: _Ctx, region: ControlFlowRegion, builder: SDFGBuilder, expr_str: str,
+def _hoist_bound_to_symbol(ctx: Ctx, region: ControlFlowRegion, builder: SDFGBuilder, expr_str: str,
                            prefix: str) -> str | None:
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
@@ -689,7 +689,7 @@ def _scalar_reassign_in_state(state: SDFGState, a: NodeLike, builder: SDFGBuilde
 
 
 def emit_loop(builder: SDFGBuilder,
-              ctx: '_Ctx',
+              ctx: 'Ctx',
               n: NodeLike,
               region: ControlFlowRegion,
               iter_map: dict[str, str] | None = None) -> None:
@@ -813,14 +813,14 @@ def emit_loop(builder: SDFGBuilder,
     has_structured = any(c.kind not in ("loop", "assign") for c in children)
 
     if has_structured:
-        inner_ctx = _Ctx(ctx.sdfg, builder)
+        inner_ctx = Ctx(ctx.sdfg, builder)
         inner_ctx.iter_map = iter_map
         body_start = loop.add_state(f"body_{builder.nid()}", is_start_block=True)
         inner_ctx.cur = body_start
-        builder._emit(inner_ctx, list(children), loop)
+        builder.emit_nodes(inner_ctx, list(children), loop)
         inner_ctx.flush(builder, loop)
     elif child_loops:
-        inner_ctx = _Ctx(ctx.sdfg, builder)
+        inner_ctx = Ctx(ctx.sdfg, builder)
         inner_ctx.iter_map = iter_map
         for c in children:
             if c.kind == "loop":
@@ -1009,7 +1009,7 @@ def emit_loop(builder: SDFGBuilder,
                 _emit_one(prev, a, idx)
 
 
-def _stage_cond_scalar(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, pre: SDFGState, sym: str, cond: str,
+def _stage_cond_scalar(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, pre: SDFGState, sym: str, cond: str,
                        cond_accesses: list[AccessLike]) -> tuple[SDFGState, str]:
     """Compute an array-dependent control-flow condition into a SCALAR
     transient via a tasklet; return ``(new_pre_state, scalar_name)``.
@@ -1034,7 +1034,7 @@ def _stage_cond_scalar(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegio
     return nxt, sym
 
 
-def emit_while(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_while(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``DO WHILE``  --  lifted by ``lift-cf-to-scf`` into scf.while
     and extracted as ``kind="while"``.  Emit a DaCe LoopRegion whose
     condition is ``True`` (the bridge's faithful walker folds any
@@ -1103,13 +1103,13 @@ def emit_while(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFl
     ctx.cur = loop
 
     body_start = loop.add_state(f"while_body_{builder.nid()}", is_start_block=True)
-    inner_ctx = _Ctx(ctx.sdfg, builder)
+    inner_ctx = Ctx(ctx.sdfg, builder)
     inner_ctx.cur = body_start
-    builder._emit(inner_ctx, list(n.children), loop)
+    builder.emit_nodes(inner_ctx, list(n.children), loop)
     inner_ctx.flush(builder, loop)
 
 
-def _prepare_cond_expr(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegion, pre: SDFGState,
+def _prepare_cond_expr(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, pre: SDFGState,
                        n: NodeLike) -> tuple[SDFGState, str]:
     """Return ``(pre_state, cond_expr)`` for a single ``conditional`` branch.
 
@@ -1174,7 +1174,7 @@ def _prepare_cond_expr(builder: SDFGBuilder, ctx: _Ctx, region: ControlFlowRegio
     return pre, cond
 
 
-def emit_cond(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_cond(builder: SDFGBuilder, ctx: 'Ctx', n: NodeLike, region: ControlFlowRegion) -> None:
     """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.
@@ -1205,9 +1205,9 @@ def emit_cond(builder: SDFGBuilder, ctx: '_Ctx', n: NodeLike, region: ControlFlo
 
     def _populate_branch(label: str, children: list) -> ControlFlowRegion:
         branch = ControlFlowRegion(label, sdfg=ctx.sdfg)
-        inner = _Ctx(ctx.sdfg, builder)
+        inner = Ctx(ctx.sdfg, builder)
         inner.iter_map = ctx.iter_map
-        builder._emit(inner, children, branch)
+        builder.emit_nodes(inner, children, branch)
         inner.flush(builder, branch)
         # An empty branch (e.g. the EXIT arm of a Flang-lowered DO+EXIT)
         # still needs a start block, otherwise the validator complains.

@@ -23,7 +23,7 @@ from dace_fortran.builder.records import NodeLike, SyntheticVar, VarLike
 if TYPE_CHECKING:
     from dace.sdfg.state import ControlFlowRegion
     from dace_fortran.builder import SDFGBuilder
-    from dace_fortran.builder.context import _Ctx
+    from dace_fortran.builder.context import Ctx
 
 #: A pointer-ASSOCIATION right-hand side: a bare identifier or a flattened
 #: member chain (``patch_2d % edges % in_domain`` -> ``patch_2d_edges_in_domain``),
@@ -753,7 +753,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # descriptor (handled per-access by the ``re``/``im`` mask), so the
             # view is plain ``complex`` of ``complex`` -- expressible, unlike the
             # bridge's invalid float-of-complex view.  The source->view linking
-            # memlet (``acc`` / ``_ensure_view_writeback_link``) carries the
+            # memlet (``acc`` / ``ensure_view_writeback_link``) carries the
             # slab; ``qg(c, i)`` lowers to ``re/im(qg[i-1])`` in emit.
             from dace_fortran.builder.access import cc_alias_view_spec
             spec = cc_alias_view_spec(builder, v.fortran_name)
@@ -915,8 +915,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # transient backed by ``add_constant`` data; every other
             # intent-empty global is a caller kwarg (non-transient
             # (1,)-Array surfacing on the SDFG signature).
-            from dace_fortran.builder import _global_is_baked_constant
-            transient = (v.intent == '' and _global_is_baked_constant(v))
+            from dace_fortran.builder import global_is_baked_constant
+            transient = (v.intent == '' and global_is_baked_constant(v))
             # An inlined-callee dummy bound to an unrepresentable struct-
             # component section (AoS-global ``becxx(ikq)%k``) is the kernel's
             # OWN internal data, never a true external input -- register it as a
@@ -1031,7 +1031,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=False)
 
 
-def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], dtype: str, ctx: _Ctx) -> None:
+def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], dtype: str, ctx: Ctx) -> None:
     """Register a bridge-synthesised transient array on the SDFG and in
     ``builder.arrays``.  Used by the ``kind="declare_transient"`` AST
     handler: when the bridge emits a per-element loop that fills a
@@ -1103,7 +1103,7 @@ def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], d
         builder.offset_values[sym_name] = 1
 
 
-def emit_declare_transient(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_declare_transient(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Handler for ASTNode kind=\"declare_transient\".
 
     Reads ``n.target`` (name), ``n.expr`` (dtype as string), and shape
@@ -1135,7 +1135,7 @@ def emit_declare_transient(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region:
     declare_synth_array(builder, n.target, resolved, n.expr or "int32", ctx)
 
 
-def auto_declare_synth(builder: SDFGBuilder, name: str, ctx: _Ctx) -> None:
+def auto_declare_synth(builder: SDFGBuilder, name: str, ctx: Ctx) -> None:
     """Lazy-declare a synthetic scalar minted by the bridge's faithful
     scf.while walker.  ``__sc_N`` names materialise ``scf.if -> T``
     results; ``__al_N`` names come from bare ``fir.alloca`` ops that

@@ -15,7 +15,7 @@ from dace.sdfg import nodes
 from dace.transformation.transformation import ExpandTransformation
 
 from .node import FortranIONode, fio_type
-from .write import _c_string
+from .write import c_string
 from .. import environments
 from typing import Any
 
@@ -29,8 +29,8 @@ class ExpandReadFortranIO(ExpandTransformation):
 
     @staticmethod
     def expansion(node: Read, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
-        items = node._ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
-        path = _c_string(node.filename)
+        items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
+        path = c_string(node.filename)
         lines = [f'int _u = dace_fio_open("{path}", {len(node.filename.encode())}, 0);']
         for conn, desc, count, is_value in items:
             suffix, ctype = fio_type(desc.dtype)
