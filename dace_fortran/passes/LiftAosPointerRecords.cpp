@@ -36,6 +36,10 @@
 //   * Before each ``func.return`` the matching copy-out loop writes
 //     ``q_<m>(c, ...)`` back to ``target_c`` so the original sees any
 //     in-body updates the alias made.
+//   * Between the rebind and that copy-out the concat is the live copy, so a
+//     direct access to ``target_c`` there is redirected to it: an element
+//     access ``target_c(i, j)`` becomes ``q_<m>(c, i, j)``; any other use
+//     (whole-array, call) is bracketed by a copy-out before and a copy-in after.
 //
 // Pipeline placement: BEFORE ``hlfir-flatten-structs`` so flatten
 // never sees the unsupported shape, and BEFORE ``hlfir-rewrite-
@@ -788,6 +792,105 @@ void eraseDeadAosChain(Candidate& cand) {
 }
 
 // --------------------------------------------------------------------------
+// Direct accesses to a rebind target while its alias lives in the concat.
+// --------------------------------------------------------------------------
+
+/// The accesses to one rebind's target between the rebind and the end of the rebind's block, the window in which
+/// the concat holds the live values.
+struct TargetWindow {
+  /// Element designates ``target(i, j)``, redirected to ``concat(c, i, j)``.
+  llvm::SmallVector<hlfir::DesignateOp, 8> elements;
+  /// Any other access; the concat and the target are synchronised around it.
+  llvm::SmallVector<mlir::Operation*, 4> others;
+  /// An access that neither redirect nor synchronisation can serve.
+  mlir::Operation* unsupported = nullptr;
+};
+
+/// True when a designate selects one element by scalar subscripts alone: no section, component or substring.
+bool isElementDesignate(hlfir::DesignateOp dg) {
+  if (dg.getComponent().has_value() || !dg.getTypeparams().empty()) return false;
+  for (bool const triplet : dg.getIsTriplet())
+    if (triplet) return false;
+  return mlir::isa<fir::ReferenceType>(dg.getResult().getType());
+}
+
+/// True when the declare maps Fortran subscripts one-to-one to the concat's 1-based inner subscripts, i.e. it has
+/// no lower-bound shift.
+bool hasUnitLowerBounds(hlfir::DeclareOp decl) {
+  mlir::Value shape = decl.getShape();
+  return !shape || mlir::isa_and_nonnull<fir::ShapeOp>(shape.getDefiningOp());
+}
+
+/// Collect the accesses to ``r.targetDecl`` that follow the rebind store in its block, looking through the
+/// re-declares, reboxes and converts that alias it (an inlined callee's dummy argument).  Call BEFORE the store is
+/// erased.
+TargetWindow collectTargetWindow(const Rebind& r) {
+  TargetWindow w;
+  mlir::Block* block = r.store->getBlock();
+  auto inWindow = [&](mlir::Operation* user) {
+    auto* anc = block->findAncestorOpInBlock(*user);
+    return anc && r.store->isBeforeInBlock(anc);
+  };
+  llvm::SmallVector<mlir::Value, 8> roots;
+  llvm::SmallPtrSet<mlir::Operation*, 16> seen;
+  // Whether an element designate on ``root`` subscripts like the target: every alias on the way must keep its
+  // lower bounds.
+  llvm::DenseMap<mlir::Value, bool> unitBounds;
+  auto addRoots = [&](mlir::Operation* op, bool unit) {
+    for (auto res : op->getResults()) {
+      roots.push_back(res);
+      unitBounds[res] = unit;
+    }
+  };
+  addRoots(r.targetDecl, hasUnitLowerBounds(r.targetDecl));
+  for (size_t i = 0; i < roots.size(); ++i) {
+    mlir::Value const root = roots[i];
+    bool const unit = unitBounds[root];
+    for (auto* u : root.getUsers()) {
+      if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+        if (seen.insert(rd).second) addRoots(rd, unit && hasUnitLowerBounds(rd));
+      } else if (auto rb = mlir::dyn_cast<fir::ReboxOp>(u)) {
+        if (seen.insert(rb).second) addRoots(rb, unit && !rb.getShape() && !rb.getSlice());
+      } else if (auto eb = mlir::dyn_cast<fir::EmboxOp>(u)) {
+        if (seen.insert(eb).second) addRoots(eb, unit && !eb.getSlice());
+      } else if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u)) {
+        if (seen.insert(cv).second) addRoots(cv, unit);
+      } else if (!inWindow(u) || mlir::isa<fir::BoxDimsOp>(u)) {
+        continue;  // outside the window, or a shape query: it never touches the data
+      } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+        if (dg.getMemref() != root) continue;  // a subscript operand, not the designated array
+        if (isElementDesignate(dg) && unit)
+          w.elements.push_back(dg);
+        else if (!w.unsupported)
+          w.unsupported = dg;  // a section aliases the target past this op
+      } else if (seen.insert(u).second) {
+        w.others.push_back(u);
+      }
+    }
+  }
+  return w;
+}
+
+/// Redirect and synchronise the window's accesses to the concat.  Call after the copy-in is emitted and before the
+/// final copy-out is.
+void applyTargetWindow(mlir::OpBuilder& b, const Rebind& r, const TargetWindow& w, hlfir::DeclareOp concatDecl,
+                       const InnerShape& shape) {
+  for (auto dg : w.elements) {
+    mlir::OpBuilder::InsertionGuard const g(b);
+    b.setInsertionPoint(dg);
+    auto outer = b.create<mlir::arith::ConstantOp>(dg.getLoc(), b.getIndexAttr(r.outerIdx)).getResult();
+    rewriteAccess(b, dg, outer, concatDecl);
+    dg.erase();
+  }
+  for (auto* op : w.others) {
+    // The op reads and may write the target itself: bring the target up to date first, the concat after.
+    emitCopyLoop(b, op->getLoc(), op, concatDecl, r.outerIdx, r.targetDecl, shape, /*directionCopyIn=*/false);
+    if (auto* next = op->getNextNode())
+      emitCopyLoop(b, op->getLoc(), next, concatDecl, r.outerIdx, r.targetDecl, shape, /*directionCopyIn=*/true);
+  }
+}
+
+// --------------------------------------------------------------------------
 // Pass.
 // --------------------------------------------------------------------------
 
@@ -805,20 +908,22 @@ struct LiftAosPointerRecordsPass
   void runOnOperation() override {
     auto module = getOperation();
     for (auto func : llvm::make_early_inc_range(module.getOps<mlir::func::FuncOp>())) {
-      processFunction(func);
+      if (!processFunction(func)) return signalPassFailure();
     }
   }
 
-  static void processFunction(mlir::func::FuncOp func) {
+  static bool processFunction(mlir::func::FuncOp func) {
     llvm::SmallVector<Candidate, 2> cands;
     func.walk([&](hlfir::DeclareOp d) {
       if (auto c = matchCandidate(d)) cands.push_back(*c);
     });
     int allocId = 0;
-    for (auto& c : cands) processCandidate(func, c, allocId);
+    for (auto& c : cands)
+      if (!processCandidate(func, c, allocId)) return false;
+    return true;
   }
 
-  static void processCandidate(mlir::func::FuncOp func, Candidate& cand, int& allocId) {
+  static bool processCandidate(mlir::func::FuncOp func, Candidate& cand, int& allocId) {
     llvm::SmallVector<Rebind, 8> rebinds;
     func.walk([&](fir::StoreOp store) {
       if (auto r = matchRebindStore(store, cand)) rebinds.push_back(*r);
@@ -852,7 +957,7 @@ struct LiftAosPointerRecordsPass
       }
       if (concatByMember.size() == cand.members.size()) rewriteAllAccesses(b, cand, concatByMember);
       eraseDeadAosChain(cand);
-      return;
+      return true;
     }
 
     // DYNAMIC-extent AoS (matchCandidate couldn't fold the outer extent): size
@@ -899,16 +1004,16 @@ struct LiftAosPointerRecordsPass
       auto memberKey = llvm::StringRef(r.memberName);
       if (shapeByMember.contains(memberKey)) continue;
       auto s = innerShapeFromTargetDecl(r.targetDecl);
-      if (!s) return;
+      if (!s) return true;
       shapeByMember.try_emplace(memberKey, *s);
     }
     // Validate cross-rebind shape consistency.
     for (auto& r : rebinds) {
       auto memberKey = llvm::StringRef(r.memberName);
       auto resolved = innerShapeFromTargetDecl(r.targetDecl);
-      if (!resolved) return;
+      if (!resolved) return true;
       auto& recorded = shapeByMember.find(memberKey)->second;
-      if (resolved->shape != recorded.shape) return;
+      if (resolved->shape != recorded.shape) return true;
     }
 
     mlir::OpBuilder b(func.getContext());
@@ -941,7 +1046,7 @@ struct LiftAosPointerRecordsPass
       auto sIt = shapeByMember.find(memberKey);
       if (sIt == shapeByMember.end()) continue;  // member never rebound
       auto declare = createConcatStorage(b, func.getLoc(), func, cand, spec, sIt->second, insertAfter, allocId++);
-      if (!declare) return;
+      if (!declare) return true;
       concatByMember[memberKey] = declare;
       insertAfter = declare.getOperation();
     }
@@ -950,18 +1055,35 @@ struct LiftAosPointerRecordsPass
     // rebind's enclosing BLOCK (for the matching copy-out) BEFORE erasing the
     // store so the pointer slot is no longer written.
     llvm::SmallVector<mlir::Block*, 4> rebindBlock(rebinds.size(), nullptr);
+    llvm::SmallVector<TargetWindow, 4> windows(rebinds.size());
     for (size_t i = 0; i < rebinds.size(); ++i) {
       auto& r = rebinds[i];
       auto it = concatByMember.find(r.memberName);
       if (it == concatByMember.end()) continue;
       auto& shape = shapeByMember.find(r.memberName)->second;
       rebindBlock[i] = r.store->getBlock();
+      windows[i] = collectTargetWindow(r);
+      if (windows[i].unsupported) {
+        windows[i].unsupported->emitError("hlfir-lift-aos-pointer-records: a section of the pointer target ``" +
+                                          r.targetDecl.getUniqName().str() + "`` is taken while ``" +
+                                          cand.aosDecl.getUniqName().str() + "(" + std::to_string(r.outerIdx) + ")%" +
+                                          r.memberName + "`` points at it; its values would be stale");
+        return false;
+      }
       emitCopyLoop(b, r.store.getLoc(), r.store, it->second, r.outerIdx, r.targetDecl, shape, /*directionCopyIn=*/true);
       r.store.erase();
     }
 
     // Rewrite access chains.
     rewriteAllAccesses(b, cand, concatByMember);
+
+    // Between a rebind and its copy-out the concat holds the live values, so route the target's own accesses there.
+    for (size_t i = 0; i < rebinds.size(); ++i) {
+      if (!rebindBlock[i]) continue;
+      auto& r = rebinds[i];
+      applyTargetWindow(b, r, windows[i], concatByMember.find(r.memberName)->second,
+                        shapeByMember.find(r.memberName)->second);
+    }
 
     // Copy-out: mirror copy-in, placed before the TERMINATOR of the rebind's own
     // block.  For a func-scope AoS that block is the entry block (terminator =
@@ -980,6 +1102,7 @@ struct LiftAosPointerRecordsPass
       emitCopyLoop(b, term->getLoc(), term, it->second, r.outerIdx, r.targetDecl, shape, /*directionCopyIn=*/false);
     }
     eraseDeadAosChain(cand);
+    return true;
   }
 };
 
