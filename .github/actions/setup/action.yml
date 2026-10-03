@@ -1,0 +1,85 @@
+name: dace-fortran toolchain
+description: LLVM/flang from apt.llvm.org, the Fortran/MPI/ICON build dependencies, the locked uv environment and the
+  HLFIR bridge (restored from the cache when its sources and the LLVM build are unchanged).
+
+inputs:
+  llvm:
+    description: LLVM major (21 or 22)
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - uses: astral-sh/setup-uv@v7
+    with:
+      python-version: '3.12'
+      enable-cache: true
+
+  - name: Install LLVM / MLIR / flang ${{ inputs.llvm }} and the Fortran toolchain
+    shell: bash
+    env:
+      V: ${{ inputs.llvm }}
+    run: |
+      # libflang-N-dev carries both the FIR/HLFIR static libraries the bridge links and the flang headers it includes.
+      wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+      sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$V main"
+      sudo apt-get update
+      sudo apt-get install -y \
+        llvm-$V-dev libmlir-$V-dev mlir-$V-tools libflang-$V-dev flang-$V clang-$V clang-tidy-$V \
+        build-essential cmake ninja-build gfortran libgomp1 libopenmpi-dev openmpi-bin \
+        libnetcdff-dev libnetcdf-dev libhdf5-dev libfftw3-dev libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
+        pkg-config perl bear autoconf automake m4 rsync zlib1g-dev cppcheck
+      echo "/usr/lib/llvm-$V/bin" >> "$GITHUB_PATH"
+      # The static-analysis checker and the MPI tests probe these names; packaging has dropped aliases before.
+      command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$V/bin/clang-tidy /usr/local/bin/clang-tidy
+      command -v flang-new-$V || sudo ln -sf /usr/lib/llvm-$V/bin/flang-$V /usr/local/bin/flang-new-$V
+      command -v mpif90 || sudo ln -sf "$(command -v mpifort)" /usr/local/bin/mpif90
+
+  - name: Install the locked Python environment
+    shell: bash
+    run: |
+      rm -f ~/.dace.conf
+      MPICC=mpicc uv sync --frozen --no-default-groups --group testing --group mpi
+      echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+  - name: Verify the toolchain
+    shell: bash
+    env:
+      V: ${{ inputs.llvm }}
+    run: |
+      # A missing tool must fail here, not turn its tests into silent skips.
+      missing=0
+      for t in flang-new-$V clang-$V gfortran gcc g++ make cmake ninja meson mpicc mpicxx mpifort mpif90 perl \
+               bear autoconf automake aclocal m4 rsync pkg-config cppcheck clang-tidy; do
+        command -v "$t" >/dev/null 2>&1 || { echo "MISS $t"; missing=1; }
+      done
+      test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h || { echo 'MISS mpif-config.h'; missing=1; }
+      python -c 'import numpy.f2py' || { echo 'MISS numpy.f2py'; missing=1; }
+      python -c "import dace; bt = dace.Config.get('compiler', 'build_type'); assert bt == 'Release', bt" || missing=1
+      echo "LLVM_FULL_VERSION=$(llvm-config-$V --version)" >> "$GITHUB_ENV"
+      echo "DACE_FORTRAN_BUILD_DIR=$RUNNER_TEMP/bridge" >> "$GITHUB_ENV"
+      exit $missing
+
+  - name: Restore the HLFIR bridge
+    id: bridge
+    uses: actions/cache/restore@v4
+    with:
+      path: ${{ runner.temp }}/bridge
+      key: bridge-${{ env.LLVM_FULL_VERSION }}-${{ hashFiles('dace_fortran/**/*.cpp', 'dace_fortran/**/*.h', 'dace_fortran/CMakeLists.txt', 'dace_fortran/build_bridge.py', 'uv.lock') }}
+
+  - name: Build the HLFIR bridge
+    shell: bash
+    run: |
+      # A restored .so is older than the checkout; the cache key already proves its sources unchanged.
+      if [ "${{ steps.bridge.outputs.cache-hit }}" = true ]; then
+        touch "$DACE_FORTRAN_BUILD_DIR"/hlfir_bridge*.so
+        ln -sf "$DACE_FORTRAN_BUILD_DIR"/hlfir_bridge*.so dace_fortran/
+      fi
+      python -c "import dace_fortran; dace_fortran.SDFGBuilder"  # builds only when stale
+
+  - name: Save the HLFIR bridge
+    if: ${{ steps.bridge.outputs.cache-hit != 'true' }}
+    uses: actions/cache/save@v4
+    with:
+      path: ${{ runner.temp }}/bridge
+      key: ${{ steps.bridge.outputs.cache-primary-key }}

@@ -2,396 +2,127 @@ name: Fortran Tests
 
 on:
   push:
-    branches: [ main, ci-fix ]
+    branches: [main]
   pull_request:
-    branches: [ main, ci-fix ]
+    branches: [main]
   merge_group:
-    branches: [ main, ci-fix ]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-  # Default-on oversubscribe so any ``mpirun`` invocation in this job
-  # (the explicit ``-m mpi`` step + anything a test launches itself)
-  # can map more ranks than GH-runner cores without ``--oversubscribe``
-  # on every command line.
+  # Single-node MPI: oversubscribe the runner's few cores, ob1 over shared memory, no hwloc GL / UCX probing (both
+  # known MPI_Init hangs on CI runners).
   OMPI_MCA_rmaps_base_oversubscribe: "1"
   PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-
-concurrency:
-  group: ${{github.workflow}}-${{github.ref}}
-  cancel-in-progress: true
+  OMPI_MCA_pml: "ob1"
+  OMPI_MCA_btl: "self,vader"
+  UCX_VFS_ENABLE: "n"
+  HWLOC_COMPONENTS: "-gl"
+  # Large generated stack arrays crash compiled SDFGs at the default stack size.
+  OMP_STACKSIZE: "64M"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  DACE_compiler_max_stack_array_size: "65536"
+  DACE_compiler_build_type: "Release"
 
 jobs:
   test-fortran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    # Four runners from one definition (shared setup, no duplication):
-    #   * ``fast``  -- the routine sweep: every test EXCEPT ``mpi``,
-    #                  ``long`` and ``integration`` (uploads coverage).
-    #                  Keeps PR feedback quick.
-    #   * ``heavy`` -- the ``long`` tests only: ICON built from source +
-    #                  the ICON-O fparser single-TU extractions.
-    #   * ``integration`` -- the ICON multi-node integration tests (per-call
-    #                  orig-vs-binding bit-exact, VERY SHORT run) PLUS the
-    #                  multi-rank ``mpi`` tests, run as SEPARATE steps.  Kept
-    #                  off fast/heavy so neither the quick PR sweep nor the
-    #                  ICON-from-source builds carry the mpirun-driven tests.
-    #   * ``e2e``   -- QE vexx + ICON atmosphere velocity_tendencies (BOTH
-    #                  __LOOP_EXCHANGE variants) through the FULL parallelization
-    #                  pipeline.  Each kernel is built and run TWICE, with the
-    #                  pipeline and without, so the lane pins the pre- vs
-    #                  post-optimize differential BIT-EXACTLY on seeded random
-    #                  inputs -- not just a 1e-11 match against the untouched
-    #                  gfortran/f2py reference.  Slow: an SDFG optimize plus an
-    #                  -O3 -march=native build per build, so it is kept off the
-    #                  quick PR sweep.
-    #                  Measured locally, both builds each: vexx 7:26, velocity
-    #                  4:52 for BOTH __LOOP_EXCHANGE variants -- ~13 min of work,
-    #                  which is why these three share one runner.
-    #   * ``e2e-cloudsc`` -- the same, for CloudSC alone.  Split off ``e2e``
-    #                  because CloudSC is the outlier: a ~20 min optimize plus an
-    #                  -O3 -march=native build of a single 25k-line translation
-    #                  unit, and the pre-optimize differential makes it TWO such
-    #                  builds (the unoptimized one is the EXPENSIVE half -- unfused,
-    #                  it hands gcc considerably more code).  An order of magnitude
-    #                  past the other three, so on one runner with them it does not
-    #                  fit the wall clock.
-    # Compiler memory on every e2e lane is bounded to roughly 6-9 GB by the
-    # ``--param ggc-*`` / ``max-inline-recursive-depth`` / ``max-gcse-memory`` set in
-    # ``tests/_util.py::BITEXACT_CPU_ARGS`` -- see the README's e2e runbook for why
-    # each one is there and why none of them perturbs the numerics.
+    # Lanes, each sized to stay under ~45 minutes with warm caches:
+    #   fast        every test outside the lanes below (uploads coverage)
+    #   e2e         the e2e pipeline tests except CloudSC, the multi-rank mpi tests, the integration tests
+    #   e2e-cloudsc CloudSC through the pipeline: two builds of a 25k-line translation unit
+    #   heavy-icon  tests that need ICON configured and built from source (both builds cached)
+    #   heavy-src   the remaining long tests, which read the ICON sources only
     strategy:
       fail-fast: false
       matrix:
-        # Both supported majors run the whole sweep and both block: the bridge claims to
-        # support 21 and 22, and a lane that cannot fail does not back that claim.  Any
-        # point release of either is accepted -- discovery reads the major alone.  Both
-        # stay on noble; 26.04 packages flang 22 but is a PREVIEW image, and noble-22 is
-        # a ROLLING apt channel, so a red 22 lane can mean the channel moved.
         llvm: ['21', '22']
-        suite: [fast, heavy, integration, e2e, e2e-cloudsc]
-    name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.suite }})
+        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-src]
+    name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    # The heavy suite builds ICON from source and runs the ~9 GB-peak
-    # fparser ocean extractions; the integration suite likewise builds ICON
-    # (same bear-wrapped configure + make) before its SHORT test run -- give
-    # both generous headroom.
-    # ``fast`` is the whole non-long unit sweep; it has grown to ~65-70 min of
-    # all-passing tests and was tripping the old 60 min wall at ~89% (a timeout,
-    # never a test failure), so give it 90 min of headroom.
-    # ``e2e`` gets the long budget too: CloudSC alone is a ~20 min SDFG optimize
-    # followed by an -O3 -march=native build of a single 25k-line translation unit.
-    # The llvm22 lane runs the same sweep ~3x slower (an apt-channel toolchain
-    # regression, still being attributed by ``--durations``); it needs the long
-    # budget until that is found, or it reports a timeout instead of a verdict.
-    timeout-minutes: ${{ (matrix.suite == 'fast' && matrix.llvm == '21') && 90 || 180 }}
+    # A cold ICON cache adds two ICON builds to heavy-icon.
+    timeout-minutes: ${{ matrix.lane == 'heavy-icon' && 150 || 75 }}
     env:
-      # Pins the bridge's flang discovery and names the apt packages / paths below.
       LLVM_VERSION: ${{ matrix.llvm }}
-      # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
-      # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
-      # hung) X display and block.  CPU/PCI topology -- all MPI needs --
-      # is unaffected.
-      HWLOC_COMPONENTS: "-gl"
-      # Anti-hang MPI transport pinning for the single-node GH runner: used by
-      # the ``integration`` suite's relocated ``-m mpi`` step (and any test
-      # that shells out to mpirun).  The ob1 PML over the shared-memory
-      # ``vader`` + ``self`` BTLs is the reliable single-node path -- it avoids
-      # UCX's FUSE/openib probing, a known MPI_Init hang source on CI.  Harmless
-      # on the non-MPI fast/heavy steps (the vars are simply unused there).
-      # ``MPI4PY_RC_INITIALIZE=0`` is deliberately NOT set: the mpi tests do
-      # ``from mpi4py import MPI; MPI.COMM_WORLD`` and rely on mpi4py's
-      # import-time MPI_Init.
-      OMPI_MCA_pml: "ob1"
-      OMPI_MCA_btl: "self,vader"
-      UCX_VFS_ENABLE: "n"
-      # Stack guard: the llvm22 fast lane crashes on large generated stack arrays
-      # (SIGSEGV in compiled_sdfg.fast_call). These match the FaCe General Tests fix.
-      OMP_STACKSIZE: "64M"
-      OMP_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      VECLIB_MAXIMUM_THREADS: "1"
-      NUMEXPR_NUM_THREADS: "1"
-      DACE_compiler_max_stack_array_size: "65536"
-      DACE_compiler_build_type: "Release"
+      ICON_BUILD: ${{ github.workspace }}/../icon_build/stock_cpu
+      PYTEST_OPTS: --maxfail=20 -p no:cacheprovider --tb=short --durations=30
     steps:
     - uses: actions/checkout@v4
+
+    - uses: ./.github/actions/setup
       with:
-        # Don't fetch submodules on the shared checkout: only the heavy suite
-        # needs the icon-model submodule (the fast lane's tests never touch it),
-        # so the fast lane skips the ICON clone entirely.  The heavy suite
-        # shallow + recursive checks it out in a dedicated step below.
-        submodules: false
+        llvm: ${{ matrix.llvm }}
 
-    - uses: astral-sh/setup-uv@v7
-      with:
-        python-version: '3.12'
-        enable-cache: true
-
-    - name: Install LLVM / MLIR / flang ${{ matrix.llvm }} + Fortran toolchain
+    - name: Check out the icon-model submodule
+      if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' }}
+      id: icon-src
       run: |
-        # The HLFIR bridge requires LLVM/flang 21 or 22 (flang-new -fc1
-        # -emit-hlfir).  libflang-$LLVM_VERSION-dev provides BOTH the FIR/HLFIR
-        # static libs the bridge links (libFIRTransforms.a,
-        # libFortranSupport.a, ...) AND the flang headers it #includes
-        # (flang/Optimizer/HLFIR/HLFIROps.h); without it CMake configures
-        # but the link fails.  Provenance verified via dpkg -S on a
-        # known-good local build; re-verified against the noble-22 Packages index.
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main"
-        sudo apt-get update
-        sudo apt-get install -y \
-          llvm-$LLVM_VERSION-dev libmlir-$LLVM_VERSION-dev mlir-$LLVM_VERSION-tools \
-          libflang-$LLVM_VERSION-dev flang-$LLVM_VERSION clang-$LLVM_VERSION \
-          build-essential cmake ninja-build gfortran libgomp1 \
-          libopenmpi-dev openmpi-bin \
-          libnetcdff-dev libnetcdf-dev libhdf5-dev \
-          libfftw3-dev \
-          libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
-          pkg-config perl python3 \
-          bear autoconf automake m4 rsync zlib1g-dev \
-          cppcheck clang-tidy-$LLVM_VERSION
-        # Static analysis of the C++ DaCe generates (tests/codegen_static_analysis_test.py).
-        # clang-tidy ships versioned from apt.llvm.org; the checker probes it by bare name.
-        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/clang-tidy /usr/local/bin/clang-tidy
-        # The ICON-integration tests configure + ``make`` the
-        # icon-model submodule on demand (the ``icon_build`` fixture).
-        # GRIB2/eccodes is DISABLED in that build (the dycore tests
-        # need only compiled ``.mod`` files, and eccodes' Fortran
-        # binding isn't shipped by stock ``libeccodes-dev``), so the
-        # libs above (netcdf-fortran, serial HDF5, fyaml, xml2,
-        # lapack/blas) are the full ICON-build dependency set.
-        # bear + autotools drive the tier-3 prebuilt-HLFIR autotools
-        # project (tests/prebuilt_hlfir/jacobi): bear -- make captures
-        # compile_commands.json the way it would for ICON's build.
-        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
-        # apt.llvm.org keeps the legacy alias on BOTH majors: /usr/bin/flang-new-NN ->
-        # /usr/lib/llvm-NN/bin/flang-new -> flang -> flang-NN (verified in the 21 and 22
-        # .debs).  Fall back to a symlink only if a packaging change drops that name.
-        command -v flang-new-$LLVM_VERSION \
-          || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/flang-$LLVM_VERSION /usr/local/bin/flang-new-$LLVM_VERSION
-        # OpenMPI ships the Fortran wrapper as both ``mpifort`` and the legacy
-        # ``mpif90``; the multi-rank MPI tests probe ``mpif90`` by name.  Symlink
-        # it to mpifort if a packaging change ever drops the legacy alias.
-        command -v mpif90 || sudo ln -sf "$(command -v mpifort)" /usr/local/bin/mpif90
-        # Use the runner's default gfortran (older GCC, 132-col
-        # free-form limit).  gfortran-15 is not in the noble apt repo,
-        # and the version no longer matters: the bindings e2e tests
-        # pass -ffree-line-length-none (FLANG_PORTABLE_FFLAGS) so the
-        # long generated signatures compile on any gfortran.
-
-    - name: Install Python dependencies
-      run: |
-        rm -f ~/.dace.conf
-        rm -rf .dacecache tests/.dacecache
-        # Locked environment (uv.lock): the testing group (pytest, nanobind for the bridge, meson for f2py and
-        # the icon-model configure) plus mpi4py built against the openmpi installed above.
-        MPICC=mpicc uv sync --frozen --group testing --group mpi --no-default-groups
-        # Later steps call ``python`` / ``pytest`` directly.
-        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Verify toolchain is complete (fail fast on a missing dependency)
-      run: |
-        # ``flang-new-$LLVM_VERSION`` is on PATH only in steps AFTER the one that appended
-        # /usr/lib/llvm-NN/bin to $GITHUB_PATH, so this must be its own step.
-        # This step runs AFTER ``Install Python dependencies``: ``meson`` and
-        # ``numpy.f2py`` are pip-provided, so asserting them before the pip
-        # install fails on a healthy runner (observed: both MISS, lane red).
-        # Asserting every required tool up front turns a silently-skipped test
-        # (e.g. "needs flang-new + OpenMPI") into a loud, fail-fast setup
-        # error -- so a provisioning regression can never masquerade as a green
-        # run with hidden skips.
-        missing=0
-        # flang HLFIR bridge + Fortran/MPI/C-C++ toolchain + ICON build tools
-        # (mpicc/mpicxx/mpifort + make/perl/python3 drive the icon_build fixture).
-        # cppcheck/clang-tidy back the generated-C++ static analysis; the checker raises rather than
-        # degrading to "found nothing" when a tool is absent, so a provisioning regression reds the
-        # lane instead of silently disabling the analysis.
-        # ``meson`` backs numpy.f2py on Python>=3.12, and f2py builds the CloudSC REFERENCE. Absent,
-        # ``_util.f2py_compile`` skips, the whole CloudSC e2e data point disappears and the lane
-        # still reports GREEN -- precisely the failure this step exists to prevent.
-        for t in flang-new-$LLVM_VERSION clang-$LLVM_VERSION gfortran gcc g++ make cmake ninja meson \
-                 mpicc mpicxx mpifort mpif90 perl python3 \
-                 bear autoconf automake aclocal m4 rsync pkg-config \
-                 cppcheck clang-tidy; do
-          if command -v "$t" >/dev/null 2>&1; then
-            printf '  ok    %-12s %s\n' "$t" "$(command -v "$t")"
-          else
-            printf '  MISS  %s\n' "$t"; missing=1
-          fi
-        done
-        # OpenMPI Fortran headers the ``mpi`` library stub is built against
-        # (find_openmpi_include probes for mpif-config.h).
-        test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h \
-          || { echo '  MISS  openmpi mpif-config.h'; missing=1; }
-        # Same reason as meson: an unimportable numpy.f2py silently removes the CloudSC reference.
-        python3 -c 'import numpy.f2py' 2>/dev/null \
-          || { echo '  MISS  numpy.f2py (importable)'; missing=1; }
-        [ "$missing" = 0 ] || { echo 'Toolchain incomplete -- see MISS lines above'; exit 1; }
-
-    - name: Build HLFIR bridge
-      run: |
-        # First access of a builder-backed symbol triggers the CMake build.
-        python -c "import dace_fortran; dace_fortran.SDFGBuilder"
-
-    - name: Enforce Release build type
-      run: |
-        python -c "import dace; bt = dace.Config.get('compiler', 'build_type'); assert bt == 'Release', bt"
-
-    # ----- fast runner: the routine sweep (no mpi, no long, no integration) -----
-    - name: Run Fortran frontend tests (fast sweep)
-      if: ${{ matrix.suite == 'fast' }}
-      run: |
-        export COVERAGE_RCFILE=`pwd`/.coveragerc
-        # Main xdist sweep, excluding the multi-rank ``mpi`` tests (they
-        # need mpirun, not an xdist worker), the ``long`` tests
-        # (ICON-from-source builds + ICON-O fparser extractions -- run on
-        # the ``heavy`` runner below) and the ``integration`` tests (ICON
-        # orig-vs-binding bit-exact -- run on the ``integration`` runner so
-        # they never leak into the quick PR sweep).  ``--dist loadgroup``
-        # honours the ``xdist_group`` markers so grouped tests share one worker.
-        # ``--durations`` is what makes a per-major slowdown attributable: the llvm22 lane runs the
-        # same sweep as llvm21 and the two logs are only comparable test-by-test.
-        ulimit -s 65536 || true
-        pytest -n auto --dist loadgroup --max-worker-restart=0 \
-          -m "not mpi and not long and not integration and not e2e" \
-          --maxfail=20 --durations=40 --timeout=300 --timeout-method=thread \
-          -o faulthandler_timeout=420 \
-          --junitxml=pytest-fast-llvm${LLVM_VERSION}.xml \
-          --cov-report=xml --cov=dace_fortran --tb=short tests/ | tee pytest-fast-llvm${LLVM_VERSION}.log
-        coverage report || true
-        coverage xml || true
-        reachable=0
-        ping -W 2 -c 1 codecov.io || reachable=$?
-        if [ $reachable -eq 0 ]; then
-          curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov && ./codecov || true
-        else
-          echo "Codecov.io is unreachable"
-        fi
-
-    - name: Upload fast sweep artifacts
-      if: always() && matrix.suite == 'fast'
-      uses: actions/upload-artifact@v4
-      with:
-        name: fast-results-llvm${{ matrix.llvm }}-${{ github.run_id }}
-        path: |
-          pytest-fast-llvm${{ matrix.llvm }}.xml
-          pytest-fast-llvm${{ matrix.llvm }}.log
-        if-no-files-found: ignore
-
-    # ----- heavy + integration runners: check out the ICON submodule (public externals only) -----
-    - name: Check out icon-model submodule (heavy + integration)
-      if: ${{ matrix.suite == 'heavy' || matrix.suite == 'integration' }}
-      run: |
-        # icon-model is pinned to the ICON release tag icon-2026.04-public
-        # (recorded in .gitmodules).  Shallow + recursive: the icon_build fixture
-        # and setup_icon_dycore.sh both CONFIGURE + ``make`` ICON, which compiles
-        # its externals, so every external must be present.  All ICON externals
-        # are publicly cloneable from gitlab.dkrz.de and ``--depth 1`` keeps the
-        # whole tree small (~640 MB).  ``_have_icon()`` keys on
-        # mo_solve_nonhydro.f90, so this is what flips the ICON-from-source
-        # ``long`` tests AND the ``integration`` tests from skipped to run.
         git submodule update --init --recursive --depth 1 tests/icon/full/icon-model
+        echo "sha=$(git -C tests/icon/full/icon-model rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-    - name: Generate dycore compile_commands.json (heavy + integration)
-      if: ${{ matrix.suite == 'heavy' || matrix.suite == 'integration' }}
+    - name: Restore the ICON builds
+      if: ${{ matrix.lane == 'heavy-icon' }}
+      id: icon-build
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          tests/icon/dycore/.icon_build
+          ${{ github.workspace }}/../icon_build
+        key: icon-${{ steps.icon-src.outputs.sha }}-${{ hashFiles('tests/icon/dycore/setup_icon_dycore.sh', 'tests/icon/dycore/config/*', 'tests/icon/full/_icon_build.py') }}
+
+    - name: Build ICON (compile_commands.json for the dycore parse test, the icon_build fixture tree)
+      if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}
       run: |
-        # Mirrors heavy for the integration runner: the short ICON integration
-        # tests need the same per-TU ICON compile flags, so building the fixture
-        # here keeps them RUNNING rather than silently skipping.
-        # The dycore-parse test (tests/icon/dycore/test_solve_nonhydro_parse.py)
-        # emits HLFIR for ICON's mo_solve_nonhydro driven by the per-TU
-        # -cpp / -I / -D flags captured in a REAL ICON build's
-        # compile_commands.json.  ``bear`` wraps a configure + ``make`` of the
-        # icon-model submodule (make is allowed to fail after the dycore TU is
-        # reached -- we only need its compile command), populating
-        # tests/icon/dycore/.icon_build/compile_commands.json so the test RUNS
-        # instead of skipping.  SKIP_APT=1: deps are already installed above.
         SKIP_APT=1 bash tests/icon/dycore/setup_icon_dycore.sh
+        cd tests && python -c "from pathlib import Path; from icon.full._icon_build import ensure_icon_built; \
+          ensure_icon_built(Path('icon/full/icon-model'), Path('$ICON_BUILD'))"
 
-    # ----- heavy runner: long tests only (mpi moved to the integration runner) -----
-    - name: Run long tests (ICON-from-source + ICON-O fparser extractions)
-      if: ${{ matrix.suite == 'heavy' }}
-      run: |
-        # The ``long`` tests only.  ``not mpi`` and ``not integration`` keep the
-        # mpirun-driven families off this runner -- they now run on the
-        # ``integration`` runner below (``long`` is disjoint from the SHORT
-        # ``integration`` tests, so ``not integration`` is defensive: it pins
-        # the invariant that integration tests run on exactly one runner).
-        # ``--dist loadgroup`` keeps each heavy family on ONE worker (ICON is
-        # configured + built exactly once via the ``icon_build`` group; the
-        # ICON-O fparser extractions share the ``ocean_fparser`` group and run
-        # one-at-a-time, each in its own memory-capped subprocess), so at most
-        # one of each runs concurrently.
-        pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
-          --maxfail=20 -p no:cacheprovider --tb=short tests/
+    - name: Save the ICON builds
+      if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          tests/icon/dycore/.icon_build
+          ${{ github.workspace }}/../icon_build
+        key: ${{ steps.icon-build.outputs.cache-primary-key }}
 
-    # ----- integration runner: multi-rank mpi tests + short ICON integration tests -----
-    - name: Run multi-rank MPI tests under mpirun (integration only)
-      if: ${{ matrix.suite == 'integration' }}
+    - name: fast
+      if: ${{ matrix.lane == 'fast' }}
       run: |
-        # Relocated here from the heavy runner: the 2-rank/pair halo-exchange
-        # ``sync_patch_array`` e2e and the other ``mpi``-marked multi-rank
-        # tests.  4 ranks oversubscribed onto the runner's cores (GH runners
-        # have few slots, but the mpi tests are tiny); ``-n 4`` is required so
-        # the non-default-communicator e2e (MPI_Comm_split by rank%2) actually
-        # runs -- it skips below 4; the ring tests run a ring of `size` and
-        # work at 4 too.  Any ICON integration test that is ITSELF multi-rank
-        # carries the ``mpi`` marker (per the marker scheme) and therefore runs
-        # HERE under mpirun.  Anti-hang MPI transport env (OMPI_MCA_pml/btl,
-        # UCX_VFS_ENABLE, HWLOC_COMPONENTS) is set at the job level above.
-        mpirun --oversubscribe -n 4 python -m pytest -m mpi \
-          --maxfail=20 -p no:cacheprovider --tb=short tests/
+        ulimit -s 65536
+        pytest -n auto --dist loadgroup --max-worker-restart=0 $PYTEST_OPTS \
+          -m "not mpi and not long and not integration and not e2e" \
+          --timeout=300 --timeout-method=thread -o faulthandler_timeout=420 \
+          --cov-report=xml --cov=dace_fortran tests/
+        curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov && ./codecov || true
 
-    - name: Run short ICON integration tests (integration only)
-      if: ${{ matrix.suite == 'integration' }}
-      run: |
-        # The SHORT ICON integration tests that are NOT multi-rank: per-call
-        # duplicate-data original-vs-binding bit-exact checks.  Run as PLAIN
-        # pytest, NOT under mpirun -- a test needing mpirun coordination carries
-        # the ``mpi`` marker and ran in the step above; launching a non-MPI-aware
-        # pytest under ``mpirun -n 4`` would spawn 4 uncoordinated sessions that
-        # clobber each other's build / .dacecache dirs.  Sequential (no xdist):
-        # these build gfortran reference libs + SDFGs and the run is short, so
-        # serial execution avoids parallel-build races for a negligible cost.
-        # Together with the step above this covers ``-m "integration or mpi"``
-        # with no test run twice (mpi-and-integration tests run only above).
-        # ``|| [ $? -eq 5 ]`` tolerates pytest's exit-5 (no tests collected) so
-        # an empty integration set never reds the lane -- a guard against a
-        # future removal of every integration test silently re-breaking CI.
-        python -m pytest -m "integration and not mpi" \
-          --maxfail=20 -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
+    - name: e2e -- multi-rank mpi tests
+      if: ${{ matrix.lane == 'e2e' }}
+      run: mpirun --oversubscribe -n 4 python -m pytest -m mpi $PYTEST_OPTS tests/
 
-    # ----- e2e runner: production kernels through the full parallelization pipeline -----
-    - name: Run e2e pipeline tests (QE vexx + ICON atmosphere velocity_tendencies)
-      if: ${{ matrix.suite == 'e2e' }}
-      run: |
-        # Each test builds a production kernel's SDFG, runs the whole pipeline
-        # (specialize -> short-unroll -> unique-loop-iterators -> scalar-fission ->
-        # simplify -> state-fusion-extended -> loop2map -> state-fusion-extended ->
-        # mapfusion) and compares the result element-wise BOTH against the same kernel built
-        # WITHOUT the pipeline (bit-exact -- the differential that actually
-        # isolates a transformation bug) and against the untouched gfortran/f2py
-        # reference -- so a transformation that changes a value reds this lane
-        # even when every unit test still passes.
-        # CloudSC runs on its own runner (see the e2e-cloudsc step): --ignore
-        # rather than a -k filter so a renamed test can never silently rejoin
-        # this lane and blow its wall clock.
-        # SEQUENTIAL, no xdist: the -O3 -march=native builds are multi-GB peaks
-        # and concurrent workers would each carry their own and OOM the runner.
-        python -m pytest -m e2e --ignore=tests/e2e/test_cloudsc.py \
-          --maxfail=20 -p no:cacheprovider --tb=short tests/
+    - name: e2e -- integration tests
+      if: ${{ matrix.lane == 'e2e' }}
+      run: python -m pytest -m "integration and not mpi" $PYTEST_OPTS tests/
 
-    # ----- e2e-cloudsc runner: CloudSC alone (see the matrix comment for why) -----
-    - name: Run e2e pipeline test (CloudSC)
-      if: ${{ matrix.suite == 'e2e-cloudsc' }}
-      run: |
-        # Same two bars as the e2e lane above, on CloudSC's seeded in-regime
-        # physical inputs: pre- vs post-optimize bit-exact, and post-optimize vs
-        # the f2py gfortran reference to 1e-11.  Both bars need their own build of
-        # the 25k-line translation unit, which is why this kernel gets a runner to
-        # itself.  CloudSC additionally needs the one knob the other kernels do
-        # without: specialize (species counts).  scalar-fission (so the block
-        # loop maps at all) now runs unconditionally in the pipeline.
-        python -m pytest -m e2e \
-          --maxfail=20 -p no:cacheprovider --tb=short tests/e2e/test_cloudsc.py
+    - name: e2e -- pipeline tests (QE vexx, ICON velocity_tendencies)
+      if: ${{ matrix.lane == 'e2e' }}
+      # Sequential: each -O3 build of a production kernel peaks at several GB.
+      run: python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py $PYTEST_OPTS tests/
+
+    - name: e2e-cloudsc
+      if: ${{ matrix.lane == 'e2e-cloudsc' }}
+      run: python -m pytest -m e2e $PYTEST_OPTS tests/e2e/test_cloudsc.py
+
+    - name: heavy-icon
+      if: ${{ matrix.lane == 'heavy-icon' }}
+      run: pytest -n auto --dist loadgroup -m "long and icon_build and not mpi and not integration and not e2e" $PYTEST_OPTS tests/
+
+    - name: heavy-src
+      if: ${{ matrix.lane == 'heavy-src' }}
+      run: pytest -n auto --dist loadgroup -m "long and not icon_build and not mpi and not integration and not e2e" $PYTEST_OPTS tests/

@@ -48,10 +48,10 @@ _SETUP_HINT = (
     "(populates tests/icon/dycore/.icon_build/compile_commands.json)"
 )
 
-# Heavy CI lane generates compile_commands.json before the long run, so this
-# belongs in the `long` lane (fast lane has no such DB).
+# The heavy-icon CI lane generates compile_commands.json (setup_icon_dycore.sh) before its run.
 pytestmark = [
     pytest.mark.long,
+    pytest.mark.icon_build,
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(_resolve_compile_commands() is None, reason=_SETUP_HINT),
 ]

@@ -140,13 +140,14 @@ dace_fortran = [
 
 [tool.pytest.ini_options]
 markers = [
-    "long: Slow test (e.g. builds ICON from source). CI runs it (CI filters only '-m \"not mpi\"'); routine local full-sweeps exclude it with '-m \"not long\"'.",
+    "long: Slow test that needs the icon-model submodule (ICON built from source, ICON-O / atmosphere single-TU extractions); the CI heavy lanes run it.",
+    "icon_build: Needs ICON configured and built from source (the icon_build fixture); the CI heavy-icon lane runs it.",
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
-    "mpi: Multi-rank MPI test; excluded from the normal sweep, run under mpirun (select with '-m \"mpi\"')",
-    "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, VERY SHORT run); runs only on the CI 'integration' runner and is excluded from fast/heavy (select with '-m \"integration\"')",
-    "e2e: Production kernel through the full parallelization pipeline (CloudSC, QE vexx, ICON atmosphere velocity_tendencies x2 __LOOP_EXCHANGE variants), built twice on seeded random inputs so pre- vs post-optimize is checked BIT-EXACTLY as well as against the untouched gfortran/f2py reference. Slow (two SDFG builds + -O3 -march=native compiles per kernel); runs only on the CI 'e2e' / 'e2e-cloudsc' runners (select with '-m \"e2e\"')",
+    "mpi: Multi-rank MPI test, run under mpirun (select with '-m \"mpi\"')",
+    "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, short run)",
+    "e2e: Production kernel through the full parallelization pipeline, built with and without it on seeded inputs: pre- vs post-optimize bit-exact, and against the gfortran/f2py reference",
     "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
-    "fftw: Needs libfftw3 to link the FFT library node's expansion (CI installs libfftw3-dev; select with '-m \"fftw\"')",
+    "fftw: Needs libfftw3 to link the FFT library node's expansion",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
