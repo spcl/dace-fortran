@@ -187,7 +187,7 @@ struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir:
       // ``srcDeclareBox`` mapped to inside the spliced body).
       auto cloned = mapper.lookupOrDefault(srcDeclareBox);
       // Drop any ``hlfir.destroy`` of the eval_in_mem's result -- those
-      // expect an ``!hlfir.expr``, which we no longer produce.
+      // expect an ``!hlfir.expr``, which the unwrapped form does not produce.
       llvm::SmallVector<hlfir::DestroyOp, 2> destroys;
       for (auto* user : op.getResult().getUsers())
         if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user)) destroys.push_back(d);

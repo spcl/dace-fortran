@@ -707,8 +707,7 @@ bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& 
     // also a CONJUNCTION on purpose  --  the private test alone would drop a
     // private component that an IN-MODULE kernel legitimately designates
     // (e.g. the ocean solver's ``act__tag`` dispatch tag).  Only opt-in
-    // callers pass ``liveComps``; ``nullptr`` keeps the historical behaviour
-    // byte-for-byte.
+    // callers pass ``liveComps``; ``nullptr`` keeps every component.
     if (liveComps && privateQualifiedComponent(pair.first) && !liveComps->contains(pair.first)) {
       logFlatBail(prefix, "private component never designated in this function", pair.second);
       prefix.pop_back();
@@ -1181,7 +1180,7 @@ struct AliasPrefix {
 ///   aliasRoot resolves via ``aliasPrefixes`` to a flat companion in ``leafBase``
 ///
 /// ``walkDesignateChain`` / the alias-prefix walk both bail on the section's
-/// triplets, which used to drop the fixed scalar dim (``blk``) entirely and
+/// triplets, which would drop the fixed scalar dim (``blk``) entirely and
 /// leave a rank-mismatched ``companion(i, j)`` designate (2 indices over the
 /// rank-3 companion).  This composes positionally instead: each full-range
 /// unit-stride triplet dim is filled by the next leaf index; each scalar dim is
@@ -4047,7 +4046,6 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       // concat'd pointee has any unknown dim (descriptor carries
       // the extent at runtime), and the bindings layer's
       // assumed-shape marshalling picks up the actual extent.
-      // Previously a hard bail.
       //
       // Guard: skip when ``splitDoubleBufferMembers`` (Step 0.5)
       // has already consumed this dummy by rewriting every component

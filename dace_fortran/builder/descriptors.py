@@ -978,10 +978,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
                 # offset (``a(:, c0:c1)``) is carried by the
                 # original->view linking memlet's source subset (see
                 # ``VarInfo.bounds_remap_source_subset`` / access.py), NOT
-                # here -- so every dim's access offset is the constant 1.
-                # (Previously a rank-1 flatten view left this ``None`` -> 0,
-                # so every ``p(i)`` write landed one slot past its element:
-                # the write-back off-by-one.)
+                # here -- so every dim's access offset is the constant 1 (an offset of 0 would land every
+                # ``p(i)`` write one slot past its element).
                 builder.offset_values[sym_name] = 1
                 continue
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"

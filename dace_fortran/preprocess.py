@@ -661,7 +661,7 @@ def _stub_procedure_bodies(text: str, names: Iterable[str]) -> str:
     opener, spec part, and matching ``END``.
 
     Regex-merge analogue of the fparser inliner's ``make_noop``
-    (:func:`dace_fortran.fparser_inliner._keep_external_noop_specs`): dummy
+    (:func:`dace_fortran.fparser_inliner._external_noop_specs`): dummy
     args stay declared (in-TU call site stays legal) but internals
     (halo/MPI/I/O) never enter the TU.  Nesting-aware ``END`` scan handles
     internal ``CONTAINS`` subprograms.  Case-insensitive; names come from the

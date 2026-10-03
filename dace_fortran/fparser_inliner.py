@@ -42,7 +42,6 @@ import logging
 import re
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union, cast
 
@@ -337,9 +336,9 @@ class ParseConfig:
         self.do_not_rename = do_not_rename
         self.make_noop = make_noop
         #: Lower-cased names of the EXPLICIT make_noop procedures (snapshotted
-        #: before :func:`inline_to_ast` merges the do_not_emit/keep_external
+        #: before :func:`inline_to_ast` merges the do_not_emit / external-function
         #: stubs in).  A call to one of these is a semantic no-op and is
-        #: dropped outright; keep_external stubs keep their call sites (the
+        #: dropped outright; the external stubs keep their call sites (the
         #: bridge or an external implementation handles them).
         self.drop_noop_calls = {s[-1].lower() for s in make_noop}
         self.ast_checkpoint_dir = ast_checkpoint_dir
@@ -824,35 +823,19 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def _resolve_dont_inline_names(
-    keep_external: Iterable[str], external_functions: Iterable[ExternalFunction], do_not_emit: Iterable[str]
-) -> Set[str]:
+def _resolve_dont_inline_names(external_functions: Iterable[ExternalFunction], do_not_emit: Iterable[str]) -> Set[str]:
     """Union the (lower-cased) don't-inline names the inliner must stub.
 
     The external-function policy (see :mod:`dace_fortran.external_functions`)
     is two collections: ``external_functions`` (don't-inline + the bridge EMITs
     an external call) and ``do_not_emit`` (don't-inline + the bridge DROPs the
     call).  The inliner treats both the same -- it only needs the *names* not to
-    inline -- so this returns their validated union (:func:`dont_inline_names`).
-
-    ``keep_external`` is the deprecated predecessor parameter; it is kept as a
-    thin backward-compatible shim meaning exactly ``do_not_emit`` (the bridge,
-    not the inliner, decides emit-vs-drop), and warns when used."""
+    inline -- so this returns their validated union (:func:`dont_inline_names`)."""
     validate(external_functions, do_not_emit)
-    names = dont_inline_names(external_functions, do_not_emit)
-    keep_external = list(keep_external)
-    if keep_external:
-        warnings.warn(
-            "inline_to_ast/inline_to_single_tu(keep_external=...) is deprecated; "
-            "pass do_not_emit=[names] (or external_functions=[ExternalFunction(...)]) instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        names |= {n.lower() for n in keep_external}
-    return names
+    return dont_inline_names(external_functions, do_not_emit)
 
 
-def _keep_external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.SPEC]:
+def _external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.SPEC]:
     """Resolve a caller-supplied list of *external* procedure names to the
     ``make_noop`` specs that stub them.
 
@@ -1088,7 +1071,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     # derived-type dummies, which numpy f2py cannot wrap -- it emits a NULL
     # module entry and the import of the reference leg segfaults.  Scoped to
     # ``cfg.drop_noop_calls`` (the caller's explicit make_noop): the
-    # keep_external stubs merged into ``cfg.make_noop`` later MUST keep their
+    # external stubs merged into ``cfg.make_noop`` later MUST keep their
     # call sites -- those calls are real (the bridge / an external
     # implementation serves them).
     def drop_explicit_noop_calls(a: f03.Program) -> None:
@@ -1441,7 +1424,6 @@ def inline_to_ast(
     flang: Optional[str] = None,
     make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
     make_return_false: Iterable[str] = (),
-    keep_external: Iterable[str] = (),
     external_functions: Iterable[ExternalFunction] = (),
     do_not_emit: Iterable[str] = (),
     consolidate_global_data: bool = False,
@@ -1473,9 +1455,6 @@ def inline_to_ast(
     ``sync_patch_array`` -> ``sync_patch_array_3d_dp``) -- stubbing each to an
     empty body so its internals (the halo-exchange ``%exchange_data`` type-bound
     call, MPI, I/O) never enter the TU.  Nothing ICON-specific is hardcoded.
-
-    ``keep_external`` is the deprecated predecessor of ``do_not_emit`` -- a plain
-    name list, kept as a backward-compatible shim (it warns).
 
     ``tolerate_external_uses`` lets the pipeline ingest a kernel whose
     enclosing module ``USE``s an external library with no Fortran source on
@@ -1521,7 +1500,7 @@ def inline_to_ast(
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
-    dont_inline = _resolve_dont_inline_names(keep_external, external_functions, do_not_emit)
+    dont_inline = _resolve_dont_inline_names(external_functions, do_not_emit)
     # Return-false stubs are also non-inlined (stubbed), then assigned .FALSE.
     cfg.make_return_false = {n.lower() for n in make_return_false}
     dont_inline |= cfg.make_return_false
@@ -1546,7 +1525,7 @@ def inline_to_ast(
             # types (and any ``keep_type_components`` members riding on them),
             # yielding a body-less, member-stripped TU.  Entry specs are
             # subtracted from the resolved noop set here.
-            noop_specs = [s for s in _keep_external_noop_specs(ast, dont_inline) if s not in cfg.entry_points]
+            noop_specs = [s for s in _external_noop_specs(ast, dont_inline) if s not in cfg.entry_points]
             cfg.make_noop = list(cfg.make_noop or []) + noop_specs
         ast = run_fparser_transformations(ast, cfg, optimize=optimize)
         # NAMELIST statements survive pruning but may name variables pruning
@@ -1570,7 +1549,6 @@ def inline_to_single_tu(
     flang: Optional[str] = None,
     make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
     make_return_false: Iterable[str] = (),
-    keep_external: Iterable[str] = (),
     external_functions: Iterable[ExternalFunction] = (),
     do_not_emit: Iterable[str] = (),
     consolidate_global_data: bool = False,
@@ -1650,7 +1628,6 @@ def inline_to_single_tu(
         flang=flang,
         make_noop=make_noop,
         make_return_false=make_return_false,
-        keep_external=keep_external,
         external_functions=external_functions,
         do_not_emit=do_not_emit,
         consolidate_global_data=consolidate_global_data,

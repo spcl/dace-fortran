@@ -32,7 +32,7 @@ All four independently usable; the composer is the one-call convenience -- opt o
 
 ## The five-ingredient recipe (for ICON)
 
-Bisected through ICON's USE closure to find the minimum adjustment set that gets flang-21 to lower the real `mo_velocity_advection.f90` (and `mo_solve_nonhydro.f90`) cleanly:
+The minimum adjustment set that gets flang to lower the real `mo_velocity_advection.f90` (and `mo_solve_nonhydro.f90`) cleanly:
 
 | # | Ingredient | What it does |
 |---|---|---|
@@ -44,11 +44,11 @@ Bisected through ICON's USE closure to find the minimum adjustment set that gets
 
 All five are inputs to `emit_hlfir_from_codebase`; the only project-specific bits are (1) and (3) -- (2), (4), (5) are universal or auto-detected.
 
-Complete bisect record (which module triggered each step, in order) is in this session's git history. Notable findings:
+Notes on the ICON-specific pieces:
 
-* `WhyNotInteroperableDerivedType` ICE localises to `mo_util_mtime.f90:304` -- ICON's `BIND(C) INTERFACE` for `julianDeltaToTimeDelta` `IMPORT`s `juliandelta`, a type defined only inside `mtime`. Fix: add `externals/mtime/src` to the merge search dirs.
-* `MPI_SIZEOF` false positive lives in `mo_mpi`, called exactly 6 times, all on built-in REAL/INTEGER kinds whose byte size is statically derivable from the arg name. Patch substitutes `sz = 8; err = 0` (or `4` for `i4`/`sp`).
-* ICON's `t_PackedMessage` macro-expanded type-bound procedures (LEN_TRIM string scans, `CLASS(*)` polymorphism) survive the flang stage but block the HLFIR-to-SDFG bridge -- marked external stubs in the *test*-side `keep_external` list (never called numerically).
+* The `WhyNotInteroperableDerivedType` ICE comes from `mo_util_mtime.f90`: ICON's `BIND(C) INTERFACE` for `julianDeltaToTimeDelta` `IMPORT`s `juliandelta`, a type defined only inside `mtime`. Adding `externals/mtime/src` to the merge search dirs resolves it.
+* `MPI_SIZEOF` is called 6 times in `mo_mpi`, all on built-in REAL/INTEGER kinds whose byte size is statically derivable from the argument name; the patch substitutes `sz = 8; err = 0` (or `4` for `i4`/`sp`).
+* ICON's `t_PackedMessage` type-bound procedures (LEN_TRIM string scans, `CLASS(*)` polymorphism) pass flang but block the bridge; the tests register them as external stubs (they are never called numerically).
 
 ## The end-to-end pattern (for ICON's velocity)
 
@@ -93,9 +93,9 @@ sdfg.validate()
 
 `mo_solve_nonhydro.f90` (3166 LoC) calls into `mo_sync`'s polymorphic halo-exchange. Same recipe as velocity, plus:
 
-* Register the procedures `solve_nh` *directly* calls as external -- not their downstream callees. `keep_external("sync_patch_array_3d_dp", stub=True)` strips the body before `hlfir-inline-all` runs, so everything it transitively reaches (the polymorphic `mo_communication.exchange_data_*` dispatch chain, the `CLASS(*)` communication-pattern receiver) goes with it -- no need to enumerate downstream callees; the bridge's `hlfir-reject-polymorphism` pass never sees them.
-* Register the generic-interface specialisations one by one -- `INTERFACE sync_patch_array` resolves at compile time to `sync_patch_array_3d_dp` / `_2d_int` / ... before HLFIR is emitted. Full list at [test_dycore_from_icon_source.py:107](../tests/icon/full/test_dycore_from_icon_source.py#L107).
-* The iso-C wrapper bridging the SDFG's bind-C call site to ICON's polymorphic `sync_patch_array` is at [icon_sync_iso_c.f90](../tests/icon/full/icon_sync_iso_c.f90) -- four bind-C entries; the `c_name` field on the `keep_external` registration resolves to those at runtime.
+* Register the procedures `solve_nh` *directly* calls as external, not their downstream callees: `apply_external_functions(do_not_emit=[...])` stubs their bodies before `hlfir-inline-all` runs, so everything they transitively reach (the polymorphic `mo_communication.exchange_data_*` dispatch chain, the `CLASS(*)` communication-pattern receiver) goes with them and `hlfir-reject-polymorphism` never sees it.
+* Register the generic-interface specialisations one by one -- `INTERFACE sync_patch_array` resolves at compile time to `sync_patch_array_3d_dp` / `_2d_int` / ... before HLFIR is emitted. Full list: `_ICON_EXTERNAL_STUBS` in [test_dycore_from_icon_source.py](../tests/icon/full/test_dycore_from_icon_source.py).
+* The iso-C wrapper bridging the SDFG's bind-C call site to ICON's polymorphic `sync_patch_array` is at [icon_sync_iso_c.f90](../tests/icon/full/icon_sync_iso_c.f90) -- four bind-C entries; an `ExternalFunction` / `keep_external` registration names them as its C symbols.
 
 ## Pluggable surface
 
@@ -103,12 +103,5 @@ sdfg.validate()
 * `FLANG_BUG_PATCHES`: register a `(name, transform)` pair; `transform(source: str) -> str` is a pure source-to-source rewrite. Opt-in via the composer's `patches=` arg (no implicit per-codebase magic).
 * `extract_make_compile_args(makefile_dir, target)`: project-agnostic parser for any GNU-make-driven Fortran build whose recipe invokes one compiler line per source (cmake's makefiles fit -- one `mpifort ... -c source.f90` per object).
 
-## Bridge fixes that landed alongside
-
-Real ICON source hit HLFIR constructs the bridge hadn't seen before. Three fixes landed in this session:
-
-1. `buildExpr` fall-through handlers for 10 unhandled ops: `fir.embox` / `hlfir.as_expr` / `hlfir.declare` / `fir.emboxchar` / `fir.box_addr` / `fir.zero_bits` / `hlfir.concat` / `fir.address_of` / `fir.alloca` / `fir.unboxchar` ([expressions.cpp](../dace_fortran/bridge/ast/expressions.cpp)). Each is a pass-through to the underlying value, except `fir.zero_bits` -> `"0"`, `hlfir.concat` -> Python `+`.
-2. ICON utility procedures (`finish` / `message` / `timer_start` / ...) marked as external stubs in the [test setup](../tests/icon/full/test_velocity_from_icon_source.py) so their unlowerable bodies (LEN_TRIM scans, polymorphic dispatch) don't reach the bridge.
-3. Whole-array fast path in `emit_scalar_assign` for pointer rebinds (`icidx => p_patch%edges%cell_idx`) that `RewritePointerAssigns` doesn't yet collapse ([emit_tasklet.py](../dace_fortran/builder/emit_tasklet.py)) -- when target + source are both multi-dim arrays of the same rank, emit an `AccessNode -> AccessNode` whole-array copy memlet instead of a tasklet with the wrong scalar subset.
-
-A regression-mode diagnostic for the bridge's `?` sentinel is gated on `DACE_FORTRAN_DEBUG_BUILDEXPR=1`; flipping it on prints which op the bridge couldn't decode, so the next codebase's missing case surfaces immediately.
+An HLFIR op the bridge cannot render falls through to the `?` sentinel and is logged with its name and location to
+stderr, so the next codebase's missing case surfaces immediately.

@@ -224,9 +224,9 @@ def emit_tasklet(
     indirect_arrays = {indirect_host(expr) for expr in indirect_syms}
     r_arr -= indirect_arrays
 
-    # ONE connector + ONE memlet per textual occurrence (never dedup'd) -- dedup
-    # used to misalign occurrence-to-access mapping when the accesses list and
-    # expr disagreed on count (e.g. MIN/MAX cmp+select).  1:1 is the contract now.
+    # ONE connector + ONE memlet per textual occurrence (never deduplicated): deduplication misaligns the
+    # occurrence-to-access mapping when the accesses list and the expression disagree on count (e.g. MIN/MAX
+    # cmp+select).
     reads_by_name: dict[str, list[AccessLike]] = {}
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:

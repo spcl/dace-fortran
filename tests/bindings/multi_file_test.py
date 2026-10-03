@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from _util import flang_binary, have_flang
-from dace_fortran.hlfir_to_sdfg import SDFGBuilder
+from dace_fortran.builder import SDFGBuilder
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 

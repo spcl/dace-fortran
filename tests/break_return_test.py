@@ -39,7 +39,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     SDFG must leave inputs untouched (no compute before the return)."""
     import dace
     from dace import SDFG
-    from dace_fortran.hlfir_to_sdfg import SDFGBuilder
+    from dace_fortran.builder import SDFGBuilder
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
     builder.variables = []
@@ -51,7 +51,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
 
-    from dace_fortran.hlfir_to_sdfg import Ctx
+    from dace_fortran.builder.context import Ctx
 
     ctx = Ctx(sdfg, builder)
 
@@ -73,7 +73,8 @@ def test_break_block_inside_loop_region(tmp_path):
     import dace
     from dace import SDFG
     from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
-    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, Ctx
+    from dace_fortran.builder import SDFGBuilder
+    from dace_fortran.builder.context import Ctx
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
     builder.variables = []

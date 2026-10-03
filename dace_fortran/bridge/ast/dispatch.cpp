@@ -1817,7 +1817,7 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
       }
       // Any reduction op whose source is an hlfir.elemental (e.g. SUM(q**2)): traceToDecl returns "" for an elemental
       // result, so the plain Reduce path would explode. Materialise the elemental into a transient via a per-element
-      // loop and route Reduce over it; buildElementalAnyAllReduce is op-agnostic (name is historical) so this covers
+      // loop and route Reduce over it; buildElementalAnyAllReduce is op-agnostic despite its name, so this covers
       // SUM/PRODUCT/MINVAL/MAXVAL too.
       if (!emitted && sd->getNumOperands() > 0) {
         auto srcVal = sd->getOperand(0);

@@ -32,10 +32,7 @@ namespace hlfir_bridge {
   }
   throw std::runtime_error(std::string(fn) + ": unhandled HLFIR op '" + opName + "' at " +
                            (loc.empty() ? "<unknown loc>" : loc) +
-                           ".  Add a handler in the corresponding "
-                           "bridge/ast/*.cpp file (search for the helper "
-                           "name) or update the op coverage in "
-                           "tasks/audit_question_mark_emissions.md.");
+                           ".  Add a handler in the bridge/ast/*.cpp file that defines " + fn + ".");
 }
 
 // ============================================================================

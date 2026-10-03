@@ -35,8 +35,7 @@ namespace hlfir_bridge {
 // #include "bridge/ast/assigns.cpp" and shares that translation
 // unit's namespace, includes, and file-static state.  It MUST NOT be
 // added to the build's compile list  --  CMakeLists.txt deliberately omits
-// it.  The split is purely for readability: the AST builder used to
-// be a single 2800-line file.
+// it.  The split is purely for readability.
 std::string buildIndexExpr(mlir::Value v, int d) {
   if (d > limits::kBuildIndexExprDepth || !v) return "?";
 
@@ -591,9 +590,9 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
       // component-aware walk fires) and DON'T treat it as an
       // array write -- emit_assign downstream uses the registered
       // VarInfo's descriptor classification to pick scalar vs
-      // array write.  Previously ``expandDesignateChain`` +
-      // ``traceToDecl(dg.getMemref())`` returned the struct base
-      // ``g``, leaking it as the target name.
+      // array write.  ``expandDesignateChain`` +
+      // ``traceToDecl(dg.getMemref())`` would return the struct base
+      // ``g`` and leak it as the target name.
       if (dg.getComponentAttr() && dg.getIndices().empty()) {
         node.target = traceToDecl(dg.getResult());
       } else {

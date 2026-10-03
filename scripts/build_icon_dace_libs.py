@@ -1,32 +1,20 @@
-"""Standalone driver: build the DaCe-backed ``libvelocity_inner_wrap.so``
-(and ICON-side wrapper + CPU-mode stubs) that ICON will link against.
+"""Build the DaCe-backed ``libvelocity_inner_wrap.so`` (bindings, bind(c) shim, SDFG) that ICON links against.
 
-Lifts the build steps out of the ``test_dycore_velocity_external_e2e``
-fixture so they can be run outside ``pytest`` -- typically once per
-deployment, then ICON's normal configure + make picks the artifacts
-up via ``$FCFLAGS`` + ``$LDFLAGS``.
-
-See ``docs/ICON_INTEGRATION.md`` for the surrounding workflow.
+The build steps of the ``test_dycore_velocity_external_e2e`` fixture, runnable outside ``pytest``; see
+``docs/ICON_INTEGRATION.md`` for the surrounding workflow.
 
 Usage::
 
-    python -m scripts.build_icon_dace_libs --out-dir $WORK/dace-icon-libs
+    python -m scripts.build_icon_dace_libs --icon-src $ICON_SRC --icon-build $ICON_SRC/build/dace_cpu \
+        --out-dir $WORK/dace-icon-libs
 
-The default ``--velocity-source`` is
-``tests/icon/full/velocity_full.f90`` -- the pre-merged
-self-contained ICON ``mo_velocity_advection`` source the e2e test
-drives bit-exact.  Override only if you have your own merged
-single-TU source; the bridge's ``merge_used_modules`` pass searches
-the SDFG build dir, NOT the ICON source tree, so pointing at the
-in-tree ``mo_velocity_advection.f90`` would fail to resolve
-``USE mo_kind``, ``USE mo_nonhydro_types`` etc.
+For a library ICON links, ``--icon-src`` and ``--icon-build`` are required: the SDFG is then lowered from ICON's
+real ``mo_velocity_advection.f90`` with that configuration's defines and ``.mod`` files. Without them the default
+``--velocity-source``, the stub-typed ``tests/icon/full/velocity_full.f90`` the e2e tests drive, is lowered.
 
-The script pins ``-O0 -fno-fast-math -ffp-contract=off`` on every
-build layer (DaCe C++ codegen, the gfortran link of the
-``bind_c_shim``, the gfortran link of the bindings wrapper) so the
-ICON-vs-DaCe comparison stays bit-exact.  Switch to ``-O3
--fno-fast-math -ffp-contract=off`` with ``--release`` for production
-timings (numerical envelope drops to 1 ULP).
+Every layer (DaCe C++, the gfortran builds of the bind(c) shim and the bindings wrapper) is built with
+``-O0 -fno-fast-math -ffp-contract=off`` so the ICON-vs-DaCe comparison stays bit-exact; ``--release`` uses ``-O3``
+with the same FP flags (results within one ULP).
 """
 
 import argparse

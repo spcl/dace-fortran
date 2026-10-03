@@ -58,8 +58,7 @@ class AutoDimSDFG(dace.SDFG):
                 # Defaults to Fortran's 1-based lower bound (access lowers to
                 # ``arr[idx - offset]``); non-default bounds (e.g. ICON's
                 # ``end_block(min_rl:)``) are passed explicitly by the bindings
-                # emitter via ``lbound``.  Previously defaulted to 0 -- an
-                # off-by-one read of every such array.
+                # emitter via ``lbound``.  A default of 0 would read every such array off by one.
                 kwargs[sym] = 1
             else:
                 arr = m.group("arr")

@@ -5,7 +5,7 @@
 ``sum``/``product``/``minval``/``maxval`` each lower through Flang into a
 dedicated HLFIR op whose result is a scalar or (with ``dim=``) a reduced-rank
 array.  The bridge's extract_ast emits ``kind="reduce"`` carrying the
-parameters below; hlfir_to_sdfg calls ``state.add_reduce(wcr, axes, identity)``.
+parameters below; the builder calls ``state.add_reduce(wcr, axes, identity)``.
 """
 
 from dace_fortran.intrinsics.base import ReductionIntrinsic

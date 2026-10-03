@@ -16,7 +16,7 @@ import pytest
 
 from _util import flang_binary, have_flang
 
-from dace_fortran.hlfir_to_sdfg import SDFGBuilder  # noqa: E402
+from dace_fortran.builder import SDFGBuilder  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 

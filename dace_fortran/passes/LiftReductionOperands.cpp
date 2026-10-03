@@ -239,8 +239,8 @@ struct LiftReductionOperandsPass
       }
     }
 
-    // Array-result lift: previously attempted via ``fir.alloca +
-    // hlfir.declare + hlfir.assign + hlfir.as_expr`` but the
+    // Array-result lift: lifting via ``fir.alloca +
+    // hlfir.declare + hlfir.assign + hlfir.as_expr`` does not work: the
     // downstream ``buildLibCallNode``'s ``traceToDecl`` does not
     // walk through ``hlfir.as_expr``, leaving the libcall source
     // name empty.  Until that gap is closed, only EMIT THE LOUD

@@ -39,8 +39,7 @@ namespace hlfir_bridge {
 // #include "bridge/ast/expressions.cpp" and shares that translation
 // unit's namespace, includes, and file-static state.  It MUST NOT be
 // added to the build's compile list  --  CMakeLists.txt deliberately omits
-// it.  The split is purely for readability: the AST builder used to
-// be a single 2800-line file.
+// it.  The split is purely for readability.
 std::vector<std::pair<mlir::Value, std::string>>& indexStack() {
   static thread_local std::vector<std::pair<mlir::Value, std::string>> s;
   return s;
@@ -369,10 +368,8 @@ void captureElementDesignateWrite(mlir::Value dest, ASTNode& node) {
       // and DON'T treat it as an array write (no AccessInfo
       // indexed loop is needed -- the target is a scalar / whole
       // field that downstream emit_assign treats by its own
-      // descriptor classification).  Previously
-      // ``traceToDecl(dg.getMemref())`` returned the struct base
-      // ``g``, leaking ``g`` as the target name and forcing an
-      // array-style write that ``KeyError``ed at arglist lookup.
+      // descriptor classification).  ``traceToDecl(dg.getMemref())``
+      // would return the struct base ``g`` and leak it as the target.
       if (dg.getComponentAttr() && dg.getIndices().empty()) {
         node.target = traceToDecl(dg.getResult());
         // Whole-field write -- target_is_array reflects the field's
@@ -1346,8 +1343,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // through ``std::pow`` overloads at codegen time -- one handler
       // suffices for every variant.  QE's
       // ``(0.D0, -1.D0) ** nhtol(ih, nt)`` surfaces this as
-      // ``_FortranAzpowi`` and previously yielded a ``?`` tasklet
-      // body because the ``fir.call`` had no handler.
+      // ``_FortranAzpowi``.
       if ((cname == "_FortranAzpowi" || cname == "_FortranAzpowk" || cname == "_FortranAcpowi" ||
            cname == "_FortranAcpowk" || cname == "_FortranAdpowi" || cname == "_FortranAdpowk" ||
            cname == "_FortranAspowi" || cname == "_FortranAspowk") &&
@@ -1636,11 +1632,9 @@ std::string buildExpr(mlir::Value val, int d) {
     // It walks through ``hlfir.designate`` correctly: section /
     // element designates fall through to the parent name, struct-
     // field designates (component attr set) build the flattened
-    // ``<parent>_<member>`` name (the fix at trace_utils.cpp from
-    // commit 25f8e83).  Previously this branch short-circuited
-    // with ``traceToDecl(dg.getMemref())`` which BYPASSED the
-    // component-aware walk and returned the struct base name
-    // ``g`` instead of ``g_c`` for ``g % c`` scalar reads --
+    // ``<parent>_<member>`` name.  ``traceToDecl(dg.getMemref())``
+    // would bypass the component-aware walk and return the struct
+    // base ``g`` instead of ``g_c`` for a ``g % c`` scalar read,
     // leaking ``g`` as a free symbol into the generated tasklet.
     auto n = traceToDecl(mem);
     if (!n.empty()) {
@@ -1976,12 +1970,8 @@ std::string buildExpr(mlir::Value val, int d) {
     return "any(" + buildExpr(anyOp.getMask(), d + 1) + ")";
   }
 
-  // Unhandled HLFIR op falls through to ``?``.  Logs the op-name +
-  // location to stderr (always-on, previous DACE_FORTRAN_DEBUG_BUILDEXPR
-  // gate is gone) so the missing case is visible without breaking the
-  // ``?``-as-sentinel protocol many tests still rely on for legitimate
-  // fallback paths.  Migration to explicit throws is captured in
-  // ``tasks/audit_question_mark_emissions.md``.
+  // Unhandled HLFIR op falls through to the ``?`` sentinel, which callers use for legitimate fallback paths.
+  // The op name and location go to stderr so a missing case is visible.
   // Cache + log ONCE per op (insert().second is true only on first insertion); re-visits short-circuit at the top.
   if (kUnrenderableOps.insert(def).second) {
     std::string const op_name = def->getName().getStringRef().str();

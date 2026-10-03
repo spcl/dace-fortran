@@ -21,7 +21,7 @@ if TYPE_CHECKING:
         clear_external_registry,
     )
     from dace_fortran.external_functions import ExternalFunction
-    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, generate_sdfg, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
+    from dace_fortran.builder import SDFGBuilder, generate_sdfg, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
     from dace_fortran.preprocess import (
         preprocess_fortran_source,
         merge_used_modules,
@@ -60,10 +60,10 @@ _LAZY = {
     # Distinct from the internal ExternalCall libnode / ExternalSignature ABI record -- no name conflict.
     "ExternalFunction": "dace_fortran.external_functions",
     # Lower-level / advanced.
-    "SDFGBuilder": "dace_fortran.hlfir_to_sdfg",
-    "generate_sdfg": "dace_fortran.hlfir_to_sdfg",
-    "DEFAULT_PIPELINE": "dace_fortran.hlfir_to_sdfg",
-    "MULTI_FILE_PIPELINE": "dace_fortran.hlfir_to_sdfg",
+    "SDFGBuilder": "dace_fortran.builder",
+    "generate_sdfg": "dace_fortran.builder",
+    "DEFAULT_PIPELINE": "dace_fortran.builder",
+    "MULTI_FILE_PIPELINE": "dace_fortran.builder",
     "preprocess_fortran_source": "dace_fortran.preprocess",
     "merge_used_modules": "dace_fortran.preprocess",
     # fparser-based single-TU inliner (opt-in alternative to the regex merge_used_modules splicer).

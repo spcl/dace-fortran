@@ -736,8 +736,8 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
     if (auto md = mem.getDefiningOp())
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
         // Pass the designate itself to traceToDecl so the component-aware walk fires for struct-field designates (`g %
-        // threshold`); traceToDecl(dg.getMemref()) previously bypassed it and leaked the struct base `g` as a free
-        // symbol for `if (x > g % threshold)`.
+        // threshold`); traceToDecl(dg.getMemref()) would bypass it and leak the struct base `g` as a free symbol for
+        // `if (x > g % threshold)`.
         auto arr = traceToDecl(dg.getResult());
         auto indices = dg.getIndices();
         if (arr.empty()) return "?";

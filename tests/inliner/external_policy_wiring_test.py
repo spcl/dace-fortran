@@ -4,9 +4,7 @@ inliner engines: the fparser pipeline (:func:`inline_to_ast`) and the regex text
 (:func:`merge_used_modules`).
 
 ``external_functions``/``do_not_emit`` name procedures that stay declared but get their
-executable body emptied (halo/MPI/I/O internals never enter the TU). The deprecated
-``keep_external=`` (fparser only) is a thin shim -- these tests assert byte-identical output
-plus a warning.
+executable body emptied (halo/MPI/I/O internals never enter the TU).
 """
 
 import shutil
@@ -87,20 +85,11 @@ def test_fparser_external_functions_stub_body():
     assert "a(i)=a(i)*2.0" in out, "the kernel's own body must remain"
 
 
-def test_fparser_external_functions_do_not_emit_keep_external_are_identical():
-    """All three spellings drive the same ``make_noop`` -- byte-identical TUs (the inliner only needs the name; emit-vs-drop is the bridge's concern)."""
+def test_fparser_external_functions_and_do_not_emit_are_identical():
+    """Both spellings drive the same ``make_noop`` -- byte-identical TUs (the inliner only needs the name; emit-vs-drop is the bridge's concern)."""
     via_ext = _fparser_out(external_functions=[ExternalFunction("halo_exchange")])
     via_dne = _fparser_out(do_not_emit=["halo_exchange"])
-    with pytest.warns(DeprecationWarning):
-        via_legacy = _fparser_out(keep_external=["halo_exchange"])
-    assert via_ext == via_dne == via_legacy
-
-
-def test_fparser_keep_external_warns_but_works():
-    """The deprecated ``keep_external=`` still stubs the body, with a warning."""
-    with pytest.warns(DeprecationWarning, match="deprecated"):
-        out = _fparser_out(keep_external=["halo_exchange"]).replace(" ", "")
-    assert "a(i)=a(i)+1.0" not in out
+    assert via_ext == via_dne
 
 
 def test_fparser_validate_rejects_name_in_both():

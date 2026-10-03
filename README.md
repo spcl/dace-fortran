@@ -56,43 +56,48 @@ Order = `DEFAULT_PIPELINE` in `dace_fortran/builder/__init__.py` (`MULTI_FILE_PI
 
 | # | Pass | Purpose |
 |---|---|---|
-| 1 | `hlfir-prune-unreachable` | Erase dispatch-table bindings the entry never dynamically invokes. |
-| 2 | `symbol-dce` (early) | Drop private functions the entry never reaches. |
-| 3 | `lower-fir-select-case` | `fir.select_case` → `cf.cond_br` before inlining (the inliner segfaults on select-case callees). |
-| 4 | `lift-cf-to-scf` (first) | Structurise callees (fold early `RETURN` / CFG into `scf.if`) so inlining can't corrupt a structured region. |
-| 5 | `hlfir-strip-error-helpers` | Delete `CALL errore` / `finish` / `abor1` etc. — their `STOP`-terminated shape stays multi-block and crashes the inliner. |
-| 6 | `hlfir-strip-runtime-io` | Delete diagnostic `_FortranAio*` calls (`WRITE`/`PRINT`/…); file-bound chains are preserved as `dace.libraries.fortran_io` nodes. |
-| 7 | `hlfir-strip-character-runtime` | Delete `_FortranACharacter*` calls (compare/Trim/Adjust) — the bridge models no character data. |
-| 8 | `hlfir-inline-all` | Splice every callee body into the entry; refuses multi-block callees as a safety net. |
-| 9 | `hlfir-unwrap-eval-in-mem` | `hlfir.eval_in_mem` → `fir.alloca` + body + plain reads. |
-| 10 | `hlfir-fold-element-aliases` | Erase element-scoped alias declares left by inlined elementals. |
-| 11–12 | `hlfir-expand-vector-subscript-{gather,scatter}` | Noncontiguous gather temps / scatter destinations → explicit `do` loops. |
-| 13 | `symbol-dce` (late) | Drop private callees once inlined. |
-| 14 | `fir-polymorphic-op` | Statically devirtualise resolvable `fir.dispatch` / `fir.select_type`. |
-| 15 | `hlfir-reject-polymorphism` | Loud-fail on surviving virtual dispatch (CLASS-as-monomorphic-box only). |
-| 16 | `hlfir-rewrite-sequence-association` | Collapse sequence-association adapters into section designates. |
-| 17 | `hlfir-fold-copy-in-out` | Fold flang's copy-in/copy-out temporaries. |
-| 18 | `hlfir-lift-alloc-array-of-records` | Lift `type(t), allocatable :: f(:)` into top-level companions. |
-| 19 | `hlfir-lift-aos-pointer-records` | Materialise concat companions for ICON's AoS-of-pointer-records (Graupel). |
-| 20 | `hlfir-split-aor-dummies` | Split allocatable-array-of-records dummies into per-member descriptors. |
-| 21 | `hlfir-marshal-external-structs` | Expand registered-external `aos` calls into per-member arguments. |
-| 22 | `hlfir-flatten-structs` | AoS → SoA; emits the `hlfir.flatten_plan` attribute. |
-| 23 | `hlfir-mark-bounds-remap-views` | Tag F2003 bounds-remapping pointer assigns so a DaCe View is emitted. |
-| 24 | `hlfir-rewrite-pointer-assigns` | Collapse plain `ptr => target` rebinds under strict-no-alias. |
-| 25 | `hlfir-propagate-shapes` | Assumed-shape dummies acquire real extent symbols. |
-| 26 | `hlfir-version-shape-scalars` | SSA-version a straight-line reassigned scalar used as an array extent. |
-| 27 | `hlfir-lift-reduction-operands` | Lift inline reductions (`max(x, MAXVAL(slice))`) into a preceding scalar temp. |
-| 28 | `hlfir-default-intent` | Intent-less dummies default to `intent_inout`. |
-| 29 | `lift-cf-to-scf` (late) | Raw-CFG loops (`DO WHILE`, `DO…EXIT`) → `scf.while` + `scf.if`. |
-| 30 | `hlfir-preserve-mutable-globals` | Clear init bodies of caller-mutable BSS globals so `sccp` can't fold their loads. |
-| 31 | `hlfir-fold-assumed-rank-queries` | Fold `fir.box_rank` / `fir.is_assumed_size` when the box's rank/shape is statically known. |
-| 32 | `sccp,canonicalize,cse` | Fold + simplify + dedupe. |
+| 1 | `hlfir-drop-stub-calls` | Erase calls to `do_not_emit` stub procedures; a consumed result is zeroed with a warning. |
+| 2 | `hlfir-prune-unreachable` | Erase dispatch-table bindings the entry never dynamically invokes. |
+| 3 | `symbol-dce` | Drop private functions the entry never reaches. |
+| 4 | `lower-fir-select-case` | `fir.select_case` → `cf.cond_br` before inlining (the inliner cannot clone select-case callees). |
+| 5 | `lift-cf-to-scf` | Structurise callees (fold early `RETURN` / CFG into `scf.if`) so inlining cannot corrupt a structured region. |
+| 6 | `hlfir-strip-error-helpers` | Delete `CALL errore` / `finish` / `abor1` etc.: their `STOP`-terminated shape stays multi-block. |
+| 7 | `hlfir-strip-runtime-io` | Delete diagnostic `_FortranAio*` calls; file-bound chains become `dace_fortran.libraries.fortran_io` nodes. |
+| 8 | `hlfir-strip-character-runtime` | Delete `_FortranACharacter*` calls (compare/Trim/Adjust): the bridge models no character data. |
+| 9 | `hlfir-inline-all` | Splice every callee body into the entry; refuses multi-block callees. |
+| 10 | `hlfir-unwrap-eval-in-mem` | `hlfir.eval_in_mem` → `fir.alloca` + body + plain reads. |
+| 11 | `hlfir-fold-element-aliases` | Erase element-scoped alias declares left by inlined elementals. |
+| 12–13 | `hlfir-expand-vector-subscript-{gather,scatter}` | Noncontiguous gather temporaries / scatter destinations → explicit `do` loops. |
+| 14 | `symbol-dce` | Drop private callees once inlined. |
+| 15 | `fir-polymorphic-op` | Statically devirtualise resolvable `fir.dispatch` / `fir.select_type`. |
+| 16 | `hlfir-reject-polymorphism` | Fail loudly on surviving virtual dispatch (CLASS as a monomorphic box only). |
+| 17 | `hlfir-rewrite-sequence-association` | Collapse sequence-association adapters into section designates. |
+| 18 | `hlfir-fold-copy-in-out` | Fold flang's copy-in/copy-out temporaries. |
+| 19 | `hlfir-lift-alloc-array-of-records` | Lift `type(t), allocatable :: f(:)` into top-level companions. |
+| 20 | `hlfir-lift-aos-pointer-records` | Materialise concat companions for ICON's array of pointer records (Graupel). |
+| 21 | `hlfir-eliminate-double-buffer-toggle` | Unroll the loop that reassigns a double-buffer time-level toggle (`nvar = nnow` / `nnew`) and substitute it away. |
+| 22 | `hlfir-split-aor-dummies` | Split allocatable-array-of-records dummies into per-member descriptors. |
+| 23 | `hlfir-marshal-external-structs` | Expand registered-external `aos` calls into per-member arguments. |
+| 24 | `hlfir-prune-never-allocated-member-deref` | Erase a guard that dereferences a record member the module never allocates and never lets escape. |
+| 25 | `hlfir-flatten-structs` | AoS → SoA; emits the `hlfir.flatten_plan` attribute. |
+| 26 | `hlfir-flatten-global-scalar-reads` | Read a never-written scalar member of a module-global record through a synthetic global of its own. |
+| 27 | `hlfir-mark-bounds-remap-views` | Tag F2003 bounds-remapping pointer assigns so a DaCe View is emitted. |
+| 28 | `hlfir-rewrite-pointer-assigns` | Collapse plain `ptr => target` rebinds under strict no-alias. |
+| 29 | `hlfir-propagate-shapes` | Assumed-shape dummies acquire real extent symbols. |
+| 30 | `hlfir-version-shape-scalars` | SSA-version a straight-line reassigned scalar used as an array extent. |
+| 31 | `hlfir-lift-reduction-operands` | Lift inline reductions (`max(x, MAXVAL(slice))`) into a preceding scalar temporary. |
+| 32 | `hlfir-default-intent` | Intent-less dummies default to `intent_inout`. |
+| 33 | `lift-cf-to-scf` | Raw-CFG loops (`DO WHILE`, `DO…EXIT`) → `scf.while` + `scf.if`. |
+| 34 | `hlfir-preserve-mutable-globals` | Clear init bodies of caller-mutable globals so `sccp` cannot fold their loads. |
+| 35 | `hlfir-fold-assumed-rank-queries` | Fold `fir.box_rank` / `fir.is_assumed_size` when the rank / shape is statically known. |
+| 36 | `hlfir-fold-constant-scalars` | Promote scalar stack variables with a single constant store to SSA constants. |
+| 37–39 | `sccp,canonicalize,cse` | Fold, simplify, deduplicate. |
 
 ### Bridge (HLFIR → SDFG)
 
 - `dace_fortran/bridge/` — nanobind Python extension (`hlfir_bridge`). `bridge.cpp` owns an `MLIRContext`+`ModuleOp`, delegates to `trace_utils.cpp` (declaration tracing), `extract_vars.cpp` (variable/descriptor extraction), `extract_ast.cpp` + `bridge/ast/` (`expressions`, `assigns`, `elementals`, `control_flow`, `dispatch`) for the IR walk.
 - Passes live under `dace_fortran/passes/`, link into the `hlfir_bridge_passes` static library.
-- Python side: `dace_fortran/hlfir_to_sdfg.py` (`SDFGBuilder`) + `dace_fortran/builder/` construct the SDFG; `dace_fortran/intrinsics/` lowers Fortran intrinsics (elementwise, reductions, BLAS/LAPACK).
+- Python side: `dace_fortran/builder/` (`SDFGBuilder`) constructs the SDFG; `dace_fortran/intrinsics/` lowers Fortran intrinsics (elementwise, reductions, BLAS/LAPACK).
 
 ### Binding generation (SDFG → Fortran-callable .so)
 
@@ -131,7 +136,7 @@ The bind(c) wrapper marshals host AoS ⇄ SDFG SoA with copy-in/out gather loops
 
 ### 3. Allocation-buffer SSA (the unifying ALLOCATABLE model)
 
-The bridge's model for `ALLOCATABLE` arrays under arbitrary `ALLOCATE`/`DEALLOCATE`/conditional-allocate (consolidated from the former `ALLOC_BUFFER_SSA_DESIGN.md`).
+The bridge's model for `ALLOCATABLE` arrays under arbitrary `ALLOCATE`/`DEALLOCATE`/conditional-allocate.
 
 **Semantics modelled:** an `ALLOCATABLE` at routine/`BLOCK` scope has one name bound to ≤1 current buffer; allocation status persists across control flow within scope (`ALLOCATE` in a taken `IF` branch stays allocated after the `IF`); referencing an unallocated allocatable is prohibited. The bridge never *proves* allocation — it models "the current buffer at each point", trusting the program conforms, and may safely over-allocate on a path where Fortran would leave the name unallocated (a conforming program never reads it there).
 
@@ -330,7 +335,6 @@ Validated corpora: construct-level suite (types, control flow, allocatable/point
 ```
 dace_fortran/
   build.py                 public build_sdfg* entry points
-  hlfir_to_sdfg.py         SDFGBuilder + DEFAULT_PIPELINE re-export
   build_bridge.py          auto-build + import the C++ bridge
   preprocess.py            source-text preprocess passes
   preprocess_cli.py        CLI for the preprocess passes
@@ -338,6 +342,12 @@ dace_fortran/
   flang_codebase.py        real-codebase flang driver helpers (ICON/IFS/…)
   external.py / external_functions.py  external-call policy + registry
   emit_hlfir.py            tier-3 .hlfir emission helper
+  pipelines.py             whole-SDFG optimization recipes (optimize: the e2e parallelization pipeline)
+  acc_residency.py         per-argument OpenACC data residency sidecar
+  integer_power_exponents.py  integer-valued ** exponents -> ipow
+  omp_threads.py           OpenMP thread-count symbol for persistent maps
+  entry_names.py           module::proc entry spelling
+  bridge_types.py / dace_types.py  static types of the bridge extension and DaCe signatures
   CMakeLists.txt           bridge build (LLVM 21/22, nanobind)
   llvm_toolchain.py        LLVM/flang discovery over the supported majors
   llvm_compat.h            LLVM_VERSION_MAJOR shims for the 21/22 C++ API delta
@@ -346,7 +356,8 @@ dace_fortran/
     extract_vars.cpp / extract_ast.cpp / trace_utils.cpp
     ast/                   expressions, assigns, elementals, control_flow, dispatch
   passes/                  the MLIR passes (one .cpp per pass + Passes.cpp)
-  builder/                 SDFG construction (access, descriptors, emit_*)
+  builder/                 SDFG construction (SDFGBuilder, DEFAULT_PIPELINE, access, descriptors, emit_*)
+  libraries/               DaCe library nodes: Fortran file I/O, FFT interpolation
   bindings/                Fortran bind(c) binding generator + C-ABI shim
   intrinsics/              Fortran intrinsic lowering (elementwise/reduction/linalg)
   inliner/                 fparser-based module inliner / ast_desugaring

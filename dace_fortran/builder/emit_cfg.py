@@ -715,7 +715,7 @@ def emit_loop(
     # state with no incoming edge, making the parent CFG's start block
     # ambiguous.
     ctx.flush(builder, region)
-    # The bridge no longer uniquifies loop iter names -- the
+    # The bridge keeps the source loop iterator names -- the
     # ``UniqueLoopIterators`` post-pass (run from ``SDFGBuilder.build()``
     # via ``_run_post_gen_passes``) renames every ``LoopRegion.loop_var``
     # to a globally-unique ``_loop_it_<N>`` symbol and propagates the
@@ -1134,8 +1134,7 @@ def _prepare_cond_expr(
 ) -> tuple[SDFGState, str]:
     """Return ``(pre_state, cond_expr)`` for a single ``conditional`` branch.
 
-    Mirrors the staging logic previously inline in ``emit_cond``:
-    section-alias rewriting, scalar-output subscripting, tasklet-lifting for
+    Staging for one branch of ``emit_cond``: section-alias rewriting, scalar-output subscripting, tasklet-lifting for
     array-reading conditions, and caching of never-written conditions.
     """
     cond = n.condition if n.condition and n.condition != "?" else "True"

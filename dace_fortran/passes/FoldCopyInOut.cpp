@@ -50,8 +50,8 @@
 //     dropped.  Emitting that is a silent wrong answer, so the pass
 //     fails the pipeline instead -- EXCEPT a record-element section (see
 //     below), which only warns: it is a known-unfoldable case that
-//     historically lowered as a phantom, and failing it would block
-//     programs that never depended on it.
+//     lowers as a phantom argument, and failing it would block
+//     programs that never depend on it.
 //
 // Out of scope (left for follow-ups):
 //     * Non-stride-1 triplets (``arr(1:N:2)``).  Would need an index
@@ -195,8 +195,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     getOperation().walk([&](hlfir::CopyInOp op) {
       // Record-element sections are a known-unfoldable case (isRecordElement):
       // the reparent would emit an unresolved record-level offset.  These
-      // historically lowered as a phantom argument that this program's compared
-      // outputs did not depend on, so WARN rather than fail the whole pipeline --
+      // lower as a phantom argument the compared outputs do not depend on,
+      // so WARN rather than fail the whole pipeline --
       // downgrading loudly, not silently.  Non-record survivors are a genuine
       // silent miscompile (dropped writes / zero reads), so those still fail.
       if (isRecordElement(op.getVar().getType())) {
@@ -428,8 +428,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   /// ``mpi_isend(buf, ...)``, and any callee inline-all left standing (an ICON
   /// halo exchange leaves both).  There is no alias ``hlfir.declare`` here, so
   /// the reparent paths have nothing to reparent onto and the section path does
-  /// not apply: every such pair used to reach ``rejectSurvivors`` and fail the
-  /// pipeline.
+  /// not apply, and every such pair would otherwise reach ``rejectSurvivors`` and
+  /// fail the pipeline.
   ///
   /// Alias the argument to the SOURCE box and drop the pair.  Unlike a reparent
   /// this cannot preserve strides -- the callee is receiving a bare address and

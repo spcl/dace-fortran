@@ -51,7 +51,7 @@ from dace_fortran.external import (
     register_external,  # noqa: F401
     registered_names,
 )
-from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
+from dace_fortran.builder import DEFAULT_PIPELINE, SDFGBuilder
 from dace_fortran.llvm_toolchain import require_flang
 from dace_fortran.preprocess import preprocess_fortran_source
 

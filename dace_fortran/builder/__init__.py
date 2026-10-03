@@ -1003,9 +1003,9 @@ class SDFGBuilder:
         # Snapshot the inferred per-axis offsets onto the SDFG before the
         # specialise pass zeroes their symbols out, so tests / diagnostics
         # can still inspect the inferred values without grepping memlet
-        # subsets.  ``sdfg.constants`` no longer carries these entries
-        # because ``specialize_symbols`` substitutes them as literal
-        # integers in every subset.
+        # subsets.  ``sdfg.constants`` does not carry these entries:
+        # ``specialize_symbols`` substitutes them as literal integers in
+        # every subset.
         sdfg._fortran_offset_values = dict(const_offsets)
         # Before any symbol substitution: ``specialize_symbols`` parses every subset it rewrites, so a leaked ``?``
         # surfaces there as a bare ``SyntaxError: invalid syntax (<unknown>, line 1)`` with no indication of which

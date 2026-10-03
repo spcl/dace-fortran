@@ -669,8 +669,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         state.add_edge(node, "_outbuffer", state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
         # Thread the trailing user communicator (a non-default ``comm`` the
         # bridge appended at ``call_args[2]``); default ``MPI_COMM_WORLD`` runs
-        # on the node's implicit world comm.  Previously this collective dropped
-        # the communicator entirely -> it always ran on ``MPI_COMM_WORLD``.
+        # on the node's implicit world comm.
         _wire_user_comm(node, n.call_args[2] if len(n.call_args) > 2 else None)
         return
 
