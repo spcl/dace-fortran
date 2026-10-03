@@ -54,7 +54,7 @@ from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
 from dace_fortran.entry_names import split_qualified_entry
 
-from dace_fortran.builder.auto_dim_symbols import install_auto_dim_symbols
+from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
 from dace_fortran.builder.context import Ctx
 from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
@@ -903,7 +903,10 @@ class SDFGBuilder:
         rather than silently invalidate a generated Fortran binding.
         """
         self._id_counter = 0
-        sdfg = SDFG(sdfg_name(self))
+        # Every Fortran extent stays a required SDFG input; ``AutoDimSDFG`` resolves the synthetic
+        # ``<arr>_d<i>`` symbols a direct caller omits from the passed arrays (correct extent) or a
+        # don't-care default.
+        sdfg = AutoDimSDFG(sdfg_name(self))
         add_descriptors(self, sdfg)
         # Constant-pool (Flang's ``_QQro.<...>`` globals): for every
         # ``parameter``-attributed declare whose backing global carries
@@ -1059,10 +1062,6 @@ class SDFGBuilder:
         # ``sdfg.name``, so a post-build rename is honoured).
         sdfg._fortran_interface_raw = self._fortran_interface_raw
         sdfg._flatten_plan_raw = self.module.get_flatten_plan()
-        # Every Fortran extent stays a required SDFG input; resolve the
-        # synthetic ``<arr>_d<i>`` symbols a direct caller omits from
-        # the passed arrays (correct extent) or a don't-care default.
-        sdfg = install_auto_dim_symbols(sdfg)
         # Soundness check for array-element value-symbols: the backing array of
         # every ``__sym_<arr>_<idx>`` must be constant in the symbol's scope
         # (no write would change the value it froze).  Run on the final graph.

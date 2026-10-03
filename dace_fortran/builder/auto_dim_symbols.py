@@ -30,7 +30,7 @@ class HasShape(Protocol):
 _DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
 
 
-class _AutoDimSDFG(dace.SDFG):
+class AutoDimSDFG(dace.SDFG):
     """``SDFG`` that fills missing synthetic Fortran extent symbols from
     the passed array arguments (or a don't-care default) before the
     real call."""
@@ -67,9 +67,3 @@ class _AutoDimSDFG(dace.SDFG):
         d = super().to_json(*args, **kwargs)
         d['type'] = dace.SDFG.__name__
         return d
-
-
-def install_auto_dim_symbols(sdfg: dace.SDFG) -> dace.SDFG:
-    """Rebind ``sdfg`` so direct calls auto-resolve synthetic extents."""
-    sdfg.__class__ = _AutoDimSDFG
-    return sdfg
