@@ -4,7 +4,8 @@
 
 Bindings-emitted callers always pass correct values; direct ``sdfg(...)``
 calls (test suite) need ``<arr>_d<i>``/``offset_<arr>_d<i>`` filled in -- from
-the passed array's shape; an extent no argument supplies raises (never defaulted).  SDFG
+the passed array's shape; an extent no argument supplies raises when the SDFG accesses that array (never silently
+defaulted).  SDFG
 signature itself is unchanged.
 """
 
@@ -32,8 +33,8 @@ _DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
 
 class AutoDimSDFG(dace.SDFG):
     """``SDFG`` that fills missing synthetic Fortran extent symbols from
-    the passed array arguments before the real call; an extent no
-    argument supplies raises instead of defaulting.
+    the passed array arguments before the real call.  An extent that no argument supplies raises when the
+    array is accessed by the SDFG (its size would be observed); for an array no state touches it is irrelevant.
 
     The annotated attributes are the sidecars ``SDFGBuilder.build`` stashes for the binding emitter."""
 
@@ -62,10 +63,16 @@ class AutoDimSDFG(dace.SDFG):
                 # off-by-one read of every such array.
                 kwargs[sym] = 1
             else:
-                raise ValueError(
-                    f"extent symbol {sym!r} is unbound: no argument {m.group('arr')!r} supplies its extent "
-                    f"(pass {sym}=<extent> explicitly); refusing to default it")
+                arr = m.group('arr')
+                if arr in self._touched_arrays():
+                    raise ValueError(f"extent symbol {sym!r} is unbound: no argument {arr!r} supplies its extent "
+                                     f"(pass {sym}=<extent> explicitly); refusing to default it")
+                kwargs[sym] = 1  # extent of an array no state reads or writes: its size is never observed
         return super().__call__(*args, **kwargs)
+
+    def _touched_arrays(self) -> set[str]:
+        """Names of the arrays some state of this SDFG reads or writes through an access node."""
+        return {node.data for state in self.all_states() for node in state.data_nodes()}
 
     def to_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """Serialise as plain ``SDFG`` so strict-type ``from_json`` (e.g.

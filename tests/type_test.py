@@ -477,8 +477,9 @@ end subroutine main
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     # my_arr_d0/my_arr_d1 come from an inlined-callee alias's assumed-shape dims
     # surfacing as SDFG free symbols; any non-zero value works since the test neither
-    # allocates nor rebinds the pointer -- runtime contract is caller-supplies-extents.
-    sdfg(d=a, my_arr_d0=1, my_arr_d1=1)
+    # allocates nor rebinds the pointer -- runtime contract is caller-supplies-extents.  The same holds for the
+    # flattened ``p_prog%pprog(:)%w`` array the kernel reads: its extents are never defaulted, so pass them too.
+    sdfg(d=a, my_arr_d0=1, my_arr_d1=1, p_prog_pprog_w_d0=1, p_prog_pprog_w_d1=1, p_prog_pprog_w_d2=1)
 
 
 def test_fortran_frontend_type_arg2(tmp_path):

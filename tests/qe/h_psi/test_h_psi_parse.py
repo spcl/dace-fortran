@@ -233,6 +233,7 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
         "flang did not produce a HLFIR output"
 
 
+@pytest.mark.timeout(1800)  # the deeply-inlined h_psi parse alone takes ~6 min, past the lanes' 300 s default
 @pytest.mark.xfail(reason="bridge gap: get_ast's buildExpr reaches HLFIR/FIR ops it does not yet "
                    "lower on the deeply-inlined h_psi body -- a long tail (fir.iterate_while, "
                    "scf.index_switch, fir.allocmem, hlfir.elemental).  The earlier blockers are "
@@ -384,6 +385,7 @@ def test_h_psi_reference_runs(tmp_path):
     np.testing.assert_array_equal(psi, psi_snapshot)
 
 
+@pytest.mark.timeout(1800)  # rebuilds the same SDFG as test_h_psi_parses (~6 min), past the lanes' 300 s default
 @pytest.mark.xfail(reason="depends on test_h_psi_parses: the SDFG build currently xfails "
                    "in the MLIR pass pipeline (hlfir-expand-vector-subscript-"
                    "scatter), so the binding is never emitted; flips with it.",
