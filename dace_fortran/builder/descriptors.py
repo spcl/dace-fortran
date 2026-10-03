@@ -88,7 +88,7 @@ def is_character_data(builder: SDFGBuilder, name: str) -> bool:
     return v is not None and is_character_dtype(v.dtype)
 
 
-def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict[str, set[str]]]:
+def _infer_component_aliases(builder: SDFGBuilder) -> dict[str, str]:
     """Recover pointer-object aliases the bridge inlining chain dissolved.
 
     When Fortran source contains ``p_pat_fn2 => p_patch % comm_pat_c``,
@@ -101,13 +101,9 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
     of unresolved array subscripts against the registered arrays.  When
     every member accessed through a phantom prefix has a matching member
     under exactly one real prefix, we treat the phantom prefix as an
-    alias of that real prefix.  The returned suffix map lets the caller
-    materialise the phantom members as ``view_alias`` descriptors so
-    the rest of the emit path (``collect_indirect``,
-    ``build_memlet_index``, ``acc``) handles them exactly like explicit
-    whole-array view aliases.
+    alias of that real prefix.
 
-    Returns ``(prefix -> real_prefix, prefix -> member_suffixes)``.
+    Returns ``prefix -> real_prefix``.
     """
     known = set(builder.arrays) | set(builder.scalars) | set(builder.symbols)
     unresolved: set[str] = set()
@@ -126,7 +122,7 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
 
     walk(builder.ast)
     if not unresolved:
-        return {}, {}
+        return {}
 
     # For each phantom name, record every possible (prefix, suffix) split.
     prefix_suffixes: dict[str, set[str]] = {}
@@ -162,7 +158,7 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
         if any(r.startswith(prefix + "_") for r in real_names):
             continue
         aliases[prefix] = real_prefix
-    return aliases, prefix_suffixes
+    return aliases
 
 
 def _synth_view_alias(src: VarLike, fortran_name: str) -> SyntheticVar:
@@ -376,7 +372,7 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
     # flattened storage.  This must happen before ``add_descriptors`` registers the
     # SDFG symbols/arrays because the synthetic views need their own offset symbols.
     source_aliases = _pointer_aliases_from_source(builder, builder.fortran_source)
-    inferred_aliases, inferred_suffixes = _infer_component_aliases(builder)
+    inferred_aliases = _infer_component_aliases(builder)
     all_aliases: dict[str, str] = {**inferred_aliases, **source_aliases}
     for prefix, real_prefix in all_aliases.items():
         aliases[prefix] = real_prefix

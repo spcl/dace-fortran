@@ -97,7 +97,7 @@ Order = `DEFAULT_PIPELINE` in `dace_fortran/builder/__init__.py` (`MULTI_FILE_PI
 
 - `dace_fortran/bridge/` — nanobind Python extension (`hlfir_bridge`). `bridge.cpp` owns an `MLIRContext`+`ModuleOp`, delegates to `trace_utils.cpp` (declaration tracing), `extract_vars.cpp` (variable/descriptor extraction), `extract_ast.cpp` + `bridge/ast/` (`expressions`, `assigns`, `elementals`, `control_flow`, `dispatch`) for the IR walk.
 - Passes live under `dace_fortran/passes/`, link into the `hlfir_bridge_passes` static library.
-- Python side: `dace_fortran/builder/` (`SDFGBuilder`) constructs the SDFG; `dace_fortran/intrinsics/` lowers Fortran intrinsics (elementwise, reductions, BLAS/LAPACK).
+- Python side: `dace_fortran/builder/` (`SDFGBuilder`) constructs the SDFG; `dace_fortran/intrinsics/` maps the intrinsics that become DaCe library nodes (matmul, transpose, dot_product, count, merge, ...).
 
 ### Binding generation (SDFG → Fortran-callable .so)
 
@@ -359,7 +359,7 @@ dace_fortran/
   builder/                 SDFG construction (SDFGBuilder, DEFAULT_PIPELINE, access, descriptors, emit_*)
   libraries/               DaCe library nodes: Fortran file I/O, FFT interpolation
   bindings/                Fortran bind(c) binding generator + C-ABI shim
-  intrinsics/              Fortran intrinsic lowering (elementwise/reduction/linalg)
+  intrinsics/              intrinsics lowered to DaCe library nodes
   inliner/                 fparser-based module inliner / ast_desugaring
   data/                    distributed-data helpers
 cmake/                     DaceFortran.cmake (CMake integration)

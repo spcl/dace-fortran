@@ -1,33 +1,8 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Data-class shapes shared by every intrinsic sub-registry.
-
-Each registry file populates a dict of these dataclasses so the public
-helpers in ``__init__.py`` stay family-agnostic.
-"""
+"""The record type of the library-node intrinsic registries in ``linalg.py``."""
 
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True, slots=True)
-class ElementwiseIntrinsic:
-    """Fortran intrinsic lowered to a per-element scalar call inside an
-    ``hlfir.elemental`` body; name is used verbatim in tasklet code, resolved
-    via ``_ALLOWED_MODULES`` (dace/dtypes.py) to ``dace/runtime/include/dace/math.h``."""
-
-    name: str
-    arity: int
-
-
-@dataclass(frozen=True, slots=True)
-class ReductionIntrinsic:
-    """Whole-array reduction that becomes a ``standard.Reduce`` library
-    node via ``state.add_reduce(wcr, axes, identity)``  --  populated by
-    ``reduction.py``, consumed by ``builder/emit_library.py``."""
-
-    name: str
-    wcr: str
-    identity: str
 
 
 @dataclass(frozen=True, slots=True)

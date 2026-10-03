@@ -103,8 +103,8 @@ def _shape_is_symbolic(shape: Sequence[Any]) -> bool:
 
 
 def _parse_reduce_identity(s: str) -> bool | int | float:
-    """Resolve a reduce-accumulator-identity string (from the bridge's kRedTable or the Python
-    REDUCTIONS registry) to its Python value. Raises on an unrecognised non-numeric token rather
+    """Resolve a reduce-accumulator-identity string (from the bridge's kRedTable) to its Python
+    value. Raises on an unrecognised non-numeric token rather
     than silently mis-reducing."""
     named = {
         "True": True,
