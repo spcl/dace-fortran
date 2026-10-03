@@ -308,7 +308,7 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
     binding was pruned with its type), so drop it; then remove any interface
     block emptied as a result.
 
-    Gated by the caller on :data:`analysis.TOLERATE_EXTERNAL_USES`: with full
+    Gated by the caller on :data:`analysis.OPTIONS.tolerate_external_uses`: with full
     resolution every ``IMPORT`` resolves, so this is a no-op."""
     alias_map = analysis.alias_specs(ast)
     for imp in list(walk(ast, f03.Import_Stmt)):

@@ -69,7 +69,7 @@ def make_practically_constant_global_vars_constants(ast: f03.Program) -> f03.Pro
                 # MPI handle like ``mpi_comm_world`` passed to ``mpi_abort``).
                 # When tolerating externals it cannot be a local constant
                 # candidate anyway -- skip it.
-                if analysis.TOLERATE_EXTERNAL_USES:
+                if analysis.OPTIONS.tolerate_external_uses:
                     continue
                 assert loc
             var = alias_map[loc]
@@ -151,7 +151,7 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
             # MPI routine like ``mpi_abort`` reached through a stubbed error
             # path).  When tolerating externals, its argument usage cannot be
             # analysed -- skip it (pruning drops the dead path later).
-            if analysis.TOLERATE_EXTERNAL_USES:
+            if analysis.OPTIONS.tolerate_external_uses:
                 continue
             assert fnspec, fn
         fnstmt = alias_map[fnspec]

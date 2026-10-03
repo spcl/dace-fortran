@@ -112,7 +112,7 @@ def correct_for_function_calls(ast: f03.Program):
                 continue
             # Unresolved constructor/call name (e.g. ICON's external `p_mpi_wtime`) -- under
             # tolerance leave it for pruning to drop; strict mode asserts as before.
-            if not analysis.TOLERATE_EXTERNAL_USES:
+            if not analysis.OPTIONS.tolerate_external_uses:
                 raise AssertionError(f"cannot find {sc_type.string} / {scope_spec}")
             continue
         sc_decl = alias_map[sc_type_spec]

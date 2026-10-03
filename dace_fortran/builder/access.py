@@ -8,19 +8,13 @@ in a state connect through one graph. ``build_memlet_index`` converts a bridge
 0-based and resolving indirect-index expressions via ``collect_indirect``.
 """
 
+import itertools
 import re
 
 from dace_fortran.builder.records import ComplexAliasSpec, SyntheticAccess, SyntheticVar
 
 # Process-level (not per-SDFG) counter for unique '<arr>_at<gid>' names; avoids collisions across multi-file runs.
-_INDIRECTION_GID_COUNTER = 0
-
-
-def _next_indirection_gid() -> int:
-    global _INDIRECTION_GID_COUNTER
-    gid = _INDIRECTION_GID_COUNTER
-    _INDIRECTION_GID_COUNTER += 1
-    return gid
+_INDIRECTION_GIDS = itertools.count()
 
 
 def iter_view_dim_map(view_dim_map):
@@ -568,7 +562,7 @@ def collect_indirect(builder, assigns: list) -> dict:
     for a in assigns:
         for sub, arr in indirect_exprs(builder, a):
             if sub not in out:
-                out[sub] = f"{arr}_at{_next_indirection_gid()}"
+                out[sub] = f"{arr}_at{next(_INDIRECTION_GIDS)}"
     return out
 
 

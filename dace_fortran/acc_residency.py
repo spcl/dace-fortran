@@ -38,11 +38,12 @@ say it is on the host" call for different actions on the binding side.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two import Fortran2003 as f03
@@ -166,14 +167,9 @@ def _mask_cpp(source: str, defines: frozenset) -> str:
     return "\n".join(out)
 
 
-_PARSER = None
-
-
-def _parser():
-    global _PARSER
-    if _PARSER is None:
-        _PARSER = ParserFactory().create(std="f2008")
-    return _PARSER
+@functools.lru_cache(maxsize=None)
+def _parser() -> Callable[..., f03.Program]:
+    return ParserFactory().create(std="f2008")
 
 
 def _parse(source: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> f03.Program:

@@ -267,7 +267,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                     cand = rcand
                 # External TBP candidate with no Fortran source (e.g. ICON's MPI halo
                 # `%exchange_data` -> `exchange_data_4de1_dp`) -- skip under tolerance; leave for pruning.
-                if analysis.TOLERATE_EXTERNAL_USES and proc_map.get(cand) not in alias_map:
+                if analysis.OPTIONS.tolerate_external_uses and proc_map.get(cand) not in alias_map:
                     continue
                 cand_stmt = alias_map[proc_map[cand]]
                 cand_spec = analysis.ident_spec(cand_stmt)
@@ -286,14 +286,14 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         if bspec not in proc_map:
             # No concrete procedure with source -- under tolerance leave for pruning
             # (a stubbed/unreachable wrapper, e.g. the halo-exchange path).
-            if analysis.TOLERATE_EXTERNAL_USES:
+            if analysis.OPTIONS.tolerate_external_uses:
                 continue
             cand_dump = "".join(f"\n...> {c}" for c in all_cand_sigs)
             raise AssertionError(f"[in mod: {cmod}/{callsite}] {bspec} not found for {args_sig}{cand_dump}")
         pname = proc_map[bspec]
         # Mirrors the generic-candidate guard above: a specific binding may name a sourceless
         # external (e.g. the MPI halo primitive) -- drop it rather than emit a use of a missing symbol.
-        if analysis.TOLERATE_EXTERNAL_USES and pname not in alias_map:
+        if analysis.OPTIONS.tolerate_external_uses and pname not in alias_map:
             continue
 
         # Assumes a subprogram defined directly inside a module.

@@ -6,7 +6,7 @@ import math
 import operator
 import sys
 from copy import copy
-from typing import Optional, Tuple, List, Dict, Union, Set
+from typing import Iterator, Optional, Tuple, List, Dict, Union, Set
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
@@ -210,29 +210,39 @@ def identifier_specs(ast: f03.Program) -> types.SPEC_TABLE:
     return ident_map
 
 
-#: When True, :func:`alias_specs` does not assert on a ``USE`` of a module
-#: (or of a name from a module) that is absent from the parsed sources --
-#: it skips aliasing that import and leaves the name unresolved.  This lets
-#: the inliner ingest a kernel whose enclosing module ``USE``s an external
-#: library that has no Fortran source on the search path (ICON: ``netcdf``,
-#: ``mpi``, ``cdi`` ...): the import is left dangling and the reachability
-#: pruning then drops the (unused) procedures that referenced it.  Enabled
-#: only around the inliner pipeline (see
-#: :func:`dace_fortran.fparser_inliner.inline_to_ast`); default-off keeps the
-#: strict resolution the upstream desugaring tests rely on.
-TOLERATE_EXTERNAL_USES = False
+class AnalysisOptions:
+    """Process-wide switches of the inliner analysis passes."""
+
+    __slots__ = ("tolerate_external_uses", )
+
+    #: When True, :func:`alias_specs` does not assert on a ``USE`` of a module
+    #: (or of a name from a module) that is absent from the parsed sources --
+    #: it skips aliasing that import and leaves the name unresolved.  This lets
+    #: the inliner ingest a kernel whose enclosing module ``USE``s an external
+    #: library that has no Fortran source on the search path (ICON: ``netcdf``,
+    #: ``mpi``, ``cdi`` ...): the import is left dangling and the reachability
+    #: pruning then drops the (unused) procedures that referenced it.  Enabled
+    #: only around the inliner pipeline (see
+    #: :func:`dace_fortran.fparser_inliner.inline_to_ast`); default-off keeps the
+    #: strict resolution the upstream desugaring tests rely on.
+    tolerate_external_uses: bool
+
+    def __init__(self) -> None:
+        self.tolerate_external_uses = False
+
+
+OPTIONS = AnalysisOptions()
 
 
 @contextlib.contextmanager
-def tolerate_external_uses(enabled: bool = True):
-    """Temporarily toggle :data:`TOLERATE_EXTERNAL_USES` (see its docstring)."""
-    global TOLERATE_EXTERNAL_USES
-    prev = TOLERATE_EXTERNAL_USES
-    TOLERATE_EXTERNAL_USES = enabled
+def tolerate_external_uses(enabled: bool = True) -> Iterator[None]:
+    """Temporarily set ``OPTIONS.tolerate_external_uses`` (see its docstring)."""
+    prev = OPTIONS.tolerate_external_uses
+    OPTIONS.tolerate_external_uses = enabled
     try:
         yield
     finally:
-        TOLERATE_EXTERNAL_USES = prev
+        OPTIONS.tolerate_external_uses = prev
 
 
 def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
@@ -258,7 +268,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
             # An external module with no Fortran source on the search path
             # (e.g. ICON's ``netcdf`` / ``mpi``).  When tolerating, leave its
             # imports unresolved and let pruning drop the code that used them.
-            if TOLERATE_EXTERNAL_USES:
+            if OPTIONS.tolerate_external_uses:
                 continue
             assert mod_spec in ident_map, mod_spec
         # The module's name cannot be used as an identifier in this scope anymore, so just point to the module.
@@ -298,7 +308,7 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
                     # A specific name imported from a module that is present but
                     # does not define it (e.g. a partial external/stub module).
                     # Tolerate as above: leave it unresolved for pruning to drop.
-                    if TOLERATE_EXTERNAL_USES:
+                    if OPTIONS.tolerate_external_uses:
                         continue
                     assert tgt_spec in alias_map, f"{src_spec} => {tgt_spec}"
                 alias_map[src_spec] = alias_map[tgt_spec]
@@ -387,11 +397,11 @@ def find_real_ident_spec_tolerant(ident: str,
                                   alias_map: types.SPEC_TABLE,
                                   node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
     """Resolve ``ident`` to its canonical spec with a single lookup.  Under
-    :data:`TOLERATE_EXTERNAL_USES` an unresolved external symbol returns ``None``
+    :data:`OPTIONS` an unresolved external symbol returns ``None``
     (the caller substitutes a match-anything type) instead of asserting;
     otherwise this asserts exactly like :func:`find_real_ident_spec`."""
     spec = search_real_ident_spec(ident, in_spec, alias_map, node_types)
-    if spec is None and not TOLERATE_EXTERNAL_USES:
+    if spec is None and not OPTIONS.tolerate_external_uses:
         raise AssertionError(f"cannot find {ident} / {in_spec}")
     return spec
 
@@ -600,7 +610,7 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
             # unresolved external entity, so the entity is simply not a
             # compile-time constant here -- return None per this evaluator's
             # contract instead of asserting.
-            assert TOLERATE_EXTERNAL_USES
+            assert OPTIONS.tolerate_external_uses
             return None
         return optimizations._val_2_np_lit(val, typ.spec)
     elif isinstance(expr, f03.Intrinsic_Function_Reference):
@@ -800,7 +810,7 @@ def find_dataref_component_spec(dref: Union[f03.Name, f03.Data_Ref], scope_spec:
             # A component of an externalised/unresolvable type (MATCH_ALL has no
             # members to resolve against) is itself unknown -- return MATCH_ALL,
             # mirroring find_type_dataref. Strict mode keeps the assert.
-            assert TOLERATE_EXTERNAL_USES
+            assert OPTIONS.tolerate_external_uses
             return MATCH_ALL.spec
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
@@ -809,7 +819,7 @@ def find_dataref_component_spec(dref: Union[f03.Name, f03.Data_Ref], scope_spec:
         assert cur_type
 
     if cur_type.spec == MATCH_ALL.spec:
-        assert TOLERATE_EXTERNAL_USES
+        assert OPTIONS.tolerate_external_uses
         return MATCH_ALL.spec
     comp = rest[-1]
     part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
@@ -838,7 +848,8 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
             # A match-anything type (external / ``CLASS(*)`` under tolerance) has
             # an unknown rank, so allow subscripts on it; a genuine scalar cannot
             # be indexed and still asserts.
-            assert not subs or (TOLERATE_EXTERNAL_USES and t.spec == ('*', )), f"{t} / {pname}, {t.spec}, {dref}"
+            assert not subs or (OPTIONS.tolerate_external_uses
+                                and t.spec == ('*', )), f"{t} / {pname}, {t.spec}, {dref}"
         elif subs:
             t.shape = tuple(s.tofortran() for s in subs.children if ':' in s.tofortran())
         return t
@@ -847,7 +858,7 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
         return _subscripted_type(cur_type, dref)
     for comp in rest:
         assert isinstance(comp, (f03.Name, f03.Part_Ref))
-        if TOLERATE_EXTERNAL_USES and cur_type.spec == ('*', ):
+        if OPTIONS.tolerate_external_uses and cur_type.spec == ('*', ):
             # Cannot trace a component of a match-anything type; stay match-anything.
             return MATCH_ALL
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
@@ -858,7 +869,7 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
             # A component whose declaration carries no resolvable type (an
             # externalized / opaque member reached under tolerance): stay
             # match-anything, consistent with the spec==('*',) branch above.
-            assert TOLERATE_EXTERNAL_USES, f"{comp_spec} / {dref} in {scope_spec}"
+            assert OPTIONS.tolerate_external_uses, f"{comp_spec} / {dref} in {scope_spec}"
             return MATCH_ALL
         if isinstance(comp, f03.Part_Ref):
             cur_type = _subscripted_type(cur_type, comp)
@@ -986,7 +997,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                     # match-anything so signature computation proceeds.
                     return MATCH_ALL
                 t = find_type_of_entity(alias_map[x_spec], alias_map)
-                if t is None and TOLERATE_EXTERNAL_USES:
+                if t is None and OPTIONS.tolerate_external_uses:
                     # The name resolves to a non-data entity (e.g. a type-bound
                     # procedure such as ``group_id`` used as an actual argument):
                     # it has no value type, so treat it as match-anything.
@@ -999,7 +1010,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 orig_type = find_type_dataref(part_name, scope_spec, alias_map)
                 if not orig_type.shape:
                     # A match-anything type has unknown rank, so tolerate subscripts.
-                    assert not subsc or (TOLERATE_EXTERNAL_USES and orig_type.spec == ('*', ))
+                    assert not subsc or (OPTIONS.tolerate_external_uses and orig_type.spec == ('*', ))
                     return orig_type
                 if not subsc:
                     return orig_type
@@ -1086,7 +1097,7 @@ MATCH_ALL = types.TYPE_SPEC(('*', ), '')  # TODO: Hacky; `_does_type_signature_m
 
 
 def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
-    if c.spec == ('*', ) or (TOLERATE_EXTERNAL_USES and g.spec == ('*', )):
+    if c.spec == ('*', ) or (OPTIONS.tolerate_external_uses and g.spec == ('*', )):
         # A match-anything candidate parameter matches any argument; under
         # tolerance an unresolved external argument matches any parameter.  Use
         # a value check on the spec (TYPE_SPEC has no value ``__eq__``, so an

@@ -171,7 +171,7 @@ def _preserved_intrinsic_modules(ast: Optional[f03.Program] = None) -> frozenset
     ``-fallow-argument-mismatch`` on the reference build).  In the external halo
     mode no such stub is provided and ``mo_mpi`` is not inlined, so the group is
     still dropped as before.  Pass ``ast`` to enable the provided-module check."""
-    if not analysis.TOLERATE_EXTERNAL_USES:
+    if not analysis.OPTIONS.tolerate_external_uses:
         return INTRINSIC_MODULE_NAMES
     preserved = INTRINSIC_MODULE_NAMES - EXTERNAL_LIBRARY_MODULE_NAMES
     if ast is not None:
@@ -1060,7 +1060,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     if walk(ast, f03.Interface_Stmt):
         _checkpoint_ast(cfg, 'ast_v1.error.f90', ast)
-        if not analysis.TOLERATE_EXTERNAL_USES:
+        if not analysis.OPTIONS.tolerate_external_uses:
             raise RuntimeError("Could not remove all the interfaces from AST")
         # Tolerating externals: a generic interface whose calls could not all be
         # resolved to a specific is left in place.  This happens for a
@@ -1119,7 +1119,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     logger.debug("FParser Op: AST-size settled at %d lines.", len(ast_f90_new.splitlines()))
     _checkpoint_ast(cfg, 'ast_v3.f90', ast)
 
-    if analysis.TOLERATE_EXTERNAL_USES:
+    if analysis.OPTIONS.tolerate_external_uses:
         # Drop interface bodies left dangling by pruning external baggage -- the
         # halo-exchange comm-pattern abstract interfaces whose IMPORTed comm
         # types were pruned away.  A no-op under full resolution.
@@ -1404,7 +1404,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     the search path (ICON: ``netcdf`` / ``mpi`` / ``cdi``): such imports are
     left unresolved and the reachability pruning drops the procedures that
     referenced them (see
-    :data:`dace_fortran.inliner.ast_desugaring.analysis.TOLERATE_EXTERNAL_USES`).
+    :data:`dace_fortran.inliner.ast_desugaring.analysis.OPTIONS.tolerate_external_uses`).
 
     ``optimize=False`` skips the constant-propagation / branch-pruning
     optimization passes (see :func:`run_fparser_transformations`) -- used by

@@ -254,13 +254,24 @@ class ExternalSignature:
         return f'extern "C" void {self.c_name}({params});'
 
 
-_REGISTRY: Dict[str, ExternalSignature] = {}
+class _RegistryState:
+    """Process-wide external registry: the signatures plus the linker config they mutated."""
 
-#: Snapshot of ``compiler.linker.args`` before the first registration
-#: that contributes libraries -- restored by
-#: :func:`clear_external_registry` so the global config mutation does
-#: not leak past the registry's lifetime.
-_ORIG_LINKER_ARGS: Optional[str] = None
+    __slots__ = ("signatures", "orig_linker_args")
+
+    signatures: Dict[str, ExternalSignature]
+    #: Snapshot of ``compiler.linker.args`` before the first registration
+    #: that contributes libraries -- restored by
+    #: :func:`clear_external_registry` so the global config mutation does
+    #: not leak past the registry's lifetime.
+    orig_linker_args: Optional[str]
+
+    def __init__(self) -> None:
+        self.signatures = {}
+        self.orig_linker_args = None
+
+
+_STATE = _RegistryState()
 
 
 def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
@@ -290,13 +301,12 @@ def _apply_linker_config():
     (verbatim shared-linker flags -- not the CMake-list ``DACE_LIBS``)."""
     import dace
 
-    global _ORIG_LINKER_ARGS
-    if _ORIG_LINKER_ARGS is None:
-        _ORIG_LINKER_ARGS = dace.Config.get("compiler", "linker", "args") or ""
+    if _STATE.orig_linker_args is None:
+        _STATE.orig_linker_args = dace.Config.get("compiler", "linker", "args") or ""
     flags: List[str] = []
-    for sig in _REGISTRY.values():
+    for sig in _STATE.signatures.values():
         flags += _link_flags(sig.libraries)
-    merged = (_ORIG_LINKER_ARGS + " " + " ".join(dict.fromkeys(flags))).strip()
+    merged = (_STATE.orig_linker_args + " " + " ".join(dict.fromkeys(flags))).strip()
     dace.Config.set("compiler", "linker", "args", value=merged)
 
 
@@ -313,7 +323,7 @@ def register_external(name: str, signature: ExternalSignature):
         (for a ``bind(c, name=foo)`` interface this is ``foo``).
     :param signature: its :class:`ExternalSignature`.
     """
-    _REGISTRY[name] = signature
+    _STATE.signatures[name] = signature
     if signature.libraries:
         _apply_linker_config()
 
@@ -429,7 +439,7 @@ def apply_external_functions(external_functions: Iterable["ExternalFunction"] = 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:
     """Return the registered signature for ``name``, or ``None``."""
-    return _REGISTRY.get(name)
+    return _STATE.signatures.get(name)
 
 
 def registered_names() -> List[str]:
@@ -442,7 +452,7 @@ def registered_names() -> List[str]:
 
     :returns: the registry keys (Fortran call-site names).
     """
-    return list(_REGISTRY)
+    return list(_STATE.signatures)
 
 
 def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> int:
@@ -526,12 +536,11 @@ def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> i
 def clear_external_registry():
     """Drop all registrations and restore ``compiler.linker.args`` to
     its pre-registration value (test isolation / no global leak)."""
-    global _ORIG_LINKER_ARGS
-    _REGISTRY.clear()
-    if _ORIG_LINKER_ARGS is not None:
+    _STATE.signatures.clear()
+    if _STATE.orig_linker_args is not None:
         import dace
-        dace.Config.set("compiler", "linker", "args", value=_ORIG_LINKER_ARGS)
-        _ORIG_LINKER_ARGS = None
+        dace.Config.set("compiler", "linker", "args", value=_STATE.orig_linker_args)
+        _STATE.orig_linker_args = None
 
 
 @dace.library.expansion
