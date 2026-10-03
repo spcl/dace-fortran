@@ -89,6 +89,17 @@ subroutine cst32(y)
 end subroutine cst32
 """
 
+# Combine each literal with a runtime argument so the pipeline cannot constant-fold it away.
+_SRC_F32_RUNTIME = """
+subroutine cst32r(x, y, z)
+  implicit none
+  real(4), intent(in) :: x
+  real(4), intent(out) :: y, z
+  y = x + 0.1
+  z = x * 0.2
+end subroutine cst32r
+"""
+
 _SRC_F64 = """
 subroutine cst64(y)
   implicit none
@@ -147,7 +158,7 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     """f32 literal stringifies to its shortest round-tripping form (float32(0.1)), not the f64-widened expansion -- bit-identical once cast, but stays close to the Fortran source."""
     d = tmp_path / "f32short"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_F32, d, name="cst32s", entry="cst32").build()
+    sdfg = build_sdfg(_SRC_F32_RUNTIME, d, name="cst32s", entry="cst32r").build()
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
