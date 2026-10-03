@@ -1,177 +1,77 @@
-"""End-to-end numerical correctness for ICON's AES graupel scheme.
+"""End-to-end numerical correctness for ICON's AES graupel scheme (original Muphys layout).
 
-Compiles ``mo_aes_graupel + mo_aes_thermo + mo_kind + mo_physical_constants``
-as a gfortran reference (via the C-bound ``graupel_caller.f90`` wrapper), and
-the SAME source through the bridge as an SDFG; runs both with identical
-seeded random inputs and compares prognostic + diagnostic outputs element-wise.
+Compiles ``mo_aes_graupel + mo_aes_thermo + mo_kind + mo_physical_constants`` as a gfortran reference (via the C-bound ``graupel_caller.f90`` wrapper) and the SAME sources through the bridge as one SDFG, runs both on the physical input columns of ``_graupel_harness.physical_columns`` (cold ice/snow, mixed phase, melting, warm-rain evaporation, warm/dry no-op) and compares every INOUT and OUT array.  The per-column fused variant is covered by ``test_aes_graupel_fused_full.py``.
 
-Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used
-to size from unbound extents that call-time auto-fill defaulted to 1,
-under-allocating and overflowing the heap, until the ``fir.box_dims ->
-<name>_d<dim>`` extent resolution closed it.
-
-``init_graupel_inputs_c`` (Mulberry32-style scramble keyed off the seed) seeds
-both sides identically, so byte-identical buffers feed both kernels.
+Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used to size from unbound extents that call-time auto-fill defaulted to 1, under-allocating and overflowing the heap, until the ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it.
 """
-import ctypes
-import subprocess
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-from _util import have_flang
+from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files
+
+from ._graupel_harness import (DEP_SOURCES, ENTRY, ORIGINAL_SOURCE, SCENARIOS, Config, assert_families_fire,
+                               assert_match, compile_reference, copy_fields, physical_columns, run_reference, run_sdfg,
+                               zero_outputs)
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
-_HERE = Path(__file__).resolve().parent
-_AES = _HERE / "aes_graupel"
-
-_GRAUPEL_SOURCES = [
-    _AES / "mo_aes_graupel.f90",
-    _AES / "mo_aes_thermo.f90",
-    _AES / "mo_kind.f90",
-    _AES / "mo_physical_constants.f90",
-]
-
-_CALLER = _HERE / "graupel_caller.f90"
-
-_ENTRY = "mo_aes_graupel::graupel_run"
+RTOL = 1e-10
+ATOL = 1e-14
 
 
-def _compile_reference(out_dir: Path) -> ctypes.CDLL:
-    """Build the multi-file gfortran reference into a single ``.so``; sources
-    compile in dependency order so each USE finds the prior step's ``.mod``."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    so_path = out_dir / "libgraupel_ref.so"
-    flags = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-ffree-line-length-none"]
-    # Dependency-ordered list (leaf modules first).
-    ordered = [
-        _AES / "mo_kind.f90",
-        _AES / "mo_physical_constants.f90",
-        _AES / "mo_aes_thermo.f90",
-        _AES / "mo_aes_graupel.f90",
-        _CALLER,
-    ]
-    objects = []
-    for src in ordered:
-        obj = out_dir / (src.stem + ".o")
-        # Use ``cwd=out_dir`` so gfortran writes ``.mod`` files there
-        # and finds them on subsequent steps.  Avoid ``-J`` because
-        # other tests may leave a flang-compiled
-        # ``iso_c_binding.mod`` in shared paths (TMPDIR etc.) that
-        # gfortran rejects with "not a GNU Fortran module file".
-        subprocess.run(["gfortran", *flags, "-c", str(src), "-o", str(obj)], check=True, cwd=str(out_dir))
-        objects.append(str(obj))
-    subprocess.run(["gfortran", "-shared", "-fPIC", "-o", str(so_path), *objects], check=True, cwd=str(out_dir))
-    return ctypes.CDLL(str(so_path))
+@pytest.fixture(scope="module")
+def reference(tmp_path_factory):
+    return compile_reference(tmp_path_factory.mktemp("graupel_orig_ref"), [ORIGINAL_SOURCE])
 
 
-def test_aes_graupel_e2e_numerical(tmp_path):
-    """``graupel_run`` reference vs SDFG: element-wise compare of every INOUT
-    prognostic + every OUT diagnostic for seeded random inputs."""
-    ivec, k_v = 4, 8
-    ivs, ive, ks = 1, ivec, 1
-    dt = 30.0
-    seed = 42
+@pytest.fixture(scope="module")
+def sdfg(tmp_path_factory):
+    out = tmp_path_factory.mktemp("graupel_orig_sdfg")
+    built = build_sdfg_from_files([*DEP_SOURCES, ORIGINAL_SOURCE],
+                                  entry=ENTRY,
+                                  name="graupel_run",
+                                  out_dir=out / "build")
+    built.validate()
+    return built
 
-    lib = _compile_reference(tmp_path / "ref")
-    init = lib.init_graupel_inputs_c
-    init.restype = None
-    init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, *([ctypes.c_void_p] * 10), ctypes.c_void_p]
-    run = lib.run_graupel_c
-    run.restype = None
-    # 11 inputs + 6 outputs = 17 array args. Prior `* 16` was off-by-one; the
-    # missing trailing arg corrupted the stack -> SIGSEGV before the kernel ran.
-    run.argtypes = [ctypes.c_int] * 5 + [ctypes.c_double] + [ctypes.c_void_p] * 17
 
-    f64_2d = lambda: np.zeros((ivec, k_v), dtype=np.float64, order='F')
-    f64_1d = lambda: np.zeros((ivec, ), dtype=np.float64, order='F')
+def _run_both(reference, sdfg, cfg: Config):
+    inputs = physical_columns()
+    ref, got = copy_fields(inputs), copy_fields(inputs)
+    zero_outputs(ref)
+    zero_outputs(got)
+    run_reference(reference, ref, cfg)
+    run_sdfg(sdfg, got, cfg)
+    return inputs, ref, got
 
-    bufs_ref = {
-        'dz': f64_2d(),
-        't': f64_2d(),
-        'p': f64_2d(),
-        'rho': f64_2d(),
-        'qv': f64_2d(),
-        'qc': f64_2d(),
-        'qi': f64_2d(),
-        'qr': f64_2d(),
-        'qs': f64_2d(),
-        'qg': f64_2d(),
-        'qnc': f64_1d(),
-    }
 
-    # Seed both sides from the same source-of-truth.
-    init(ctypes.c_int(seed), ctypes.c_int(ivec), ctypes.c_int(k_v),
-         *[bufs_ref[k].ctypes.data for k in ('dz', 't', 'p', 'rho', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg', 'qnc')])
+def test_aes_graupel_e2e_numerical(reference, sdfg):
+    """Every INOUT prognostic and OUT diagnostic of ``graupel_run`` matches gfortran on all five scenarios."""
+    inputs, ref, got = _run_both(reference, sdfg, Config(1, len(SCENARIOS), 1))
+    assert_families_fire(inputs, ref)
+    assert_match(ref, got, RTOL, ATOL)
 
-    pflx_ref = f64_2d()
-    prr_ref = f64_1d()
-    pri_ref = f64_1d()
-    prs_ref = f64_1d()
-    prg_ref = f64_1d()
-    pre_ref = f64_1d()
 
-    run(ctypes.c_int(ivec), ctypes.c_int(k_v), ctypes.c_int(ivs), ctypes.c_int(ive), ctypes.c_int(ks),
-        ctypes.c_double(dt), bufs_ref['dz'].ctypes.data, bufs_ref['t'].ctypes.data, bufs_ref['p'].ctypes.data,
-        bufs_ref['rho'].ctypes.data, bufs_ref['qv'].ctypes.data, bufs_ref['qc'].ctypes.data, bufs_ref['qi'].ctypes.data,
-        bufs_ref['qr'].ctypes.data, bufs_ref['qs'].ctypes.data, bufs_ref['qg'].ctypes.data, bufs_ref['qnc'].ctypes.data,
-        prr_ref.ctypes.data, pri_ref.ctypes.data, prs_ref.ctypes.data, prg_ref.ctypes.data, pflx_ref.ctypes.data,
-        pre_ref.ctypes.data)
+def test_aes_graupel_e2e_offsets(reference, sdfg):
+    """``ivstart > 1``, ``ivend < nvec`` and ``kstart > 1`` match gfortran; columns and levels outside the range are untouched."""
+    inputs, ref, got = _run_both(reference, sdfg, Config(2, len(SCENARIOS) - 1, 4))
+    assert_match(ref, got, RTOL, ATOL)
+    for n in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'):
+        np.testing.assert_array_equal(got[n][:, :3], inputs[n][:, :3])
+        np.testing.assert_array_equal(got[n][[0, len(SCENARIOS) - 1]], inputs[n][[0, len(SCENARIOS) - 1]])
 
-    sdfg_dir = tmp_path / "sdfg"
-    sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg_from_files(_GRAUPEL_SOURCES, entry=_ENTRY, name="graupel_run", out_dir=sdfg_dir / "build")
 
-    # Re-seed for the SDFG side -- reference call mutated the INOUT buffers.
-    bufs_sdfg = {k: np.zeros_like(v) for k, v in bufs_ref.items()}
-    init(ctypes.c_int(seed), ctypes.c_int(ivec), ctypes.c_int(k_v),
-         *[bufs_sdfg[k].ctypes.data for k in ('dz', 't', 'p', 'rho', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg', 'qnc')])
+if __name__ == '__main__':
+    import tempfile
+    from pathlib import Path
 
-    pflx_sdfg = f64_2d()
-    prr_sdfg = f64_1d()
-    pri_sdfg = f64_1d()
-    prs_sdfg = f64_1d()
-    prg_sdfg = f64_1d()
-    pre_sdfg = f64_1d()
-
-    sdfg(nvec=np.int32(ivec),
-         ke=np.int32(k_v),
-         ivstart=np.int32(ivs),
-         ivend=np.int32(ive),
-         kstart=np.int32(ks),
-         dt=np.float64(dt),
-         dz=bufs_sdfg['dz'],
-         t=bufs_sdfg['t'],
-         p=bufs_sdfg['p'],
-         rho=bufs_sdfg['rho'],
-         qv=bufs_sdfg['qv'],
-         qc=bufs_sdfg['qc'],
-         qi=bufs_sdfg['qi'],
-         qr=bufs_sdfg['qr'],
-         qs=bufs_sdfg['qs'],
-         qg=bufs_sdfg['qg'],
-         qnc=bufs_sdfg['qnc'],
-         prr_gsp=prr_sdfg,
-         pri_gsp=pri_sdfg,
-         prs_gsp=prs_sdfg,
-         prg_gsp=prg_sdfg,
-         pflx=pflx_sdfg,
-         pre_gsp=pre_sdfg)
-
-    # Prognostics (INOUT) -- compare post-step values.
-    for nm in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'):
-        np.testing.assert_allclose(bufs_sdfg[nm],
-                                   bufs_ref[nm],
-                                   rtol=1e-10,
-                                   atol=1e-12,
-                                   err_msg=f"prognostic {nm} drifted")
-    # Diagnostics (OUT).
-    np.testing.assert_allclose(pflx_sdfg, pflx_ref, rtol=1e-10, atol=1e-12)
-    np.testing.assert_allclose(prr_sdfg, prr_ref, rtol=1e-10, atol=1e-12)
-    np.testing.assert_allclose(pri_sdfg, pri_ref, rtol=1e-10, atol=1e-12)
-    np.testing.assert_allclose(prs_sdfg, prs_ref, rtol=1e-10, atol=1e-12)
-    np.testing.assert_allclose(prg_sdfg, prg_ref, rtol=1e-10, atol=1e-12)
-    np.testing.assert_allclose(pre_sdfg, pre_ref, rtol=1e-10, atol=1e-12)
+    with tempfile.TemporaryDirectory() as tmp:
+        ref_lib = compile_reference(Path(tmp) / "ref", [ORIGINAL_SOURCE])
+        built = build_sdfg_from_files([*DEP_SOURCES, ORIGINAL_SOURCE],
+                                      entry=ENTRY,
+                                      name="graupel_run",
+                                      out_dir=Path(tmp) / "build")
+        built.validate()
+        test_aes_graupel_e2e_numerical(ref_lib, built)
+        test_aes_graupel_e2e_offsets(ref_lib, built)
