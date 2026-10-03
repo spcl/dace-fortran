@@ -8,7 +8,7 @@ runtime args, computed expressions, or constants. Positive cases live in
 ``tests/double_buffer_test.py``; the dycore probe in
 ``tests/icon/dycore/test_solve_nonhydro_parse.py`` must keep passing.
 """
-import numpy as np
+
 import pytest
 
 from _util import build_sdfg, have_flang

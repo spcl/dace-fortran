@@ -13,6 +13,7 @@ copy, scattering the ``n1``-element buffer across all ``n1*nb`` cells of ``arr``
 ``prog_h`` halo transpose). An AUTOMATIC ``sbuf(SIZE(arr,1))`` in the same role is a direct declare and
 never hit the bug, so the two buffer kinds are the discriminator.
 """
+
 from pathlib import Path
 
 import numpy as np

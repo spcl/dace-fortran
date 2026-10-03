@@ -31,7 +31,7 @@ def test_fortran_frontend_sum2loop_1d_without_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name="index_offset_test", entry="index_test_function").build()
 
     size = 7
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -63,7 +63,7 @@ def test_fortran_frontend_sum2loop_1d_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name="index_offset_test", entry="index_test_function").build()
 
     size = 5
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -96,7 +96,7 @@ def test_fortran_frontend_arr2loop_2d(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name="index_offset_test", entry="index_test_function").build()
 
     sizes = [5, 3]
     d = np.full(sizes, 42, order="F", dtype=np.float64)
@@ -132,7 +132,7 @@ def test_fortran_frontend_arr2loop_2d_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name="index_offset_test", entry="index_test_function").build()
 
     sizes = [5, 4]
     d = np.full(sizes, 42, order="F", dtype=np.float64)

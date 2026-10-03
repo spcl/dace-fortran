@@ -31,6 +31,7 @@ Usage::
 
 Exit status: 0 when every analyzer that ran was clean, 1 otherwise.
 """
+
 import argparse
 import os
 import shutil
@@ -45,12 +46,14 @@ ASAN_CPU_ARGS = "-fPIC -O1 -g -fsanitize=address -fno-omit-frame-pointer -march=
 
 def asan_recipe() -> str:
     """The env to run a Python test under ASan against a freshly ASan-built kernel."""
-    return ("# Rebuild the kernel with ASan and preload the matching runtime (gcc kernels -> gcc libasan):\n"
-            f'  export DACE_compiler_cpu_args="{ASAN_CPU_ARGS}"\n'
-            "  export LD_PRELOAD=$(gcc -print-file-name=libasan.so)\n"
-            "  export ASAN_OPTIONS=detect_leaks=0    # Python leaks are noise; tighten later\n"
-            "  # then run the test; wipe the cache first so the kernel is recompiled with the flags:\n"
-            "  rm -rf .dacecache/<name> && python -m pytest tests/<file>.py -k <case>\n")
+    return (
+        "# Rebuild the kernel with ASan and preload the matching runtime (gcc kernels -> gcc libasan):\n"
+        f'  export DACE_compiler_cpu_args="{ASAN_CPU_ARGS}"\n'
+        "  export LD_PRELOAD=$(gcc -print-file-name=libasan.so)\n"
+        "  export ASAN_OPTIONS=detect_leaks=0    # Python leaks are noise; tighten later\n"
+        "  # then run the test; wipe the cache first so the kernel is recompiled with the flags:\n"
+        "  rm -rf .dacecache/<name> && python -m pytest tests/<file>.py -k <case>\n"
+    )
 
 
 def default_cache_root() -> Path:
@@ -98,8 +101,13 @@ def run_clang_tidy(tus: list[Path], build: Path | None) -> int:
     # machine-generated code (__-internals, swappable params, widening) -- 200+ lines of noise.
     # Findings are advisory (clang-tidy exits 0 on warnings); the ASan run is the hard heap gate.
     cmd = [
-        exe, "-p",
-        str(build), "--quiet", "--checks=-*,clang-analyzer-*", "--header-filter=$^", *[str(t) for t in tus]
+        exe,
+        "-p",
+        str(build),
+        "--quiet",
+        "--checks=-*,clang-analyzer-*",
+        "--header-filter=$^",
+        *[str(t) for t in tus],
     ]
     return subprocess.call(cmd)
 
@@ -113,8 +121,14 @@ def run_cppcheck(tus: list[Path], build: Path | None) -> int:
     # Suppress noise that is never our bug: vendored-header platform #errors (moodycamel),
     # findings inside external/ headers, and system-include gaps.
     cmd = [
-        exe, "--enable=warning,performance,portability", "--inline-suppr", "--error-exitcode=1", "--quiet",
-        "--suppress=preprocessorErrorDirective", "--suppress=*:*/external/*", "--suppress=missingIncludeSystem"
+        exe,
+        "--enable=warning,performance,portability",
+        "--inline-suppr",
+        "--error-exitcode=1",
+        "--quiet",
+        "--suppress=preprocessorErrorDirective",
+        "--suppress=*:*/external/*",
+        "--suppress=missingIncludeSystem",
     ]
     if build is not None:
         cmd.append(f"--project={build / 'compile_commands.json'}")
@@ -138,8 +152,10 @@ def main() -> int:
     tus, build = resolve_targets(args)
     if not tus:
         sys.exit("no generated .cpp found -- did the kernel build?")
-    print(f"linting {len(tus)} TU(s): {', '.join(t.name for t in tus)}"
-          f"{'' if build else '  (no compile DB -- best effort)'}")
+    print(
+        f"linting {len(tus)} TU(s): {', '.join(t.name for t in tus)}"
+        f"{'' if build else '  (no compile DB -- best effort)'}"
+    )
     rc = run_clang_tidy(tus, build) | run_cppcheck(tus, build)
     print("clean" if rc == 0 else "issues found", file=sys.stderr)
     return 1 if rc else 0

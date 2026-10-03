@@ -36,12 +36,12 @@ SUBROUTINE gather_kernel(input, idx, output, n)
   end do
 END SUBROUTINE gather_kernel
 """
-    sdfg = build_sdfg(src, tmp_path, name='gather_kernel').build()
+    sdfg = build_sdfg(src, tmp_path, name="gather_kernel").build()
 
     n = 5
-    inp = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float64, order='F')
-    idx = np.array([3, 1, 4, 1, 5], dtype=np.int32, order='F')
-    out = np.zeros(n, dtype=np.float64, order='F')
+    inp = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float64, order="F")
+    idx = np.array([3, 1, 4, 1, 5], dtype=np.int32, order="F")
+    out = np.zeros(n, dtype=np.float64, order="F")
 
     sdfg(input=inp, idx=idx, output=out, n=n)
 
@@ -65,12 +65,12 @@ SUBROUTINE scatter_kernel(input, idx, output, n)
   end do
 END SUBROUTINE scatter_kernel
 """
-    sdfg = build_sdfg(src, tmp_path, name='scatter_kernel').build()
+    sdfg = build_sdfg(src, tmp_path, name="scatter_kernel").build()
 
     n = 5
-    inp = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float64, order='F')
-    idx = np.array([3, 1, 4, 5, 2], dtype=np.int32, order='F')
-    out = np.zeros(n, dtype=np.float64, order='F')
+    inp = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float64, order="F")
+    idx = np.array([3, 1, 4, 5, 2], dtype=np.int32, order="F")
+    out = np.zeros(n, dtype=np.float64, order="F")
 
     sdfg(input=inp, idx=idx, output=out, n=n)
 
@@ -109,17 +109,17 @@ SUBROUTINE csr_spmv_kernel(values, col_idx, row_ptr, x, y, n, nnz)
   end do
 END SUBROUTINE csr_spmv_kernel
 """
-    sdfg = build_sdfg(src, tmp_path, name='csr_spmv_kernel').build()
+    sdfg = build_sdfg(src, tmp_path, name="csr_spmv_kernel").build()
 
     # Sparse matrix (3x4):
     #   [[1, 0, 2, 0],
     #    [0, 3, 0, 0],
     #    [0, 0, 4, 5]]
-    values = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order='F')
-    col_idx = np.array([1, 3, 2, 3, 4], dtype=np.int32, order='F')
-    row_ptr = np.array([1, 3, 4, 6], dtype=np.int32, order='F')
-    x = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
-    y = np.zeros(3, dtype=np.float64, order='F')
+    values = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
+    col_idx = np.array([1, 3, 2, 3, 4], dtype=np.int32, order="F")
+    row_ptr = np.array([1, 3, 4, 6], dtype=np.int32, order="F")
+    x = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
+    y = np.zeros(3, dtype=np.float64, order="F")
 
     sdfg(values=values, col_idx=col_idx, row_ptr=row_ptr, x=x, y=y, n=3, nnz=5)
 

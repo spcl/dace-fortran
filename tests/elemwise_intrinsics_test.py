@@ -64,6 +64,7 @@ def test_elemwise_sin_structure(tmp_path):
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="elemwise_sin", pipeline="hlfir-propagate-shapes").build()
 
     from dace.sdfg.state import LoopRegion, SDFGState
+
     loops = [n for n in sdfg.nodes() if isinstance(n, LoopRegion)]
     assert len(loops) >= 1, "expected at least one LoopRegion"
 
@@ -75,6 +76,7 @@ def test_elemwise_sin_structure(tmp_path):
             elif isinstance(n, SDFGState):
                 yield n
 
-    tasklets = [t for s in walk(sdfg) for t in s.nodes() if isinstance(t, nd := __import__('dace').sdfg.nodes.Tasklet)]
-    assert any("sin(" in t.code.as_string
-               for t in tasklets), ("no tasklet body calls sin; got: " + repr([t.code.as_string for t in tasklets]))
+    tasklets = [t for s in walk(sdfg) for t in s.nodes() if isinstance(t, _nd := __import__("dace").sdfg.nodes.Tasklet)]
+    assert any("sin(" in t.code.as_string for t in tasklets), "no tasklet body calls sin; got: " + repr(
+        [t.code.as_string for t in tasklets]
+    )

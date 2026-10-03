@@ -14,6 +14,7 @@ bit-exact per element.
 
 Skipped under an odd rank count or fewer than 2 ranks (default single-rank ``pytest tests/``
 doesn't trip it)."""
+
 import ctypes
 import shutil
 import subprocess
@@ -160,8 +161,8 @@ def _build_sync_mpi_lib(build_dir: Path) -> Path:
     src.write_text(_SYNC_MPI_SRC)
     so_path = build_dir / "libsync_mpi.so"
     subprocess.check_call(
-        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}",
-         str(src), "-o", str(so_path)], cwd=build_dir)
+        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}", str(src), "-o", str(so_path)], cwd=build_dir
+    )
     return so_path
 
 
@@ -174,13 +175,24 @@ def _build_ref_lib(build_dir: Path, sync_so: Path, sync_build_dir: Path) -> Path
     driver_src = build_dir / "driver.f90"
     driver_src.write_text(_REF_DRIVER_SRC)
     so_path = build_dir / "libdycore_ref.so"
-    subprocess.check_call([
-        "mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}", f"-I{sync_build_dir}",
-        str(dycore_src),
-        str(driver_src), f"-L{sync_so.parent}", f"-Wl,-rpath,{sync_so.parent}", f"-l:{sync_so.name}", "-o",
-        str(so_path)
-    ],
-                          cwd=build_dir)
+    subprocess.check_call(
+        [
+            "mpifort",
+            "-shared",
+            "-fPIC",
+            *_O0_FFLAGS,
+            f"-J{build_dir}",
+            f"-I{sync_build_dir}",
+            str(dycore_src),
+            str(driver_src),
+            f"-L{sync_so.parent}",
+            f"-Wl,-rpath,{sync_so.parent}",
+            f"-l:{sync_so.name}",
+            "-o",
+            str(so_path),
+        ],
+        cwd=build_dir,
+    )
     return so_path
 
 
@@ -193,6 +205,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     node calls libsync_mpi.so's bind(c) wrapper, which issues the real MPI exchange using
     the Fortran MPI_Fint comm mpi4py's comm.py2f() hands us."""
     from mpi4py import MPI
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -200,8 +213,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # even rank count -- CI's -n 4 splits COMM_WORLD into pairs {0,1},{2,3},... Also proves
     # the communicator is correctly scoped (no cross-pair leak).
     if size < 2 or size % 2 != 0:
-        pytest.skip("needs an even rank count >= 2 "
-                    "(mpirun --oversubscribe -n 2 / -n 4 ...)")
+        pytest.skip("needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)")
     pair = comm.Split(color=rank // 2, key=rank)
     partner_world = rank ^ 1  # the other world rank sharing this pair
 
@@ -227,7 +239,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
                 Arg(kind="array", dtype="float64", intent="inout"),  # field
                 Arg(kind="scalar", dtype="int32", intent="in"),  # comm
             ),
-            libraries=(sync_so_str, ),
+            libraries=(sync_so_str,),
             dynamic_extents_abi=True,
         )
         _orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
@@ -281,8 +293,8 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     nproma, nlev, nblks = 4, 3, 2
     rng = np.random.default_rng(seed=42 + rank)
     field_init = np.asfortranarray(rng.standard_normal((nproma, nlev, nblks)))
-    field_sdfg = field_init.copy(order='F')
-    field_ref = field_init.copy(order='F')
+    field_sdfg = field_init.copy(order="F")
+    field_ref = field_init.copy(order="F")
     alpha = 2.5
     # Hand the kernel the PAIR communicator (not COMM_WORLD): the halo
     # swap must run within {rank, partner_world}.
@@ -311,15 +323,16 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # actual proof MPI ran and filled the halo correctly; at -n 4 this also catches a leak
     # across pairs.
     other_rank_init = np.asfortranarray(
-        np.random.default_rng(seed=42 + partner_world).standard_normal((nproma, nlev, nblks)))
+        np.random.default_rng(seed=42 + partner_world).standard_normal((nproma, nlev, nblks))
+    )
     expected_halo = other_rank_init[:, :, 0].copy()
     for k in range(nlev):
         for i in range(nproma):
-            expected_halo[i, k] = (expected_halo[i, k] * alpha + np.sqrt(float((i + 1) + (k + 1))))
-    np.testing.assert_allclose(field_sdfg[:, :, 1],
-                               expected_halo,
-                               rtol=one_ulp_rtol,
-                               atol=0.0,
-                               err_msg=("halo (block 2) does NOT match "
-                                        "the neighbor's computed block 1 -- "
-                                        "MPI_Sendrecv probably mis-fired"))
+            expected_halo[i, k] = expected_halo[i, k] * alpha + np.sqrt(float((i + 1) + (k + 1)))
+    np.testing.assert_allclose(
+        field_sdfg[:, :, 1],
+        expected_halo,
+        rtol=one_ulp_rtol,
+        atol=0.0,
+        err_msg=("halo (block 2) does NOT match the neighbor's computed block 1 -- MPI_Sendrecv probably mis-fired"),
+    )

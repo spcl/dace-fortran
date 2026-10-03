@@ -77,38 +77,56 @@ def test_cloudsc_autoconversion_snow_numerical(tmp_path: Path):
     # ncldqs/ncldqi are runtime indices into that dim, not bounds.
     ZSOLQB = np.asfortranarray(np.zeros((KLON, NCLV, NCLV)))
 
-    consts = dict(rtt=273.16,
-                  rlcritsnow=1.0e-4,
-                  rsnowlin1=1.0e-3,
-                  rsnowlin2=0.025,
-                  rnice=1.0e4,
-                  ptsphy=1800.0,
-                  zepsec=1.0e-12,
-                  laericeauto=1)
+    consts = dict(
+        rtt=273.16,
+        rlcritsnow=1.0e-4,
+        rsnowlin1=1.0e-3,
+        rsnowlin2=0.025,
+        rnice=1.0e4,
+        ptsphy=1800.0,
+        zepsec=1.0e-12,
+        laericeauto=1,
+    )
 
     mod = f2py_compile(src, tmp_path / "ref", "autoconv_snow_ref")
     ZSOLQB_ref = ZSOLQB.copy(order="F")
     # f2py positional sig: (kidia, kfdia, ztp1, zicecld, pnice, zsolqb, rtt,
     # ..., laericeauto, ncldqs, ncldqi); klon/nclv inferred from array shapes.
-    ZSNOWAUT_ref = mod.autoconversion_snow(1, KLON, ZTP1, ZICECLD, PNICE, ZSOLQB_ref, consts["rtt"],
-                                           consts["rlcritsnow"], consts["rsnowlin1"], consts["rsnowlin2"],
-                                           consts["rnice"], consts["ptsphy"], consts["zepsec"], consts["laericeauto"],
-                                           NCLDQS, NCLDQI)
+    ZSNOWAUT_ref = mod.autoconversion_snow(
+        1,
+        KLON,
+        ZTP1,
+        ZICECLD,
+        PNICE,
+        ZSOLQB_ref,
+        consts["rtt"],
+        consts["rlcritsnow"],
+        consts["rsnowlin1"],
+        consts["rsnowlin2"],
+        consts["rnice"],
+        consts["ptsphy"],
+        consts["zepsec"],
+        consts["laericeauto"],
+        NCLDQS,
+        NCLDQI,
+    )
 
     sdfg = _build(src, tmp_path, name="autoconversion_snow", entry="autoconversion_snow")
     ZSNOWAUT = np.zeros(KLON, dtype=np.float64, order="F")
-    sdfg(kidia=1,
-         kfdia=KLON,
-         klon=KLON,
-         nclv=NCLV,
-         ztp1=ZTP1,
-         zicecld=ZICECLD,
-         pnice=PNICE,
-         zsolqb=ZSOLQB,
-         zsnowaut=ZSNOWAUT,
-         ncldqs=NCLDQS,
-         ncldqi=NCLDQI,
-         **consts)
+    sdfg(
+        kidia=1,
+        kfdia=KLON,
+        klon=KLON,
+        nclv=NCLV,
+        ztp1=ZTP1,
+        zicecld=ZICECLD,
+        pnice=PNICE,
+        zsolqb=ZSOLQB,
+        zsnowaut=ZSNOWAUT,
+        ncldqs=NCLDQS,
+        ncldqi=NCLDQI,
+        **consts,
+    )
 
     np.testing.assert_allclose(ZSNOWAUT, ZSNOWAUT_ref, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(ZSOLQB, ZSOLQB_ref, rtol=1e-12, atol=1e-15)
@@ -148,32 +166,53 @@ def test_cloudsc_ice_supersaturation_adjustment_numerical(tmp_path: Path):
     # f2py: (kidia, kfdia, ztp1, za, zqx_ncldqv, zqsice, zcorqsice, zfokoop,
     # zsolqa, zsolac, zqxfg, rtt, ramin, rthomo, nssopt, rkooptau, ptsphy,
     # zepsec, ncldql, ncldqi, ncldqv, [klon, nclv])
-    mod.ice_supersaturation_adjustment(1, KLON, ZTP1, ZA, ZQX_NCLDQV, ZQSICE, ZCORQSICE, ZFOKOOP, ZSOLQA_ref,
-                                       ZSOLAC_ref, ZQXFG_ref, consts["rtt"], consts["ramin"], consts["rthomo"],
-                                       consts["nssopt"], consts["rkooptau"], consts["ptsphy"], consts["zepsec"], NCLDQL,
-                                       NCLDQI, NCLDQV)
+    mod.ice_supersaturation_adjustment(
+        1,
+        KLON,
+        ZTP1,
+        ZA,
+        ZQX_NCLDQV,
+        ZQSICE,
+        ZCORQSICE,
+        ZFOKOOP,
+        ZSOLQA_ref,
+        ZSOLAC_ref,
+        ZQXFG_ref,
+        consts["rtt"],
+        consts["ramin"],
+        consts["rthomo"],
+        consts["nssopt"],
+        consts["rkooptau"],
+        consts["ptsphy"],
+        consts["zepsec"],
+        NCLDQL,
+        NCLDQI,
+        NCLDQV,
+    )
 
     sdfg = _build(src, tmp_path, name="ice_supersaturation_adjustment", entry="ice_supersaturation_adjustment")
     ZSOLQA_sd = ZSOLQA.copy(order="F")
     ZSOLAC_sd = ZSOLAC.copy(order="F")
     ZQXFG_sd = ZQXFG.copy(order="F")
-    sdfg(kidia=1,
-         kfdia=KLON,
-         klon=KLON,
-         nclv=NCLV,
-         ncldql=NCLDQL,
-         ncldqi=NCLDQI,
-         ncldqv=NCLDQV,
-         ztp1=ZTP1,
-         za=ZA,
-         zqx_ncldqv=ZQX_NCLDQV,
-         zqsice=ZQSICE,
-         zcorqsice=ZCORQSICE,
-         zfokoop=ZFOKOOP,
-         zsolqa=ZSOLQA_sd,
-         zsolac=ZSOLAC_sd,
-         zqxfg=ZQXFG_sd,
-         **consts)
+    sdfg(
+        kidia=1,
+        kfdia=KLON,
+        klon=KLON,
+        nclv=NCLV,
+        ncldql=NCLDQL,
+        ncldqi=NCLDQI,
+        ncldqv=NCLDQV,
+        ztp1=ZTP1,
+        za=ZA,
+        zqx_ncldqv=ZQX_NCLDQV,
+        zqsice=ZQSICE,
+        zcorqsice=ZCORQSICE,
+        zfokoop=ZFOKOOP,
+        zsolqa=ZSOLQA_sd,
+        zsolac=ZSOLAC_sd,
+        zqxfg=ZQXFG_sd,
+        **consts,
+    )
 
     np.testing.assert_allclose(ZSOLAC_sd, ZSOLAC_ref, rtol=1e-10, atol=1e-15)
     np.testing.assert_allclose(ZQXFG_sd, ZQXFG_ref, rtol=1e-10, atol=1e-15)
@@ -248,24 +287,26 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
     ZSOLQA = np.asfortranarray(np.zeros((KLON, NCLV, NCLV)))
     ZEVAP_OUT = np.zeros(KLON, dtype=np.float64, order="F")
 
-    consts = dict(rtt=273.16,
-                  rv=461.51,
-                  rd=287.06,
-                  rprecrhmax=0.7,
-                  rcovpmin=0.01,
-                  rdensref=1.0,
-                  ptsphy=1800.0,
-                  zepsec=1.0e-12,
-                  rcl_fac1=1.0,
-                  rcl_fac2=0.0,
-                  rcl_cdenom1=2.5e6,
-                  rcl_cdenom2=2.4e-2,
-                  rcl_cdenom3=4.6e-7,
-                  rcl_ka273=2.4e-2,
-                  rcl_const1r=1.0,
-                  rcl_const2r=0.5,
-                  rcl_const3r=0.5,
-                  rcl_const4r=0.5)
+    consts = dict(
+        rtt=273.16,
+        rv=461.51,
+        rd=287.06,
+        rprecrhmax=0.7,
+        rcovpmin=0.01,
+        rdensref=1.0,
+        ptsphy=1800.0,
+        zepsec=1.0e-12,
+        rcl_fac1=1.0,
+        rcl_fac2=0.0,
+        rcl_cdenom1=2.5e6,
+        rcl_cdenom2=2.4e-2,
+        rcl_cdenom3=4.6e-7,
+        rcl_ka273=2.4e-2,
+        rcl_const1r=1.0,
+        rcl_const2r=0.5,
+        rcl_const3r=0.5,
+        rcl_const4r=0.5,
+    )
 
     mod = f2py_compile(src, tmp_path / "ref", "rain_evap_ref")
     ZSOLQA_ref = ZSOLQA.copy(order="F")
@@ -274,11 +315,40 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
     ZCOVPCLR_ref = ZCOVPCLR.copy(order="F")
     # f2py: zevap_out = rain_evap(...); klon/nclv inferred from arrays; ZEVAP_OUT is intent(out) -> return.
     ZEVAP_OUT_ref = mod.rain_evaporation_abel_boutle(
-        1, KLON, ZTP1, ZQX_NCLDQV, ZA, ZQSLIQ, ZQXFG_ref, ZCOVPTOT_ref, ZCOVPCLR_ref, ZCOVPMAX, ZRHO, PAP, ZSOLQA_ref,
-        consts["rtt"], consts["rv"], consts["rd"], consts["rprecrhmax"], consts["rcovpmin"], consts["rdensref"],
-        consts["ptsphy"], consts["zepsec"], consts["rcl_fac1"], consts["rcl_fac2"], consts["rcl_cdenom1"],
-        consts["rcl_cdenom2"], consts["rcl_cdenom3"], consts["rcl_ka273"], consts["rcl_const1r"], consts["rcl_const2r"],
-        consts["rcl_const3r"], consts["rcl_const4r"], NCLDQV, NCLDQR)
+        1,
+        KLON,
+        ZTP1,
+        ZQX_NCLDQV,
+        ZA,
+        ZQSLIQ,
+        ZQXFG_ref,
+        ZCOVPTOT_ref,
+        ZCOVPCLR_ref,
+        ZCOVPMAX,
+        ZRHO,
+        PAP,
+        ZSOLQA_ref,
+        consts["rtt"],
+        consts["rv"],
+        consts["rd"],
+        consts["rprecrhmax"],
+        consts["rcovpmin"],
+        consts["rdensref"],
+        consts["ptsphy"],
+        consts["zepsec"],
+        consts["rcl_fac1"],
+        consts["rcl_fac2"],
+        consts["rcl_cdenom1"],
+        consts["rcl_cdenom2"],
+        consts["rcl_cdenom3"],
+        consts["rcl_ka273"],
+        consts["rcl_const1r"],
+        consts["rcl_const2r"],
+        consts["rcl_const3r"],
+        consts["rcl_const4r"],
+        NCLDQV,
+        NCLDQR,
+    )
 
     sdfg = _build(src, tmp_path, name="rain_evaporation_abel_boutle", entry="rain_evaporation_abel_boutle")
     ZSOLQA_sd = ZSOLQA.copy(order="F")
@@ -286,25 +356,27 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
     ZCOVPTOT_sd = ZCOVPTOT.copy(order="F")
     ZCOVPCLR_sd = ZCOVPCLR.copy(order="F")
     ZEVAP_OUT_sd = ZEVAP_OUT.copy(order="F")
-    sdfg(kidia=1,
-         kfdia=KLON,
-         klon=KLON,
-         nclv=NCLV,
-         ncldqv=NCLDQV,
-         ncldqr=NCLDQR,
-         ztp1=ZTP1,
-         zqx_ncldqv=ZQX_NCLDQV,
-         za=ZA,
-         zqsliq=ZQSLIQ,
-         zqxfg_ncldqr=ZQXFG_sd,
-         zcovptot=ZCOVPTOT_sd,
-         zcovpclr=ZCOVPCLR_sd,
-         zcovpmax=ZCOVPMAX,
-         zrho=ZRHO,
-         pap=PAP,
-         zsolqa=ZSOLQA_sd,
-         zevap_out=ZEVAP_OUT_sd,
-         **consts)
+    sdfg(
+        kidia=1,
+        kfdia=KLON,
+        klon=KLON,
+        nclv=NCLV,
+        ncldqv=NCLDQV,
+        ncldqr=NCLDQR,
+        ztp1=ZTP1,
+        zqx_ncldqv=ZQX_NCLDQV,
+        za=ZA,
+        zqsliq=ZQSLIQ,
+        zqxfg_ncldqr=ZQXFG_sd,
+        zcovptot=ZCOVPTOT_sd,
+        zcovpclr=ZCOVPCLR_sd,
+        zcovpmax=ZCOVPMAX,
+        zrho=ZRHO,
+        pap=PAP,
+        zsolqa=ZSOLQA_sd,
+        zevap_out=ZEVAP_OUT_sd,
+        **consts,
+    )
 
     np.testing.assert_allclose(ZEVAP_OUT_sd, ZEVAP_OUT_ref, rtol=1e-10, atol=1e-15)
     np.testing.assert_allclose(ZSOLQA_sd, ZSOLQA_ref, rtol=1e-10, atol=1e-15)
@@ -328,30 +400,46 @@ def test_cloudsc_saturation_calculation_numerical(tmp_path: Path):
     ZTP1 = np.asfortranarray(rng.uniform(220.0, 300.0, (KLON, KLEV)))
     PAP = np.asfortranarray(rng.uniform(5e4, 1e5, (KLON, KLEV)))
 
-    consts = dict(rtt=273.16,
-                  retv=0.6078,
-                  r2es=611.21,
-                  r3les=17.502,
-                  r3ies=22.587,
-                  r4les=32.19,
-                  r4ies=-0.7,
-                  rtice=250.16,
-                  rtwat=273.16,
-                  rtwat_rtice_r=1.0 / (273.16 - 250.16))
+    consts = dict(
+        rtt=273.16,
+        retv=0.6078,
+        r2es=611.21,
+        r3les=17.502,
+        r3ies=22.587,
+        r4les=32.19,
+        r4ies=-0.7,
+        rtice=250.16,
+        rtwat=273.16,
+        rtwat_rtice_r=1.0 / (273.16 - 250.16),
+    )
 
     mod = f2py_compile(src, tmp_path / "ref", "sat_calc_ref")
     # f2py: 7 intent(out) arrays return as a tuple.
-    (zfoealfa_r, zfoeewmt_r, zqsmix_r, zfoeew_r, zqsice_r, zfoeeliqt_r,
-     zqsliq_r) = mod.compute_saturation_values(1, KLON, ZTP1, PAP, consts["rtt"], consts["retv"], consts["r2es"],
-                                               consts["r3les"], consts["r3ies"], consts["r4les"], consts["r4ies"],
-                                               consts["rtice"], consts["rtwat"], consts["rtwat_rtice_r"])
-    out_ref_arrays = dict(zfoealfa=zfoealfa_r,
-                          zfoeewmt=zfoeewmt_r,
-                          zqsmix=zqsmix_r,
-                          zfoeew=zfoeew_r,
-                          zqsice=zqsice_r,
-                          zfoeeliqt=zfoeeliqt_r,
-                          zqsliq=zqsliq_r)
+    (zfoealfa_r, zfoeewmt_r, zqsmix_r, zfoeew_r, zqsice_r, zfoeeliqt_r, zqsliq_r) = mod.compute_saturation_values(
+        1,
+        KLON,
+        ZTP1,
+        PAP,
+        consts["rtt"],
+        consts["retv"],
+        consts["r2es"],
+        consts["r3les"],
+        consts["r3ies"],
+        consts["r4les"],
+        consts["r4ies"],
+        consts["rtice"],
+        consts["rtwat"],
+        consts["rtwat_rtice_r"],
+    )
+    out_ref_arrays = dict(
+        zfoealfa=zfoealfa_r,
+        zfoeewmt=zfoeewmt_r,
+        zqsmix=zqsmix_r,
+        zfoeew=zfoeew_r,
+        zqsice=zqsice_r,
+        zfoeeliqt=zfoeeliqt_r,
+        zqsliq=zqsliq_r,
+    )
 
     sdfg = _build(src, tmp_path, name="compute_saturation_values", entry="compute_saturation_values")
     out_sd = {
@@ -361,8 +449,6 @@ def test_cloudsc_saturation_calculation_numerical(tmp_path: Path):
     sdfg(kidia=1, kfdia=KLON, klon=KLON, klev=KLEV, ztp1=ZTP1, pap=PAP, **out_sd, **consts)
 
     for k in out_sd:
-        np.testing.assert_allclose(out_sd[k],
-                                   out_ref_arrays[k],
-                                   rtol=1e-10,
-                                   atol=1e-13,
-                                   err_msg=f"output {k!r} differs")
+        np.testing.assert_allclose(
+            out_sd[k], out_ref_arrays[k], rtol=1e-10, atol=1e-13, err_msg=f"output {k!r} differs"
+        )

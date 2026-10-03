@@ -33,7 +33,7 @@ def _build_and_run(src: str, tmp_path: Path, **kwargs) -> dict:
     """Build an SDFG via the bridge, call it with kwargs, return the final buffer state."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="kernel").build()
     sdfg(**kwargs)
     return kwargs
 
@@ -54,7 +54,7 @@ end subroutine kernel
     n = 16
     arr = np.asfortranarray(rng.standard_normal(n))
     scalar = np.float64(0.5)
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out, n=n)
     assert out[0] == max(scalar, arr.max())
 
@@ -75,7 +75,7 @@ end subroutine kernel
     n = 16
     arr = np.asfortranarray(rng.standard_normal(n))
     scalar = np.float64(-0.5)
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out, n=n)
     assert out[0] == min(scalar, arr.min())
 
@@ -96,7 +96,7 @@ end subroutine kernel
     n = 16
     arr = np.asfortranarray(rng.standard_normal(n))
     scalar = np.float64(1.25)
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out, n=n)
     np.testing.assert_allclose(out[0], scalar + arr.sum(), rtol=1e-12)
 
@@ -117,7 +117,7 @@ end subroutine kernel
     n = 4  # small n to keep product manageable
     arr = np.asfortranarray(rng.uniform(0.5, 1.5, n))
     scalar = np.float64(2.0)
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out, n=n)
     np.testing.assert_allclose(out[0], scalar * arr.prod(), rtol=1e-12)
 
@@ -137,7 +137,7 @@ end subroutine kernel
     n = 16
     a = np.asfortranarray(rng.standard_normal(n))
     b = np.asfortranarray(rng.standard_normal(n))
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, a=a, b=b, out=out, n=n)
     np.testing.assert_allclose(out[0], a.max() + b.min(), rtol=1e-12)
 
@@ -157,7 +157,7 @@ end subroutine kernel
     rng = np.random.default_rng(5)
     arr = np.asfortranarray(rng.standard_normal(8))
     scalar = np.float64(0.3)
-    out = np.zeros((1, ), dtype=np.float64)
+    out = np.zeros((1,), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out)
     assert out[0] == max(scalar, arr.max())
 
@@ -174,6 +174,7 @@ def test_dimensional_sum_does_not_corrupt_verifier(tmp_path: Path):
     reductions (``emit_reduce`` doesn't yet handle non-named-array sources).
     """
     import tempfile
+
     src = """
 subroutine kernel(matrix, out)
   implicit none
@@ -187,18 +188,26 @@ end subroutine kernel
     import subprocess
     from dace_fortran import DEFAULT_PIPELINE
     from dace_fortran.build_bridge import hb
+
     with tempfile.TemporaryDirectory() as td:
         from pathlib import Path as _P
+
         f = _P(td) / "k.f90"
         f.write_text(src)
         h = _P(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(f), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(f),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.set_entry_symbol("kernel")

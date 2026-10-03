@@ -33,7 +33,9 @@ def _extract_flat_kernel(bundle_path: Path) -> str:
     bundle -- f2py compiles a bare subroutine fine, so stripping the module
     wrapper is safe."""
     text = bundle_path.read_text()
-    pattern = re.compile(r"(?is)(subroutine\s+kernel_flat\s*\([^)]*\).*?\bend\s+subroutine)", )
+    pattern = re.compile(
+        r"(?is)(subroutine\s+kernel_flat\s*\([^)]*\).*?\bend\s+subroutine)",
+    )
     m = pattern.search(text)
     if not m:
         raise RuntimeError(f"kernel_flat not found in {bundle_path}")
@@ -51,8 +53,7 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
     src = out_dir / f"{mod_name}.f90"
     src.write_text(src_text)
     subprocess.check_call(
-        [sys.executable, "-m", "numpy.f2py", "-c",
-         str(src), "-m", mod_name, "--quiet"],
+        [sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"],
         cwd=out_dir,
     )
     if str(out_dir) not in sys.path:
@@ -101,14 +102,17 @@ def test_icon_loopnest_2_sdfg_matches_f2py(tmp_path: Path):
     # bound/loop-condition integer dummies become DaCe symbols (plain ints); others
     # become length-1 Arrays (numpy arrays) -- route via sdfg.arglist(), don't hardcode
     from dace.data import Scalar
-    int_args = dict(nproma=nproma,
-                    nlev=nlev,
-                    nblks_e=nblks_e,
-                    nflatlev=nflatlev,
-                    i_startblk=1,
-                    i_endblk=nblks_e,
-                    i_startidx=1,
-                    i_endidx=nproma)
+
+    int_args = dict(
+        nproma=nproma,
+        nlev=nlev,
+        nblks_e=nblks_e,
+        nflatlev=nflatlev,
+        i_startblk=1,
+        i_endblk=nblks_e,
+        i_startidx=1,
+        i_endidx=nproma,
+    )
     call_kwargs = dict(vn=vn, vt=vt, ddxn=ddxn, ddxt=ddxt, z_w_concorr_me=z_sdfg)
     arglist = sdfg.arglist()
     for k, v in int_args.items():
@@ -131,6 +135,7 @@ def _sdfg_call_args(sdfg, int_values: dict) -> dict:
     """Route each int arg to a plain int or length-1 numpy array, based on the SDFG
     descriptor's symbol/scalar vs Array classification."""
     from dace.data import Scalar
+
     arglist = sdfg.arglist()
     out = {}
     for k, v in int_values.items():
@@ -164,24 +169,26 @@ def test_icon_loopnest_3_sdfg_matches_f2py(tmp_path: Path):
     z_vt_ie = _f((nproma, nlev, nblks_e))
     ft_e = _f((nproma, nblks_e))
     fn_e = _f((nproma, nblks_e))
-    gradh = _f((nlev, ))
-    invr = _f((nlev, ))
+    gradh = _f((nlev,))
+    invr = _f((nlev,))
     z_init = _f((nproma, nlev, nblks_e))
     z_ref = np.array(z_init, order="F")
     z_sdfg = np.array(z_init, order="F")
 
     ref.kernel_flat(vn_ie, z_vt_ie, ft_e, fn_e, gradh, invr, z_ref, 1, nblks_e, 1, nproma)
 
-    kw = dict(vn_ie=vn_ie,
-              z_vt_ie=z_vt_ie,
-              ft_e=ft_e,
-              fn_e=fn_e,
-              gradh=gradh,
-              invr=invr,
-              z_v_grad_w=z_sdfg,
-              nproma=nproma,
-              nlev=nlev,
-              nblks_e=nblks_e)
+    kw = dict(
+        vn_ie=vn_ie,
+        z_vt_ie=z_vt_ie,
+        ft_e=ft_e,
+        fn_e=fn_e,
+        gradh=gradh,
+        invr=invr,
+        z_v_grad_w=z_sdfg,
+        nproma=nproma,
+        nlev=nlev,
+        nblks_e=nblks_e,
+    )
     kw.update(_sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 
@@ -220,18 +227,21 @@ def test_icon_loopnest_5_sdfg_matches_f2py(tmp_path: Path):
     vn_ie_sdfg = np.zeros((nproma, nlevp1, nblks_e), order="F")
     z_vt_sdfg = np.zeros((nproma, nlevp1, nblks_e), order="F")
     z_k_sdfg = np.zeros((nproma, nlevp1, nblks_e), order="F")
-    kw = dict(vn=vn,
-              vt=vt,
-              wgtfacq_e=wgtfacqe,
-              vn_ie=vn_ie_sdfg,
-              z_vt_ie=z_vt_sdfg,
-              z_kin_hor_e=z_k_sdfg,
-              nproma=nproma,
-              nlev=nlev,
-              nlevp1=nlevp1,
-              nblks_e=nblks_e)
+    kw = dict(
+        vn=vn,
+        vt=vt,
+        wgtfacq_e=wgtfacqe,
+        vn_ie=vn_ie_sdfg,
+        z_vt_ie=z_vt_sdfg,
+        z_kin_hor_e=z_k_sdfg,
+        nproma=nproma,
+        nlev=nlev,
+        nlevp1=nlevp1,
+        nblks_e=nblks_e,
+    )
     kw.update(
-        _sdfg_call_args(sdfg, dict(i_startblk=i_startblk, i_endblk=i_endblk, i_startidx=i_startidx, i_endidx=i_endidx)))
+        _sdfg_call_args(sdfg, dict(i_startblk=i_startblk, i_endblk=i_endblk, i_startidx=i_startidx, i_endidx=i_endidx))
+    )
     sdfg(**kw)
 
     np.testing.assert_allclose(vn_ie_sdfg, vn_ie_ref, atol=1e-12, rtol=0)
@@ -311,26 +321,44 @@ def test_icon_loopnest_1_sdfg_matches_f2py(tmp_path: Path):
     z_ref = np.zeros((nproma, nlev, nblks_e), order="F")
     z_sdfg = np.zeros_like(z_ref, order="F")
 
-    ref.kernel_flat(vn_ie, inv_dual, inv_primal, tangent, w, z_vt_ie, z_w_v, icidx, icblk, ividx, ivblk, z_ref, 1,
-                    nblks_e, 1, nproma)
+    ref.kernel_flat(
+        vn_ie,
+        inv_dual,
+        inv_primal,
+        tangent,
+        w,
+        z_vt_ie,
+        z_w_v,
+        icidx,
+        icblk,
+        ividx,
+        ivblk,
+        z_ref,
+        1,
+        nblks_e,
+        1,
+        nproma,
+    )
 
-    kw = dict(vn_ie=vn_ie,
-              inv_dual=inv_dual,
-              inv_primal=inv_primal,
-              tangent=tangent,
-              w=w,
-              z_vt_ie=z_vt_ie,
-              z_w_v=z_w_v,
-              icidx=icidx,
-              icblk=icblk,
-              ividx=ividx,
-              ivblk=ivblk,
-              z_v_grad_w=z_sdfg,
-              nproma=nproma,
-              nlev=nlev,
-              nblks_e=nblks_e,
-              nblks_c=nblks_c,
-              nblks_v=nblks_v)
+    kw = dict(
+        vn_ie=vn_ie,
+        inv_dual=inv_dual,
+        inv_primal=inv_primal,
+        tangent=tangent,
+        w=w,
+        z_vt_ie=z_vt_ie,
+        z_w_v=z_w_v,
+        icidx=icidx,
+        icblk=icblk,
+        ividx=ividx,
+        ivblk=ivblk,
+        z_v_grad_w=z_sdfg,
+        nproma=nproma,
+        nlev=nlev,
+        nblks_e=nblks_e,
+        nblks_c=nblks_c,
+        nblks_v=nblks_v,
+    )
     kw.update(_sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 
@@ -373,8 +401,28 @@ def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
     ddt_ref = np.zeros((nproma, nlev, nblks_e, nproma_tnd), order="F")
     ddt_sdfg = np.zeros_like(ddt_ref, order="F")
 
-    ref.kernel_flat(vt, vn_ie, f_e, coeff_gradekin, c_lin_e, ddqz, z_kin_hor_e, z_ekinh, zeta, z_w_con_c_full, icidx,
-                    icblk, ividx, ivblk, ddt_ref, ntnd, 1, nblks_e, 1, nproma)
+    ref.kernel_flat(
+        vt,
+        vn_ie,
+        f_e,
+        coeff_gradekin,
+        c_lin_e,
+        ddqz,
+        z_kin_hor_e,
+        z_ekinh,
+        zeta,
+        z_w_con_c_full,
+        icidx,
+        icblk,
+        ividx,
+        ivblk,
+        ddt_ref,
+        ntnd,
+        1,
+        nblks_e,
+        1,
+        nproma,
+    )
 
     kw = dict(
         vt=vt,
@@ -400,7 +448,8 @@ def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
         nproma_tnd=nproma_tnd,
         # vn_ie(nproma, nlev+1, nblks_e): bridge can't resolve nlev+1 to a closed-form
         # extent, so add_descriptors synthesises vn_ie_d1; caller passes the actual value
-        vn_ie_d1=nlev + 1)
+        vn_ie_d1=nlev + 1,
+    )
     kw.update(_sdfg_call_args(sdfg, dict(ntnd=ntnd, i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 

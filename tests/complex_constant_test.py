@@ -1,6 +1,7 @@
 """Complex-constant lowering + 1j/variable-j disambiguation. Two invariants: (1) whole-array assignment
 of a complex constant lowers to a mapped fill, not a scalar write; (2) the rendered `1j` must never be
 confused with a real scalar/loop iterator literally named `j` (spurious _in_j connector)."""
+
 import numpy as np
 import pytest
 

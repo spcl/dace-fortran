@@ -42,7 +42,7 @@ CRITICAL_WARNINGS = (
 # scores gcc's heuristic rather than the generated code.  ``-Wuninitialized`` (the provable variant)
 # stays critical.  Kept enabled so the diagnostic still prints as informational -- dropping it from
 # CRITICAL_WARNINGS alone would also drop the ``-W`` flag and silence it entirely.
-NONCRITICAL_WARNINGS = ("maybe-uninitialized", )
+NONCRITICAL_WARNINGS = ("maybe-uninitialized",)
 
 # clang names a few of these differently or not at all; passing an unknown -W to clang is only a warning, but
 # keeping the list explicit documents what actually gets checked there.
@@ -60,10 +60,12 @@ CLANG_CRITICAL_WARNINGS = (
 # indexed by ``i + j*n`` for i<n, j<m), and the analyzer cannot relate the two expressions, so it reports an
 # overrun on provably-correct code.  It fires on the simplest valid kernel, which makes it useless as a gate --
 # the bounds checking that does work on generated code is -Warray-bounds plus ASAN on a real run.
-CLANG_TIDY_CHECKS = ("clang-analyzer-*,bugprone-*"
-                     ",-bugprone-reserved-identifier"
-                     ",-bugprone-easily-swappable-parameters"
-                     ",-clang-analyzer-security.ArrayBound")
+CLANG_TIDY_CHECKS = (
+    "clang-analyzer-*,bugprone-*"
+    ",-bugprone-reserved-identifier"
+    ",-bugprone-easily-swappable-parameters"
+    ",-clang-analyzer-security.ArrayBound"
+)
 CPPCHECK_SUPPRESSIONS = ("preprocessorErrorDirective", "missingIncludeSystem", "checkersReport")
 
 TOOLS = ("warnings", "analyzer", "clang-tidy", "cppcheck")
@@ -98,7 +100,8 @@ def build_flags(sdfg: SDFG) -> List[str]:
     compdb = build / "compile_commands.json"
     if not compdb.is_file():
         raise FileNotFoundError(
-            f"no {makeflags} and no {compdb}; the SDFG must be built (not just codegen'd) before analysis")
+            f"no {makeflags} and no {compdb}; the SDFG must be built (not just codegen'd) before analysis"
+        )
     src = generated_source(sdfg).resolve()
     entries = json.loads(compdb.read_text())
     # CMake records absolute paths, but ``build_folder`` is routinely relative (the default
@@ -191,9 +194,14 @@ def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> L
         # Only the generated TU is ours to fix: an empty --header-filter drops diagnostics raised in the DaCe
         # runtime headers and the vendored third-party ones they pull in.
         cmd = [
-            require("clang-tidy"), "--quiet", f"--checks={CLANG_TIDY_CHECKS}", "--header-filter=",
+            require("clang-tidy"),
+            "--quiet",
+            f"--checks={CLANG_TIDY_CHECKS}",
+            "--header-filter=",
             "--system-headers=false",
-            str(src), "--", *flags
+            str(src),
+            "--",
+            *flags,
         ]
     else:
         cmd = [require("cppcheck"), "--enable=warning", "--inline-suppr", "--quiet"]
@@ -208,8 +216,9 @@ def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> L
         # once the lines are filtered below -- the exact silent degradation this module exists to
         # prevent (see the docstring).  A driver/front-end fatal (`cc1plus: fatal error:`) matches
         # neither ": warning:" nor ": error:", so it cannot be caught by the filter either.
-        raise RuntimeError(f"codegen analysis compile failed (exit {done.returncode}) for {src}:\n"
-                           f"{shlex.join(cmd)}\n{text[-3000:]}")
+        raise RuntimeError(
+            f"codegen analysis compile failed (exit {done.returncode}) for {src}:\n{shlex.join(cmd)}\n{text[-3000:]}"
+        )
     diagnostics = [ln for ln in text.splitlines() if ": warning:" in ln or ": error:" in ln]
     # Belt-and-braces across all four tools: a diagnostic whose file is not the generated TU came from a header we
     # do not own, and nothing in this repo can act on it.

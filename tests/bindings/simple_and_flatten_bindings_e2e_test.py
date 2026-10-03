@@ -131,8 +131,8 @@ _SIMPLE_IFACE = OriginalInterface(
     entry="saxpy2",
     args=(
         OriginalArg(name="n", fortran_type="integer", rank=0, shape=(), intent="in", struct_type=None),
-        OriginalArg(name="x", fortran_type="real(8)", rank=1, shape=("n", ), intent="in", struct_type=None),
-        OriginalArg(name="y", fortran_type="real(8)", rank=1, shape=("n", ), intent="inout", struct_type=None),
+        OriginalArg(name="x", fortran_type="real(8)", rank=1, shape=("n",), intent="in", struct_type=None),
+        OriginalArg(name="y", fortran_type="real(8)", rank=1, shape=("n",), intent="inout", struct_type=None),
     ),
     struct_types={},
     used_modules={},
@@ -141,13 +141,15 @@ _SIMPLE_IFACE = OriginalInterface(
 
 def test_simple_flat_f90_binding(tmp_path: Path):
     """Minimal binding surface: one scalar + two rank-1 arrays, no flattening (plan must be empty)."""
-    lib, plan = _build_sdfg_binding_lib(tmp_path,
-                                        kernel_src=_SIMPLE_SRC,
-                                        entry="saxpy2",
-                                        sdfg_name="saxpy2",
-                                        iface=_SIMPLE_IFACE,
-                                        sdfg_driver_src=_SIMPLE_SDFG_DRIVER,
-                                        drv_name="saxpy2_drv")
+    lib, plan = _build_sdfg_binding_lib(
+        tmp_path,
+        kernel_src=_SIMPLE_SRC,
+        entry="saxpy2",
+        sdfg_name="saxpy2",
+        iface=_SIMPLE_IFACE,
+        sdfg_driver_src=_SIMPLE_SDFG_DRIVER,
+        drv_name="saxpy2_drv",
+    )
     assert not plan.entries, "flat kernel must not produce flatten entries"
     ref = _build_ref_lib(tmp_path, kernel_src=_SIMPLE_SRC, ref_driver_src=_SIMPLE_REF_DRIVER, name="saxpy2")
 
@@ -155,8 +157,8 @@ def test_simple_flat_f90_binding(tmp_path: Path):
     rng = np.random.default_rng(3)
     x = np.asfortranarray(rng.standard_normal(n))
 
-    def _call(l, fn):
-        f = getattr(l, fn)
+    def _call(lib, fn):
+        f = getattr(lib, fn)
         f.restype = None
         f.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
         y = np.asfortranarray(np.ones(n))
@@ -239,23 +241,26 @@ end subroutine run_state_ref
 
 _FLAT_IFACE = OriginalInterface(
     entry="update_state",
-    args=(OriginalArg(name="s", fortran_type="type(t_state)", rank=0, shape=(), intent="inout",
-                      struct_type="t_state"), ),
+    args=(
+        OriginalArg(name="s", fortran_type="type(t_state)", rank=0, shape=(), intent="inout", struct_type="t_state"),
+    ),
     struct_types={},
-    used_modules={"mo_state": ("t_state", )},
+    used_modules={"mo_state": ("t_state",)},
 )
 
 
 def test_struct_flatten_f90_binding(tmp_path: Path):
     """``type(t_state)`` dummy (two 2-D members + scalar) flattens (non-empty FlattenPlan) and round-trips through the binding's struct reconstruction."""
-    lib, plan = _build_sdfg_binding_lib(tmp_path,
-                                        kernel_src=_FLAT_SRC,
-                                        entry="update_state",
-                                        sdfg_name="update_state",
-                                        iface=_FLAT_IFACE,
-                                        sdfg_driver_src=_FLAT_SDFG_DRIVER,
-                                        drv_name="state_drv",
-                                        types_src=_FLAT_TYPES)
+    lib, plan = _build_sdfg_binding_lib(
+        tmp_path,
+        kernel_src=_FLAT_SRC,
+        entry="update_state",
+        sdfg_name="update_state",
+        iface=_FLAT_IFACE,
+        sdfg_driver_src=_FLAT_SDFG_DRIVER,
+        drv_name="state_drv",
+        types_src=_FLAT_TYPES,
+    )
 
     # one FlattenPlan entry per flattened struct member reaching the SDFG surface
     flat_targets = {fn for e in plan.entries for fn in e.recipe.flat_names}
@@ -263,11 +268,9 @@ def test_struct_flatten_f90_binding(tmp_path: Path):
     assert any("u" in t for t in flat_targets), flat_targets
     assert any("v" in t for t in flat_targets), flat_targets
 
-    ref = _build_ref_lib(tmp_path,
-                         kernel_src=_FLAT_KERNEL,
-                         ref_driver_src=_FLAT_REF_DRIVER,
-                         name="state",
-                         types_src=_FLAT_TYPES)
+    ref = _build_ref_lib(
+        tmp_path, kernel_src=_FLAT_KERNEL, ref_driver_src=_FLAT_REF_DRIVER, name="state", types_src=_FLAT_TYPES
+    )
 
     nx, ny = 6, 4
     rng = np.random.default_rng(11)
@@ -275,14 +278,17 @@ def test_struct_flatten_f90_binding(tmp_path: Path):
     v0 = np.asfortranarray(rng.standard_normal((nx, ny)))
     scal = 0.75
 
-    def _call(l, fn):
-        f = getattr(l, fn)
+    def _call(lib, fn):
+        f = getattr(lib, fn)
         f.restype = None
         f.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double), ctypes.c_double]
         u = u0.copy(order="F")
         v = v0.copy(order="F")
-        f(u.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), v.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-          ctypes.c_double(scal))
+        f(
+            u.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            v.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.c_double(scal),
+        )
         return u, v
 
     u_s, v_s = _call(lib, "run_state")

@@ -3,6 +3,7 @@
 ICON's real ``mo_velocity_advection.f90``, asserting the merged TU lowers to HLFIR
 cleanly under flang-21. Skipped if no ICON checkout, flang, or OpenMPI.
 """
+
 import os
 import subprocess
 import tempfile
@@ -72,8 +73,7 @@ def test_mpi_stub_source_and_flags():
 def test_patch_mpi_sizeof_substitutes_static_byte_count():
     """``CALL MPI_SIZEOF(x, sz, err)`` becomes a static assignment.
     Pure text transform -- no upstream dependencies."""
-    before = ("    CALL MPI_SIZEOF(rrg, p_real_byte, p_error)\n"
-              "    CALL MPI_SIZEOF(ii4, p_int_i4_byte, p_error)\n")
+    before = "    CALL MPI_SIZEOF(rrg, p_real_byte, p_error)\n    CALL MPI_SIZEOF(ii4, p_int_i4_byte, p_error)\n"
     after = patch_mpi_sizeof(before)
     assert "CALL MPI_SIZEOF" not in after
     # rrg -> double (8); ii4 -> single (4)
@@ -165,8 +165,7 @@ def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, i
         cwd=str(tmp_path),
     )
     err_lines = [ln for ln in result.stderr.splitlines() if "error:" in ln]
-    assert not err_lines, (f"flang reported {len(err_lines)} error(s); "
-                           f"first 5:\n" + "\n".join(err_lines[:5]))
+    assert not err_lines, f"flang reported {len(err_lines)} error(s); first 5:\n" + "\n".join(err_lines[:5])
     assert hlfir_path.is_file()
     # 753 MB empirically; >100 MB just confirms the full closure lowered (no premature truncation).
     assert hlfir_path.stat().st_size > 100 * 1024 * 1024

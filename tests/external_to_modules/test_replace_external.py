@@ -4,9 +4,9 @@
 Runs against three fixtures: external_basic_example.f90 (one EXTERNAL),
 external_multiple_example.f90 (three in one line), external_already_used_example.f90
 (EXTERNAL + existing USE); utils_mod.f90 defines the referenced procedures."""
+
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -43,10 +43,8 @@ def test_basic_rewrite_adds_use_and_removes_external():
     """One EXTERNAL becomes one USE; the EXTERNAL line disappears from the rewritten source."""
     src = _read("external_basic_example.f90")
     out = replace_external_with_modules(src, search_dirs=[_HERE])
-    assert "USE utils_mod, ONLY: dscale" in out, \
-        "expected synthesised USE statement"
-    assert not re.search(r"(?im)^\s*EXTERNAL\s*::\s*dscale\s*$", out), \
-        "EXTERNAL line should have been deleted"
+    assert "USE utils_mod, ONLY: dscale" in out, "expected synthesised USE statement"
+    assert not re.search(r"(?im)^\s*EXTERNAL\s*::\s*dscale\s*$", out), "EXTERNAL line should have been deleted"
 
 
 def test_multiple_names_resolve_into_one_use():
@@ -58,11 +56,11 @@ def test_multiple_names_resolve_into_one_use():
     m = re.search(r"USE\s+utils_mod,\s*ONLY:\s*([^\n]+)", code, re.IGNORECASE)
     assert m, "expected synthesised USE for utils_mod"
     name_list = [n.strip().lower() for n in m.group(1).split(",")]
-    assert set(name_list) == {"dscale", "dadd", "dsum"}, \
-        f"USE should import all three names, got {name_list}"
+    assert set(name_list) == {"dscale", "dadd", "dsum"}, f"USE should import all three names, got {name_list}"
     # check code only -- the fixture's header comment mentions EXTERNAL explanatorily
-    assert not re.search(r"(?im)^\s*EXTERNAL\b", code), \
+    assert not re.search(r"(?im)^\s*EXTERNAL\b", code), (
         f"EXTERNAL line should have been deleted from code, got:\n{code}"
+    )
 
 
 def test_already_used_module_does_not_duplicate_use():
@@ -72,11 +70,9 @@ def test_already_used_module_does_not_duplicate_use():
     code = _strip_comments(out)
     # Original USE survives, no duplicate added.
     use_lines = re.findall(r"(?im)^\s*USE\s+utils_mod\b[^\n]*$", code)
-    assert len(use_lines) == 1, \
-        f"expected one USE utils_mod line in code, got {len(use_lines)}: {use_lines}"
+    assert len(use_lines) == 1, f"expected one USE utils_mod line in code, got {len(use_lines)}: {use_lines}"
     # The EXTERNAL line is gone.
-    assert not re.search(r"(?im)^\s*EXTERNAL\b", code), \
-        "EXTERNAL line should have been deleted"
+    assert not re.search(r"(?im)^\s*EXTERNAL\b", code), "EXTERNAL line should have been deleted"
 
 
 def test_unresolvable_external_left_alone(tmp_path):
@@ -158,18 +154,30 @@ def test_rewritten_basic_example_parses_under_flang(tmp_path):
     mod = tmp_path / "utils_mod.f90"
     kernel.write_text(rewritten)
     mod.write_text(_read("utils_mod.f90"))
-    subprocess.check_call([
-        flang_binary(), "-fc1", "-emit-hlfir", "-fintrinsic-modules-path",
-        flang_intrinsic_modules_path(),
-        str(mod), "-o",
-        str(tmp_path / "utils_mod.hlfir")
-    ],
-                          cwd=tmp_path)
-    subprocess.check_call([
-        flang_binary(), "-fc1", "-emit-hlfir", "-fintrinsic-modules-path",
-        flang_intrinsic_modules_path(),
-        str(kernel), "-o",
-        str(tmp_path / "kernel.hlfir")
-    ],
-                          cwd=tmp_path)
+    subprocess.check_call(
+        [
+            flang_binary(),
+            "-fc1",
+            "-emit-hlfir",
+            "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(),
+            str(mod),
+            "-o",
+            str(tmp_path / "utils_mod.hlfir"),
+        ],
+        cwd=tmp_path,
+    )
+    subprocess.check_call(
+        [
+            flang_binary(),
+            "-fc1",
+            "-emit-hlfir",
+            "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(),
+            str(kernel),
+            "-o",
+            str(tmp_path / "kernel.hlfir"),
+        ],
+        cwd=tmp_path,
+    )
     assert (tmp_path / "kernel.hlfir").exists()

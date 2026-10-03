@@ -54,5 +54,6 @@ def validate(external_functions: Iterable[ExternalFunction] = (), do_not_emit: I
     ignore = {n.lower() for n in do_not_emit}
     both = sorted(set(emit_names) & ignore)
     if both:
-        raise ValueError(f"name(s) in both external_functions and do_not_emit "
-                         f"(emit and ignore are mutually exclusive): {both}")
+        raise ValueError(
+            f"name(s) in both external_functions and do_not_emit (emit and ignore are mutually exclusive): {both}"
+        )

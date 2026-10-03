@@ -7,6 +7,7 @@ with ``_pv<N>`` per copy, (2) peel through inlined-dummy declares to root storag
 Kernel inlines ``bump`` twice with different rebind targets; correct lowering
 increments BOTH arrays.
 """
+
 from pathlib import Path
 
 import numpy as np

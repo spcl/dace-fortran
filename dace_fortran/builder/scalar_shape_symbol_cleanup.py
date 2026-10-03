@@ -54,7 +54,7 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
         removed: set = set()
         scalars = [n for n, d in sdfg.arrays.items() if isinstance(d, dace.data.Scalar)]
         for s in scalars:
-            pat = re.compile(rf'^(offset_)?{re.escape(s)}_d\d+$')
+            pat = re.compile(rf"^(offset_)?{re.escape(s)}_d\d+$")
             for sym in list(sdfg.symbols):
                 if sym in referenced:
                     continue

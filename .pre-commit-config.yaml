@@ -1,8 +1,9 @@
 default_language_version:
   python: python3
 
-# The vendored ICON submodule is never ours to reformat.
-exclude: '^tests/icon/full/icon-model/'
+# Vendored upstream trees (the ICON submodule, dwarf-p-cloudsc under Apache-2.0, see NOTICE) are never ours to
+# reformat or lint.
+exclude: '^tests/(icon/full/icon-model|cloudsc/variants/dwarf-p-cloudsc)/'
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -10,62 +11,58 @@ repos:
   hooks:
   - id: check-merge-conflict
   - id: check-yaml
+  # The committed .f90 single-TU fixtures are byte-compared against fresh inliner output, and .patch context lines
+  # carry significant whitespace: a whitespace hook must never mutate either.
   - id: end-of-file-fixer
-    # The committed .f90 single-TU fixtures are byte-compared by drift-guard tests
-    # against fresh inliner output, so a whitespace hook must never mutate them.
-    # .patch context/blank lines carry significant leading whitespace -- never touch.
     exclude: '\.(f90|F90|patch)$'
   - id: trailing-whitespace
     exclude: '\.(f90|F90|patch)$'
 
-# --- Python: yapf (column_limit=120 in .style.yapf) ---
-- repo: https://github.com/google/yapf
-  rev: v0.43.0
-  hooks:
-    - id: yapf
-      name: yapf
-      language: python
-      entry: yapf
-      types: [python]
-
-# --- C++ / Fortran: the locally-installed clang-format / fprettify, so the hook
-#     formats with the SAME version the code was written against (no mirror-version
-#     skew, no churn on the existing tree).  Both read the repo-root config files
-#     (.clang-format, .fprettify.rc).  CI installs both before running pre-commit. ---
+# The linters run in the project's uv environment as it is (``uv sync`` first; ``--no-sync`` keeps an editable dace
+# installed over the locked one), so their versions come from uv.lock and mypy / pyright resolve the installed dace.
 - repo: local
   hooks:
-    - id: clang-format
-      name: clang-format (.clang-format, ColumnLimit 120)
-      entry: clang-format
-      language: system
-      args: ['-i']
-      files: '\.(cpp|h)$'
-      # Vendored dwarf-p-cloudsc (Apache-2.0, see NOTICE): upstream C++/CUDA sources, plus
-      # common/include/*.h COMDECKs that are actually Fortran text under a .h name -- clang-format
-      # mangles the latter outright (verified). Never reformat vendored upstream source.
-      exclude: '^tests/cloudsc/variants/dwarf-p-cloudsc/'
-    - id: fprettify
-      name: fprettify (.fprettify.rc, line-length 120)
-      entry: fprettify
-      language: system
-      args: ['-c', '.fprettify.rc']
-      files: '\.(f90|F90)$'
-      # Every .f90 in the repo is a drift-guarded generated single-TU fixture or a
-      # deliberately-shaped parser/bridge test vector -- not library source.  Narrow
-      # this exclude to opt a hand-written Fortran directory into formatting.
-      exclude: '^tests/'
-    # Copyright / SPDX header on the CORE package (scope lives in the script:
-    # dace_fortran/ only -- tests/ and top-level scripts/ are a deferred pass).
-    - id: dace-fortran-headers
-      name: copyright / SPDX header (core package)
-      # --fix ADDS the header (as the first content line, after any shebang) rather than only
-      # failing -- the same auto-fix contract as the other formatting hooks above.
-      entry: python scripts/check_headers.py --fix
-      language: system
-      require_serial: true
-      files: '\.py$'
-    # Reject any staged file over 500 KiB (keep datasets / binaries / dumps out of git).
-    - id: dace-fortran-large-files
-      name: block files > 500 KiB
-      entry: python scripts/check_large_files.py
-      language: system
+  - id: ruff-check
+    name: ruff check
+    entry: uv run --no-sync ruff check --force-exclude
+    language: system
+    types_or: [python, pyi]
+  - id: ruff-format
+    name: ruff format
+    entry: uv run --no-sync ruff format --force-exclude
+    language: system
+    types_or: [python, pyi]
+  - id: mypy
+    name: mypy (dace_fortran)
+    entry: uv run --no-sync mypy
+    language: system
+    pass_filenames: false
+    files: '^(dace_fortran/.*\.py|typings/.*\.pyi|pyproject\.toml)$'
+  - id: pyright
+    name: pyright (dace_fortran, warnings are errors)
+    entry: uv run --no-sync pyright --warnings
+    language: system
+    pass_filenames: false
+    files: '^(dace_fortran/.*\.py|typings/.*\.pyi|pyproject\.toml)$'
+  - id: clang-format
+    name: clang-format
+    entry: uv run --no-sync clang-format -i
+    language: system
+    files: '\.(cpp|h)$'
+  # Every .f90 under tests/ is a drift-guarded generated fixture or a deliberately shaped parser/bridge test vector.
+  - id: fprettify
+    name: fprettify
+    entry: uv run --no-sync fprettify -c .fprettify.rc
+    language: system
+    files: '\.(f90|F90)$'
+    exclude: '^tests/'
+  - id: dace-fortran-headers
+    name: copyright / SPDX header (core package)
+    entry: uv run --no-sync python scripts/check_headers.py --fix
+    language: system
+    require_serial: true
+    files: '\.py$'
+  - id: dace-fortran-large-files
+    name: block files > 500 KiB
+    entry: uv run --no-sync python scripts/check_large_files.py
+    language: system

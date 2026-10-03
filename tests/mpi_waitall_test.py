@@ -4,6 +4,7 @@ Recognises ``MPI_Waitall(count, array_of_requests, statuses, ierr)``, threaded a
 matching Isend/Irecv producers through the shared per-request opaque transient -- the array
 analogue of ``mpi_wait`` -> ``Wait``. Lowering test only; no ranks required.
 """
+
 from pathlib import Path
 
 import pytest
@@ -41,5 +42,6 @@ def test_mpi_waitall_lowers_to_waitall_libnode(tmp_path: Path):
 
     sdfg = build_sdfg(_WAITALL, tmp_path / "sdfg", name="waitall", entry="waitall_mod::waitall_ring").build()
     mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
-    assert mpi == ["CommF2c", "Irecv", "Isend", "Waitall"], \
+    assert mpi == ["CommF2c", "Irecv", "Isend", "Waitall"], (
         f"expected CommF2c/Irecv/Isend/Waitall MPI libnodes, got {mpi}"
+    )

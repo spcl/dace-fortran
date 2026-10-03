@@ -22,8 +22,8 @@ def _demo_sdfg() -> dace.SDFG:
     """Small SDFG: a, b non-transient float64 arrays + free symbol n."""
     sdfg = dace.SDFG("demo")
     sdfg.add_symbol("n", dace.int64)
-    sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
-    sdfg.add_array("b", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
+    sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
+    sdfg.add_array("b", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
     return sdfg
 
 
@@ -32,22 +32,14 @@ def _pin(sdfg: dace.SDFG) -> FrozenSignature:
         entry="demo",
         mangled="_QPdemo",
         args=(
-            FrozenArg(fortran_name="a",
-                      sdfg_name="a",
-                      kind="array",
-                      dtype="float64",
-                      rank=1,
-                      shape=("n", ),
-                      intent="in"),
-            FrozenArg(fortran_name="b",
-                      sdfg_name="b",
-                      kind="array",
-                      dtype="float64",
-                      rank=1,
-                      shape=("n", ),
-                      intent="inout"),
+            FrozenArg(
+                fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",), intent="in"
+            ),
+            FrozenArg(
+                fortran_name="b", sdfg_name="b", kind="array", dtype="float64", rank=1, shape=("n",), intent="inout"
+            ),
         ),
-        free_symbols=("n", ),
+        free_symbols=("n",),
     )
     sdfg._frozen_signature = fs
     return fs

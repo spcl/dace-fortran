@@ -48,7 +48,7 @@ def test_indirect_access_symbol_and_state(tmp_path):
     sdfg.validate()
 
     idx_syms = [s for s in sdfg.symbols if s.startswith("edge_idx_at")]
-    assert len(idx_syms) == 3, (f"expected three minted symbols (one per indirect load); got {idx_syms}")
+    assert len(idx_syms) == 3, f"expected three minted symbols (one per indirect load); got {idx_syms}"
 
     # every minted symbol must be assigned on some interstate edge and read edge_idx
     assigned = set()
@@ -56,7 +56,7 @@ def test_indirect_access_symbol_and_state(tmp_path):
         for sym, expr in e.data.assignments.items():
             assigned.add(sym)
             if sym in idx_syms:
-                assert "edge_idx" in expr, (f"symbol {sym} should be assigned from edge_idx, got {expr!r}")
+                assert "edge_idx" in expr, f"symbol {sym} should be assigned from edge_idx, got {expr!r}"
     missing = set(idx_syms) - assigned
     assert not missing, f"symbols minted but never assigned: {missing}"
 

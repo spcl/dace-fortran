@@ -4,14 +4,11 @@ with the generic interface it belongs to (ICON's ``mo_mpi`` ``p_wait`` pattern) 
 renaming the specific avoids the dangling ambiguous ``USE ... => p_wait`` the
 inliner would otherwise emit.
 """
+
 import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
-import fparser.two.Fortran2003 as f03
-from fparser.two.utils import walk
 
 from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.fparser_inliner import inline_to_ast
@@ -46,11 +43,13 @@ end module
 def test_rename_clashing_specific_disambiguates_generic(tmp_path: Path):
     """With the rename, externalising the generic ``p_wait`` no longer dangles -- the
     specific is renamed distinct from the generic, calls resolve to it, and the TU compiles."""
-    ast = inline_to_ast({"s.f90": _SRC},
-                        entry="m::kern",
-                        external_functions=[ExternalFunction("p_wait")],
-                        rename_specifics={"p_wait": "p_wait_noarg"},
-                        tolerate_external_uses=True)
+    ast = inline_to_ast(
+        {"s.f90": _SRC},
+        entry="m::kern",
+        external_functions=[ExternalFunction("p_wait")],
+        rename_specifics={"p_wait": "p_wait_noarg"},
+        tolerate_external_uses=True,
+    )
     out = ast.tofortran()
     low = out.lower()
     # the specific was renamed; no dangling bare `=> p_wait` import survives
@@ -58,20 +57,20 @@ def test_rename_clashing_specific_disambiguates_generic(tmp_path: Path):
     assert "=> p_wait\n" not in low and "=> p_wait," not in low and "=> p_wait " not in low
     if shutil.which("gfortran"):
         (tmp_path / "renamed.f90").write_text(out)
-        subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "renamed.f90"],
-                              cwd=str(tmp_path))
+        subprocess.check_call(
+            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "renamed.f90"], cwd=str(tmp_path)
+        )
 
 
 def test_rename_skips_non_collision_and_external_names():
     """A non-collision name is left untouched -- an external (``mpi_*``) name is never renamed."""
-    ast = inline_to_ast({"s.f90": _SRC},
-                        entry="m::kern",
-                        external_functions=[ExternalFunction("p_wait")],
-                        rename_specifics={
-                            "mpi_wait": "mpi_wait_x",
-                            "p_wait_1": "p_wait_1_x"
-                        },
-                        tolerate_external_uses=True)
+    ast = inline_to_ast(
+        {"s.f90": _SRC},
+        entry="m::kern",
+        external_functions=[ExternalFunction("p_wait")],
+        rename_specifics={"mpi_wait": "mpi_wait_x", "p_wait_1": "p_wait_1_x"},
+        tolerate_external_uses=True,
+    )
     low = ast.tofortran().lower()
     # neither the external name nor the non-colliding specific (p_wait_1) is renamed
     assert "mpi_wait_x" not in low

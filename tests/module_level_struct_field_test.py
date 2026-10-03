@@ -10,7 +10,7 @@ Fix (extract_vars.cpp's fir.RecordType drop branch): when a declare traces to a 
 fir.address_of and has component-attribute hlfir.designate uses, synthesise one per-field
 VarInfo per unique component referenced, as a TRANSIENT (module globals are internal state).
 """
-import numpy as np
+
 import pytest
 
 from _util import build_sdfg, have_flang
@@ -151,7 +151,7 @@ end module
     # After inline-all, g%a/g%c reach the bridge through inlined read_field's s dummy declare
     # aliasing g; per-field VarInfo synthesis must pick them up via the alias chain.
     assert "g_a" in sdfg.arrays, f"expected g_a in arrays: {sorted(sdfg.arrays.keys())}"
-    assert ("g_c" in sdfg.arrays or "g_c" in sdfg.scalars or "g_c" in sdfg.symbols)
+    assert "g_c" in sdfg.arrays or "g_c" in sdfg.scalars or "g_c" in sdfg.symbols
 
 
 def test_module_level_struct_field_unaccessed_not_registered(tmp_path):
@@ -173,8 +173,7 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "g_used" in sdfg.arrays
-    assert "g_unused" not in sdfg.arrays, \
-        "unaccessed fields should not be registered"
+    assert "g_unused" not in sdfg.arrays, "unaccessed fields should not be registered"
 
 
 def test_module_level_struct_field_no_uninitialized_transient_warning(tmp_path):
@@ -185,6 +184,7 @@ def test_module_level_struct_field_no_uninitialized_transient_warning(tmp_path):
     flag, which only fires at the array's allocation site). Pins: no warning, and genuine
     zero-stores in that entry state."""
     import warnings
+
     src = """
 module m
   type :: t
@@ -204,6 +204,7 @@ end module
         warnings.simplefilter("error", UserWarning)
         sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     from dace import nodes as dace_nodes
+
     # An explicit entry state must hold the zero stores.
     init_states = [s for s in sdfg.states() if s.label == "init_unwritten_globals"]
     init_state = init_states[0] if init_states else None
@@ -215,24 +216,34 @@ end module
                 zero_inited.add(node.data)
         for node in init_state.nodes():
             if isinstance(node, dace_nodes.Tasklet):
-                assert node.code.as_string.strip(
-                ) == "_out = 0", f"init tasklet must store zero, got {node.code.as_string!r}"
+                assert node.code.as_string.strip() == "_out = 0", (
+                    f"init tasklet must store zero, got {node.code.as_string!r}"
+                )
     # A read-only companion is safe either way: zero-initialised as a transient, or supplied by the
     # caller as a signature argument. What is never acceptable is a transient read with no producer,
     # which is the check below.
-    assert "g_c" in zero_inited or not sdfg.arrays["g_c"].transient, \
+    assert "g_c" in zero_inited or not sdfg.arrays["g_c"].transient, (
         f"read-only g_c is a transient with no zero store: {sorted(zero_inited)}"
+    )
     # Contract: every transient read but never written outside the init state must be covered
     # by an init-state zero store -- exactly what keeps the validator quiet.
     written_outside = {
         node.data
-        for state in sdfg.states() if state is not init_state for node in state.nodes()
+        for state in sdfg.states()
+        if state is not init_state
+        for node in state.nodes()
         if isinstance(node, dace_nodes.AccessNode) and state.in_degree(node) > 0
     }
     for state in sdfg.states():
         if state is init_state:
             continue
         for node in state.nodes():
-            if (isinstance(node, dace_nodes.AccessNode) and node.data not in written_outside
-                    and sdfg.arrays[node.data].transient and state.out_degree(node) > 0):
-                assert node.data in zero_inited, f"{node.data} read-only transient must be zero-initialised in entry state"
+            if (
+                isinstance(node, dace_nodes.AccessNode)
+                and node.data not in written_outside
+                and sdfg.arrays[node.data].transient
+                and state.out_degree(node) > 0
+            ):
+                assert node.data in zero_inited, (
+                    f"{node.data} read-only transient must be zero-initialised in entry state"
+                )

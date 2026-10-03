@@ -11,6 +11,7 @@ iteration ran; ODD values give the correct total.
 Matches LU's ``dolu``: ``call ssor(1)`` (always 1 iter) then ``call ssor(itmax)``, with
 the multi-element convergence matching LU's ``rsdnm(1)<tolrsd(1) .and. ...`` shape.
 Isolates the bug from LU's full 1041-state SDFG for fast iteration."""
+
 import numpy as np
 import pytest
 
@@ -61,14 +62,14 @@ def _run(sdfg, itmax_v: int) -> float:
     kw = {}
     for nm, desc in sdfg.arglist().items():
         is_scalar = isinstance(desc, dace.data.Scalar)
-        is_int = 'int' in str(desc.dtype).lower()
+        is_int = "int" in str(desc.dtype).lower()
         if is_scalar:
-            kw[nm] = np.int32(itmax_v) if nm == 'itmax' else (np.int32(0) if is_int else np.float64(0))
+            kw[nm] = np.int32(itmax_v) if nm == "itmax" else (np.int32(0) if is_int else np.float64(0))
         else:
             shape = tuple(int(s) for s in desc.shape)
-            kw[nm] = np.zeros(shape, dtype=(np.int32 if is_int else np.float64), order='F')
+            kw[nm] = np.zeros(shape, dtype=(np.int32 if is_int else np.float64), order="F")
     sdfg(**kw)
-    return float(kw['u'][0])
+    return float(kw["u"][0])
 
 
 def test_lu_two_call_convergence_repro_itmax_2(tmp_path):

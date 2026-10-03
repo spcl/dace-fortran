@@ -167,7 +167,11 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/) and locked in `uv
 uv sync                          # editable install + the dev group (testing + linting)
 MPICC=mpicc uv sync --group mpi  # also mpi4py, built against the system MPI (multi-rank tests)
 uv run pytest -n 16 tests        # or: source .venv/bin/activate
+uv run pre-commit run --all-files  # the CI lint gate: ruff check + format, mypy, pyright, clang-format, fprettify
 ```
+
+Against a local DaCe checkout, install it over the locked one with `uv pip install -e <dace>`; `[tool.uv]` sets the
+compat editable mode so mypy and pyright resolve it, and the hooks run with `uv run --no-sync` so they keep it.
 
 The C++ bridge compiles on first **use** (first reference of `SDFGBuilder` / `build_sdfg`), not at import — `dace_fortran/build_bridge.py` runs cmake + build and symlinks the resulting `hlfir_bridge*.so` into the package. To build it explicitly, or force a clean rebuild:
 

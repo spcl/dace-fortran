@@ -8,6 +8,7 @@ external builtins instead of asserting.  ``CalcElemVolumeDerivative`` is then
 built to an SDFG via both engines and checked against a gfortran reference on
 Park-Miller-seeded inputs.
 """
+
 import shutil
 import subprocess
 import sys
@@ -102,8 +103,15 @@ def _f2py_reference(tu_text: str, out_dir: Path, mod: str):
     (out_dir / f"{mod}.f90").write_text(tu_text)
     subprocess.check_call(
         [
-            sys.executable, "-m", "numpy.f2py", "-c", f"{mod}.f90", "-m", mod, "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off -ffree-line-length-none"
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            f"{mod}.f90",
+            "-m",
+            mod,
+            "--quiet",
+            "--f90flags=-O0 -fno-fast-math -ffp-contract=off -ffree-line-length-none",
         ],
         cwd=out_dir,
     )
@@ -120,6 +128,7 @@ def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: str):
         pytest.skip("gfortran + meson needed for the f2py reference")
 
     import re
+
     merged = _prune_kernel()
     module_name = re.search(r"(?im)^\s*MODULE\s+(\w+)", merged).group(1).lower()
 

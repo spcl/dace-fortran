@@ -15,6 +15,7 @@ Pinned: build + validate (the numerical outcome is the folded no-error path:
 ``xclib_dft_is('HYBRID')`` collapses to the first-case arm by design of the
 strip pass, so only the surrounding integer plumbing is checked).
 """
+
 import dace
 import numpy as np
 import pytest

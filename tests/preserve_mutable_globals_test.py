@@ -4,7 +4,6 @@ routine-local SAVE-semantic initialisers. Clears the init body of every non-writ
 non-PARAMETER ``_QM<mod>E<var>`` global so ``sccp`` can't fold loads to the BSS init;
 PARAMETER and function-scope globals stay untouched (caller can't bind the latter).
 """
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,12 +31,11 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="m::apply").build()
-    assert 'scale' in sdfg.arglist(), \
-        f"module read-only init must surface as kwarg; got {sorted(sdfg.arglist())}"
-    x = np.array([2.0, 3.0], dtype=np.float64, order='F')
-    y = np.zeros(2, dtype=np.float64, order='F')
+    assert "scale" in sdfg.arglist(), f"module read-only init must surface as kwarg; got {sorted(sdfg.arglist())}"
+    x = np.array([2.0, 3.0], dtype=np.float64, order="F")
+    y = np.zeros(2, dtype=np.float64, order="F")
     # caller supplies a value DIFFERENT from the source default 99.0, to prove the kernel uses the runtime value
-    sdfg(x=x, y=y, scale=np.array([10.0], dtype=np.float64, order='F'))
+    sdfg(x=x, y=y, scale=np.array([10.0], dtype=np.float64, order="F"))
     np.testing.assert_allclose(y, [20.0, 30.0])
 
 
@@ -59,9 +57,8 @@ end module s_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     # bob is NOT a kwarg -- function-scope globals are caller-invisible (no symbol to bind)
-    assert 'bob' not in sdfg.arglist(), \
-        f"function-scope global must stay baked; arglist={sorted(sdfg.arglist())}"
-    out = np.zeros(2, dtype=np.float64, order='F')
+    assert "bob" not in sdfg.arglist(), f"function-scope global must stay baked; arglist={sorted(sdfg.arglist())}"
+    out = np.zeros(2, dtype=np.float64, order="F")
     sdfg(out=out)
     # source default 7.5 must reach the kernel -- if the pass cleared bob's body, both reads would see uninitialised (~0) memory
     np.testing.assert_allclose(out, [7.5, 8.5])
@@ -85,10 +82,9 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="m::apply").build()
-    assert 'kappa' not in sdfg.arglist(), \
-        f"PARAMETER must stay baked; arglist={sorted(sdfg.arglist())}"
-    x = np.array([4.0, 6.0], dtype=np.float64, order='F')
-    y = np.zeros(2, dtype=np.float64, order='F')
+    assert "kappa" not in sdfg.arglist(), f"PARAMETER must stay baked; arglist={sorted(sdfg.arglist())}"
+    x = np.array([4.0, 6.0], dtype=np.float64, order="F")
+    y = np.zeros(2, dtype=np.float64, order="F")
     sdfg(x=x, y=y)
     np.testing.assert_allclose(y, [2.0, 3.0])  # 4*0.5, 6*0.5
 
@@ -118,10 +114,10 @@ contains
 end module mod_use
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="mod_use::apply").build()
-    assert 'scale' in sdfg.arglist()
-    x = np.array([2.0, 3.0], dtype=np.float64, order='F')
-    y = np.zeros(2, dtype=np.float64, order='F')
-    sdfg(x=x, y=y, scale=np.array([10.0], dtype=np.float64, order='F'))
+    assert "scale" in sdfg.arglist()
+    x = np.array([2.0, 3.0], dtype=np.float64, order="F")
+    y = np.zeros(2, dtype=np.float64, order="F")
+    sdfg(x=x, y=y, scale=np.array([10.0], dtype=np.float64, order="F"))
     np.testing.assert_allclose(y, [20.0, 30.0])
 
 
@@ -145,11 +141,11 @@ contains
 end module mod_table
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="mod_table::apply").build()
-    assert 'lut' in sdfg.arglist()
-    x = np.array([10.0, 10.0, 10.0, 10.0], dtype=np.float64, order='F')
-    y = np.zeros(4, dtype=np.float64, order='F')
+    assert "lut" in sdfg.arglist()
+    x = np.array([10.0, 10.0, 10.0, 10.0], dtype=np.float64, order="F")
+    y = np.zeros(4, dtype=np.float64, order="F")
     # Caller supplies a DIFFERENT lut than the source default.
-    sdfg(x=x, y=y, lut=np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order='F'))
+    sdfg(x=x, y=y, lut=np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order="F"))
     np.testing.assert_allclose(y, [5.0, 15.0, 25.0, 35.0])
 
 
@@ -168,8 +164,8 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="update", entry="m::update").build()
-    assert 'state' in sdfg.arglist()
-    state = np.array([4.0], dtype=np.float64, order='F')
+    assert "state" in sdfg.arglist()
+    state = np.array([4.0], dtype=np.float64, order="F")
     sdfg(state=state, x=np.float64(3.5))
     np.testing.assert_allclose(state[0], 7.5)
 
@@ -193,8 +189,8 @@ contains
 end module mod_use
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump_scale", entry="mod_use::bump_scale").build()
-    assert 'scale' in sdfg.arglist()
-    scale = np.array([10.0], dtype=np.float64, order='F')
+    assert "scale" in sdfg.arglist()
+    scale = np.array([10.0], dtype=np.float64, order="F")
     sdfg(scale=scale, amount=np.float64(2.5))
     np.testing.assert_allclose(scale[0], 25.0)
 
@@ -218,8 +214,8 @@ contains
 end module mod_table
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_lut", entry="mod_table::scale_lut").build()
-    assert 'lut' in sdfg.arglist()
-    lut = np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order='F')
+    assert "lut" in sdfg.arglist()
+    lut = np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order="F")
     sdfg(lut=lut, factor=np.float64(2.0))
     np.testing.assert_allclose(lut, [1.0, 3.0, 5.0, 7.0])
 
@@ -242,9 +238,8 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump", entry="m::bump").build()
-    assert 'counter' in sdfg.arglist(), \
-        f"mutable module global must be a kwarg; arglist={sorted(sdfg.arglist())}"
+    assert "counter" in sdfg.arglist(), f"mutable module global must be a kwarg; arglist={sorted(sdfg.arglist())}"
     # counter pre-set to 10, n_calls=3 -> counter=13; intent(in) scalars surface as true Scalar (pass-by-value)
-    counter = np.array([10], dtype=np.int32, order='F')
+    counter = np.array([10], dtype=np.int32, order="F")
     sdfg(counter=counter, n_calls=np.int32(3))
     assert counter[0] == 13

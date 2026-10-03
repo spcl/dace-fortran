@@ -8,9 +8,9 @@ contract (no-error path modeled, error path dead code at test time).
 
 Isolated single-file tests here; the QE e2e anchor is
 ``tests/qe/exx_bp/test_vexx_bp_k_gpu_parse.py``."""
+
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -31,13 +31,19 @@ def _emit_hlfir_and_strip(src: str, *, env_extra: dict = None) -> str:
         f = Path(td) / "k.F90"
         f.write_text(src)
         h = Path(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(f), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(f),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         if env_extra:
             for k, v in env_extra.items():
                 os.environ[k] = v

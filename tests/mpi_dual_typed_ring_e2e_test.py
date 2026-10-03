@@ -33,6 +33,7 @@ that breaks mpi4py's auto-init under mpirun)::
         mpirun --oversubscribe -n 2 python -m pytest -m mpi -p no:cacheprovider \\
         tests/mpi_dual_typed_ring_e2e_test.py
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -105,6 +106,7 @@ def _drive_ring(comm, sdfg, *, dual: bool):
     """Run a compiled ring SDFG on this rank; return (rbuf_dp, rbuf_sp_or_None,
     expected_neighbor_value)."""
     from dace.sdfg import utils
+
     rank, size = comm.Get_rank(), comm.Get_size()
     func = utils.distributed_compile(sdfg, comm)
     n, dst, src = 8, (rank + 1) % size, (rank - 1 + size) % size
@@ -121,7 +123,6 @@ def _drive_ring(comm, sdfg, *, dual: bool):
 
 
 def _build_ring(comm, tmp_path, src, entry, name):
-
     def _b():
         s = build_sdfg(src, tmp_path / name, name=name, entry=entry).build()
         s.name = "mpi_" + name
@@ -161,14 +162,20 @@ def test_mpi_waitall_covers_all_requests(tmp_path: Path):
     dropped."""
     sdfg = build_sdfg(_WAITALL_RING, tmp_path / "waitall", name="waitall", entry="waitall_mod::waitall_ring").build()
     covered = [
-        int(e.data.subset.num_elements()) for state in sdfg.states() for node in state.nodes()
-        if type(node).__name__ == "Waitall" for e in state.in_edges(node) if e.dst_conn == "_request"
+        int(e.data.subset.num_elements())
+        for state in sdfg.states()
+        for node in state.nodes()
+        if type(node).__name__ == "Waitall"
+        for e in state.in_edges(node)
+        if e.dst_conn == "_request"
     ]
     assert covered, "no Waitall node found in the lowered SDFG"
     # The ring posts 2 nonblocking ops (irecv reqs(1), isend reqs(2)); Waitall
     # must cover both, else the receive is never completed.
-    assert covered[0] == 2, (f"MPI_Waitall covers {covered[0]} request(s), expected 2 -- the request array "
-                             f"collapsed to a single _mpireq slot")
+    assert covered[0] == 2, (
+        f"MPI_Waitall covers {covered[0]} request(s), expected 2 -- the request array "
+        f"collapsed to a single _mpireq slot"
+    )
 
 
 @pytest.mark.mpi
@@ -227,12 +234,11 @@ def _gfortran_compiles(src: str, tmp: Path, name: str, *, prelude: str = "") -> 
     f90 = tmp / f"{name}.f90"
     f90.write_text(prelude + "\n" + src)
     r = subprocess.run(
-        ["gfortran", "-ffree-line-length-none", f"-J{tmp}", "-c",
-         str(f90), "-o",
-         str(tmp / f"{name}.o")],
+        ["gfortran", "-ffree-line-length-none", f"-J{tmp}", "-c", str(f90), "-o", str(tmp / f"{name}.o")],
         capture_output=True,
         text=True,
-        cwd=str(tmp))
+        cwd=str(tmp),
+    )
     return r.returncode == 0, r.stderr
 
 
@@ -242,17 +248,24 @@ def test_dual_typed_ref_typestar_is_sound(tmp_path: Path):
     calls -- necessary AND sufficient, so -fallow-argument-mismatch is never
     needed.  EXTERNAL decls (no interface) -> gfortran rejects the real*4 call
     against the real*8-inferred mpi_isend; TYPE(*) -> compiles clean."""
-    extern_ok, extern_err = _gfortran_compiles(_DUAL_CALLS.format(use_line="", extern_line="external :: mpi_isend"),
-                                               tmp_path, "extern")
-    assert not extern_ok, ("dual-typed EXTERNAL mpi_isend unexpectedly compiled without -fallow; "
-                           "the mismatch this test guards no longer reproduces")
-    assert "mismatch" in extern_err.lower() or "type" in extern_err.lower(), \
+    extern_ok, extern_err = _gfortran_compiles(
+        _DUAL_CALLS.format(use_line="", extern_line="external :: mpi_isend"), tmp_path, "extern"
+    )
+    assert not extern_ok, (
+        "dual-typed EXTERNAL mpi_isend unexpectedly compiled without -fallow; "
+        "the mismatch this test guards no longer reproduces"
+    )
+    assert "mismatch" in extern_err.lower() or "type" in extern_err.lower(), (
         f"expected a real*8/real*4 argument mismatch, got:\n{extern_err[-800:]}"
+    )
 
-    typestar_ok, typestar_err = _gfortran_compiles(_DUAL_CALLS.format(use_line="use mpi_typestar_iface",
-                                                                      extern_line=""),
-                                                   tmp_path,
-                                                   "typestar",
-                                                   prelude=_MPI_TYPESTAR_IFACE)
-    assert typestar_ok, (f"TYPE(*) assumed-type interface should compile the dual-typed calls cleanly "
-                         f"without -fallow-argument-mismatch, but gfortran errored:\n{typestar_err[-800:]}")
+    typestar_ok, typestar_err = _gfortran_compiles(
+        _DUAL_CALLS.format(use_line="use mpi_typestar_iface", extern_line=""),
+        tmp_path,
+        "typestar",
+        prelude=_MPI_TYPESTAR_IFACE,
+    )
+    assert typestar_ok, (
+        f"TYPE(*) assumed-type interface should compile the dual-typed calls cleanly "
+        f"without -fallow-argument-mismatch, but gfortran errored:\n{typestar_err[-800:]}"
+    )

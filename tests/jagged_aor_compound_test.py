@@ -9,7 +9,7 @@ companion). L_B same shape, runtime + const multi-record indexing. L_C jagged-Ao
 double-buffer-accessed AoR struct. L_D compound: jagged + AoR + double-buffer (ICON dycore
 prog struct shape).
 """
-import numpy as np
+
 import pytest
 
 from _util import build_sdfg, have_flang
@@ -44,7 +44,7 @@ end module
     arrs = sdfg.arrays
     # Bridge must not emit the unflattened struct base arr -- only per-field companions.
     assert "arr" not in arrs, f"struct base leaked: {sorted(arrs.keys())}"
-    has_per_member = ("arr_a" in arrs and "arr_b" in arrs and "arr_c" in arrs)
+    has_per_member = "arr_a" in arrs and "arr_b" in arrs and "arr_c" in arrs
     assert has_per_member, f"expected per-member flatten: {sorted(arrs.keys())}"
 
 

@@ -8,7 +8,9 @@ def test_branch_pruning():
     Tests that dead branches in `IF` constructs are pruned if the condition
     can be evaluated at compile time.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   integer, parameter :: k = 4
@@ -32,7 +34,10 @@ subroutine main
   if (k < 5) a = 70 + k
   if (k > 5) a = 70 - k
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = pruning.prune_branches(ast)
 
@@ -57,7 +62,9 @@ def test_object_pruning():
     """
     Tests that unused objects (variables, types, etc.) are pruned from the AST.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type config
@@ -91,9 +98,12 @@ subroutine main
   ucfg%b = a*i
   garray(3)%b = a*i*2
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = pruning.prune_unused_objects(ast, [("main", )])
+    ast = pruning.prune_unused_objects(ast, [("main",)])
 
     got = ast.tofortran()
     want = """
@@ -123,7 +133,9 @@ def test_pointer_pruning():
     """
     Tests that unused pointers are pruned from the AST.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type T
@@ -143,9 +155,12 @@ subroutine main(out)
   ptr => cfg % ptr
   out = cfg % data
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = pruning.prune_unused_objects(ast, [("main", )])
+    ast = pruning.prune_unused_objects(ast, [("main",)])
 
     got = ast.tofortran()
     want = """
@@ -173,8 +188,10 @@ def test_completely_unsed_modules_are_pruned_early():
     """
     Tests that completely unused modules are pruned from the AST.
     """
-    sources, _ = (SourceCodeBuilder().add_file(
-        """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(
+            """
 module used
   implicit none
 contains
@@ -198,9 +215,12 @@ subroutine main(d)
   d = fun()
 end subroutine main
 """,
-        "main",
-    ).check_with_gfortran().get())
-    ast = parse_and_improve(sources, [("main", )])
+            "main",
+        )
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources, [("main",)])
 
     got = ast.tofortran()
     want = """
@@ -227,7 +247,9 @@ def test_uses_with_renames():
     Tests that `USE` statements with renames are handled correctly, especially
     after constant evaluation, which might make the import redundant.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   integer, parameter :: pi4 = 9
@@ -244,7 +266,10 @@ contains
     d(2) = 5.5 + i
   end subroutine fun
 end module main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
 
     # A constant-evaluation will pin the constant values.
@@ -278,7 +303,9 @@ def test_use_consolidation_with_potential_ambiguity():
     the same symbol is imported from different modules, avoiding ambiguity by
     using `ONLY` clauses.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module A
   integer, parameter :: mod = 1
 end module A
@@ -296,7 +323,10 @@ subroutine main
   use B
   call foo
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = pruning.consolidate_uses(ast)
 
@@ -327,7 +357,9 @@ def test_use_consolidation_with_type_extension():
     Tests that `USE` statement consolidation correctly handles type extensions,
     ensuring that the base type is imported where needed.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module A
   type, abstract :: AA
   end type AA
@@ -343,7 +375,10 @@ subroutine main
   use B
   type(BB) :: c = BB()
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = pruning.consolidate_uses(ast)
 
@@ -372,7 +407,9 @@ def test_uses_allows_indirect_aliasing():
     Tests that `USE` statements allow indirect aliasing of symbols through
     a chain of modules.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -408,7 +445,10 @@ subroutine main
     a = s%area(1.0)
   end associate
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_associations(ast)
     ast = desugaring.deconstruct_procedure_calls(ast)
@@ -455,7 +495,9 @@ def test_use_consolidation_keeps_host_associated_import_for_specless_subprogram(
     references -- ICON's ``mo_mpi`` ``abort_mpi`` referencing ``mpi_comm_world``)
     must be retained at the module level: the subprogram has nowhere to host the
     import, so consolidating it away would dangle the symbol."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module consts
   implicit none
   integer, parameter :: kk = 7
@@ -475,7 +517,10 @@ subroutine main
   use lib, only: s
   call s
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = pruning.consolidate_uses(ast)
     got = ast.tofortran()
@@ -493,7 +538,9 @@ def test_prune_keeps_specifics_of_referenced_generic_interface():
     call to ICON's ``smooth_oncells``) must keep the interface's ``MODULE
     PROCEDURE`` specifics, so the generic stays bindable instead of emptied to a
     dangling interface.  Here the call is left generic (no deconstruct pass)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module m
   implicit none
   interface gen
@@ -514,7 +561,10 @@ contains
     call gen(y)
   end subroutine
 end module m
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     # No deconstruct_interface_calls: ``gen(y)`` stays a reference to the generic.
     ast = pruning.prune_unused_objects(ast, [("m", "caller")])

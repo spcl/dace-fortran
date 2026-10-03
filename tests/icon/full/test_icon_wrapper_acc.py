@@ -34,8 +34,9 @@ _VELOCITY_SRC = _HERE / "velocity_full.f90"
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-_bil_spec = importlib.util.spec_from_file_location("_icon_wrapper_acc_bil",
-                                                   _REPO / "scripts" / "build_icon_dace_libs.py")
+_bil_spec = importlib.util.spec_from_file_location(
+    "_icon_wrapper_acc_bil", _REPO / "scripts" / "build_icon_dace_libs.py"
+)
 _bil = importlib.util.module_from_spec(_bil_spec)
 _bil_spec.loader.exec_module(_bil)
 
@@ -111,12 +112,14 @@ def _sidecar(device=(), host=(), unclassified=(), routine="velocity_tendencies",
         args[name] = {"residency": "host", "clause": "SELF", "evidence": "src.f90:2"}
     for name, ref in (refs or {}).items():
         args[name]["ref"] = ref
-    return AccResidency.from_dict({
-        "routine": routine,
-        "source": "src.f90",
-        "args": args,
-        "unclassified": list(unclassified),
-    })
+    return AccResidency.from_dict(
+        {
+            "routine": routine,
+            "source": "src.f90",
+            "args": args,
+            "unclassified": list(unclassified),
+        }
+    )
 
 
 def _toy_sdfg(storages, written=(), scalars=_SCALAR_ARGS) -> dace.SDFG:
@@ -129,7 +132,7 @@ def _toy_sdfg(storages, written=(), scalars=_SCALAR_ARGS) -> dace.SDFG:
     sdfg = dace.SDFG("toy_wrapper")
     state = sdfg.add_state("main")
     for name, storage in storages.items():
-        sdfg.add_array(name, (4, ), dace.float64, storage=storage, transient=False)
+        sdfg.add_array(name, (4,), dace.float64, storage=storage, transient=False)
     for name in scalars:
         sdfg.add_scalar(name, dace.float64, transient=False)
     for name in written:
@@ -166,16 +169,16 @@ def test_host_args_on_host_sdfg_emit_nothing():
 
 def test_unclassified_array_without_device_args_stays_host():
     sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
-    residency = _sidecar(host=_ARRAY_ARGS[1:], unclassified=(_ARRAY_ARGS[0], ))
+    residency = _sidecar(host=_ARRAY_ARGS[1:], unclassified=(_ARRAY_ARGS[0],))
     assert not plan_acc_transfers(sdfg, residency, _ARGS).active
 
 
 def test_scalar_args_need_no_classification():
     """The shape the real extractor produces: 8 device arrays, 6 bare scalars."""
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag", ))
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag",))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, unclassified=_SCALAR_ARGS), _ARGS)
     assert plan.update_host == _ARRAY_ARGS
-    assert plan.update_device == ("p_diag", )
+    assert plan.update_device == ("p_diag",)
     assert not any(name in plan.storage for name in _SCALAR_ARGS)
 
 
@@ -203,13 +206,13 @@ def test_mixed_device_and_host_storage_splits_the_two_paths():
     sdfg = _toy_sdfg(storages, written=("p_diag", "z_kin_hor_e", "z_vt_ie"))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
 
-    assert plan.use_device == ("z_kin_hor_e", )
+    assert plan.use_device == ("z_kin_hor_e",)
     assert "z_kin_hor_e" not in plan.update_host
     assert plan.update_device == ("p_diag", "z_vt_ie")
 
 
 def test_render_is_deterministic():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag", ))
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag",))
     residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS)
     first = _bil.render_icon_wrapper(plan_acc_transfers(sdfg, residency, _ARGS))
     second = _bil.render_icon_wrapper(plan_acc_transfers(sdfg, residency, _ARGS))
@@ -229,7 +232,7 @@ def test_host_arg_on_gpu_array_is_an_error():
 
 def test_unclassified_array_with_device_args_is_an_error():
     sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
-    residency = _sidecar(device=_ARRAY_ARGS[1:], host=_SCALAR_ARGS, unclassified=(_ARRAY_ARGS[0], ))
+    residency = _sidecar(device=_ARRAY_ARGS[1:], host=_SCALAR_ARGS, unclassified=(_ARRAY_ARGS[0],))
     with pytest.raises(AccResidencyError, match="unclassified"):
         plan_acc_transfers(sdfg, residency, _ARGS)
 
@@ -260,11 +263,11 @@ def test_component_ref_resolves_through_the_flatten_plan():
     """A ``p_diag%vt`` sidecar entity maps to the ``p_diag_vt`` flat container."""
     storages = {name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS if name != "p_diag"}
     storages["p_diag_vt"] = dace.StorageType.CPU_Heap
-    sdfg = _toy_sdfg(storages, written=("p_diag_vt", ))
+    sdfg = _toy_sdfg(storages, written=("p_diag_vt",))
     residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_diag": "p_diag%vt(:,:,jb)"})
     plan = plan_acc_transfers(sdfg, residency, _ARGS)
     assert "p_diag" in plan.update_host
-    assert plan.update_device == ("p_diag", )
+    assert plan.update_device == ("p_diag",)
 
 
 def test_unmappable_device_component_ref_is_an_error():
@@ -315,10 +318,9 @@ def velocity_sdfg():
         pytest.skip("flang not on PATH and $DACE_FORTRAN_VELOCITY_SDFGZ unset")
     out = (Path(dace.Config.get("default_build_folder")) / "_acc_residency_velocity").resolve()
     out.mkdir(parents=True, exist_ok=True)
-    return build_sdfg(_VELOCITY_SRC.read_text(),
-                      out,
-                      name="velocity_tendencies",
-                      entry="_QMmo_velocity_advectionPvelocity_tendencies").build()
+    return build_sdfg(
+        _VELOCITY_SRC.read_text(), out, name="velocity_tendencies", entry="_QMmo_velocity_advectionPvelocity_tendencies"
+    ).build()
 
 
 @pytest.mark.long
@@ -350,9 +352,9 @@ def test_real_velocity_sdfg_stages_every_device_arg(velocity_sdfg, tmp_path):
     assert body[rate + 1] == "!$ACC WAIT(1)"
     assert body[entry - 1] == "!$ACC WAIT(1)"
     assert body[exit_ - 1] == "!$ACC WAIT(1)"
-    assert body[entry + 1:call] == [f"!$ACC UPDATE HOST({name}) ASYNC(1)" for name in _ARRAY_ARGS]
+    assert body[entry + 1 : call] == [f"!$ACC UPDATE HOST({name}) ASYNC(1)" for name in _ARRAY_ARGS]
 
-    after = body[call + 4:exit_ - 1]
+    after = body[call + 4 : exit_ - 1]
     assert after == [f"!$ACC UPDATE DEVICE({name}) ASYNC(1)" for name in plan.update_device]
     assert "!$ACC HOST_DATA" not in " ".join(body)
 
@@ -363,8 +365,9 @@ def test_real_velocity_sdfg_gpu_storage_takes_the_drift_path(velocity_sdfg):
     for name, desc in sdfg.arrays.items():
         if not desc.transient and isinstance(desc, dace.data.Array) and name.startswith("z_"):
             desc.storage = dace.StorageType.GPU_Global
-    residency = _sidecar(device=("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"),
-                         host=tuple(a for a in _ARGS if not a.startswith("z_")))
+    residency = _sidecar(
+        device=("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), host=tuple(a for a in _ARGS if not a.startswith("z_"))
+    )
     plan = plan_acc_transfers(sdfg, residency, _ARGS)
     assert plan.use_device == ("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie")
     assert plan.update_host == ()
@@ -384,11 +387,13 @@ def _staged_wrapper() -> str:
 def _compile(tmp_path: Path, compiler: str, extra: list) -> None:
     src = tmp_path / "wrapper_probe.f90"
     src.write_text(_STUB_F90 + "\n" + _staged_wrapper())
-    subprocess.run([compiler, *extra, "-c", src.name, "-o", "wrapper_probe.o"],
-                   cwd=str(tmp_path),
-                   check=True,
-                   capture_output=True,
-                   text=True)
+    subprocess.run(
+        [compiler, *extra, "-c", src.name, "-o", "wrapper_probe.o"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
@@ -405,22 +410,33 @@ def test_staged_wrapper_compiles_with_openacc(tmp_path):
 
 
 def _emit_fixture(tmp_path: Path, name: str, acc=None) -> str:
-    from dace_fortran.bindings import (FlattenPlan, FrozenArg, FrozenSignature, OriginalArg, OriginalInterface,
-                                       emit_bindings)
-    frozen = FrozenSignature(entry="kernel",
-                             mangled="_QPkernel",
-                             args=(FrozenArg(fortran_name="a",
-                                             sdfg_name="a",
-                                             kind="array",
-                                             dtype="float64",
-                                             rank=1,
-                                             shape=("n", ),
-                                             intent="inout"), ),
-                             free_symbols=("n", ))
-    iface = OriginalInterface(entry="kernel",
-                              args=(OriginalArg(name="a", fortran_type="real(c_double)", rank=1, intent="inout"),
-                                    OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in")),
-                              used_modules={})
+    from dace_fortran.bindings import (
+        FlattenPlan,
+        FrozenArg,
+        FrozenSignature,
+        OriginalArg,
+        OriginalInterface,
+        emit_bindings,
+    )
+
+    frozen = FrozenSignature(
+        entry="kernel",
+        mangled="_QPkernel",
+        args=(
+            FrozenArg(
+                fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",), intent="inout"
+            ),
+        ),
+        free_symbols=("n",),
+    )
+    iface = OriginalInterface(
+        entry="kernel",
+        args=(
+            OriginalArg(name="a", fortran_type="real(c_double)", rank=1, intent="inout"),
+            OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
+        ),
+        used_modules={},
+    )
     out = tmp_path / f"{name}.f90"
     emit_bindings(frozen, iface, FlattenPlan(entries=()), str(out), acc_residency=acc)
     return out.read_text()
@@ -440,8 +456,8 @@ def test_emit_bindings_acc_blocks_match_the_icon_wrapper(tmp_path):
     """The unified emitter must produce exactly the directive sequence the
     hand-rolled ``render_icon_wrapper`` emits for the same plan."""
     plan = _staging_plan()
-    unified = [l.strip() for l in _emit_fixture(tmp_path, "acc", acc=plan).splitlines() if "!$ACC" in l.upper()]
-    handrolled = [l.strip() for l in _bil.render_icon_wrapper(plan).splitlines() if "!$ACC" in l.upper()]
+    unified = [ln.strip() for ln in _emit_fixture(tmp_path, "acc", acc=plan).splitlines() if "!$ACC" in ln.upper()]
+    handrolled = [ln.strip() for ln in _bil.render_icon_wrapper(plan).splitlines() if "!$ACC" in ln.upper()]
     assert unified == handrolled
 
 
@@ -449,7 +465,7 @@ def test_emit_bindings_acc_staging_brackets_the_wrapper_body(tmp_path):
     plan = _staging_plan()
     body = _lines(_emit_fixture(tmp_path, "order", acc=plan))
     first_update_host = body.index("!$ACC UPDATE HOST(p_prog) ASYNC(1)")
-    call = next(i for i, l in enumerate(body) if l.startswith("call dace_program_kernel("))
+    call = next(i for i, ln in enumerate(body) if ln.startswith("call dace_program_kernel("))
     update_device = body.index("!$ACC UPDATE DEVICE(p_diag) ASYNC(1)")
     end_sub = body.index("end subroutine kernel_dace")
     assert body[first_update_host - 1] == "!$ACC WAIT(1)"
@@ -459,11 +475,11 @@ def test_emit_bindings_acc_staging_brackets_the_wrapper_body(tmp_path):
 
 def test_emit_bindings_acc_host_data_wraps_the_sdfg_call(tmp_path):
     storages = {name: dace.StorageType.GPU_Global for name in _ARRAY_ARGS}
-    sdfg = _toy_sdfg(storages, written=("p_diag", ))
+    sdfg = _toy_sdfg(storages, written=("p_diag",))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
     assert plan.use_device == _ARRAY_ARGS
     body = _lines(_emit_fixture(tmp_path, "hostdata", acc=plan))
     open_at = body.index("!$ACC HOST_DATA USE_DEVICE(" + ", ".join(_ARRAY_ARGS) + ")")
     close_at = body.index("!$ACC END HOST_DATA")
-    call = next(i for i, l in enumerate(body) if l.startswith("call dace_program_kernel("))
+    call = next(i for i, ln in enumerate(body) if ln.startswith("call dace_program_kernel("))
     assert open_at < call < close_at

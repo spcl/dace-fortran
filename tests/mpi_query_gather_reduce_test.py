@@ -9,6 +9,7 @@ mpirun needed. Communicator is a local MPI_COMM_WORLD parameter (synthetic
 runtime scalar threaded as _comm); reduction ops ride use-mpi module handles
 so the op name survives to the builder.
 """
+
 from pathlib import Path
 
 import pytest
@@ -93,8 +94,9 @@ end subroutine guarded
     assert _first(sdfg, CommSize) is not None
     # The promoted symbol must be assigned from the transient the node wrote, or the
     # branch reads an undefined symbol.
-    assert any("nranks" in e.data.assignments for e in sdfg.all_interstate_edges()), \
+    assert any("nranks" in e.data.assignments for e in sdfg.all_interstate_edges()), (
         "the promoted query symbol is never assigned from the library node's result"
+    )
     sdfg.validate()
 
 
@@ -103,7 +105,9 @@ def test_reduce_to_root(tmp_path: Path):
     connector (rooted, unlike ``Allreduce``)."""
     from dace.libraries.mpi.nodes.reduce import Reduce
 
-    src = _MPI_OP_MODULE + """
+    src = (
+        _MPI_OP_MODULE
+        + """
 subroutine red(buf, rbuf, n, root)
   use mpiops
   implicit none
@@ -117,6 +121,7 @@ subroutine red(buf, rbuf, n, root)
   call MPI_Reduce(buf, rbuf, n, MPI_DOUBLE_PRECISION, mpi_sum, root, MPI_COMM_WORLD, ierr)
 end subroutine red
 """
+    )
     sdfg = _build(src, tmp_path, "red", "red")
     node = _first(sdfg, Reduce)
     assert node.op == "MPI_SUM"
@@ -174,7 +179,8 @@ end subroutine ring
     send, parent = sends[0]
     # memlet feeding the destination connector must subset a single element (k-1), not the full 0:4 array.
     dest_subsets = [
-        e.data.subset for e in parent.in_edges(send)
+        e.data.subset
+        for e in parent.in_edges(send)
         if e.dst_conn in ("_dest", "_src") and e.data is not None and "neighbors" in str(e.data.data)
     ]
     assert dest_subsets, "no neighbors-fed dest/src memlet found on the Send node"

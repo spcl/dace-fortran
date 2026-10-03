@@ -10,6 +10,7 @@ Each kernel runs in its own subprocess (:func:`run_kernel_e2e`): the SDFG
 ``.so`` is dlopen'd RTLD_GLOBAL, which would otherwise leak DaCe runtime
 symbols into the next kernel's in-process flang/MLIR build.
 """
+
 import ctypes
 import json
 import os
@@ -183,16 +184,18 @@ def _global_bind_imports(global_binds) -> list:
     return out
 
 
-def _retarget_shim(shim: str,
-                   dace_name: str,
-                   entry: str,
-                   module_dims=None,
-                   n_val=None,
-                   solver_allocs=None,
-                   pointer_members=None,
-                   extra_refmod_imports=None,
-                   global_binds=None,
-                   deferred_members=None) -> str:
+def _retarget_shim(
+    shim: str,
+    dace_name: str,
+    entry: str,
+    module_dims=None,
+    n_val=None,
+    solver_allocs=None,
+    pointer_members=None,
+    extra_refmod_imports=None,
+    global_binds=None,
+    deferred_members=None,
+) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into ``<dace_name>_ref_c``: same
     flat->struct reconstruction, but ``use``/``call``/name retarget to the
     ORIGINAL kernel ``entry`` instead of ``<dace_name>_dace``.
@@ -237,7 +240,7 @@ def _retarget_shim(shim: str,
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             # Seeded grid-dim globals a solver-alloc extent references (nproma__refmod):
             # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
-            for sym, module in (extra_refmod_imports or []):
+            for sym, module in extra_refmod_imports or []:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             out.extend(_global_bind_imports(global_binds))
             continue
@@ -267,16 +270,18 @@ def _retarget_shim(shim: str,
     return "\n".join(out) + "\n"
 
 
-def _inject_dut_shim_prologue(shim: str,
-                              dace_name: str,
-                              entry: str,
-                              module_dims=None,
-                              n_val=None,
-                              solver_allocs=None,
-                              pointer_members=None,
-                              extra_refmod_imports=None,
-                              global_binds=None,
-                              deferred_members=None) -> str:
+def _inject_dut_shim_prologue(
+    shim: str,
+    dace_name: str,
+    entry: str,
+    module_dims=None,
+    n_val=None,
+    solver_allocs=None,
+    pointer_members=None,
+    extra_refmod_imports=None,
+    global_binds=None,
+    deferred_members=None,
+) -> str:
     """Set up the stubbed module globals in the DUT shim -- symmetric to
     :func:`_retarget_shim`'s REF-side injection, but KEEPING the
     ``<dace_name>_dace`` (SDFG) call.
@@ -312,7 +317,7 @@ def _inject_dut_shim_prologue(shim: str,
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             # Seeded grid-dim globals a solver-alloc extent references (nproma__refmod):
             # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
-            for sym, module in (extra_refmod_imports or []):
+            for sym, module in extra_refmod_imports or []:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             out.extend(_global_bind_imports(global_binds))
             continue
@@ -344,8 +349,9 @@ def _parse_abi(shim: str):
     header = [a.strip() for a in m.group(1).replace("&", " ").split(",") if a.strip()]
     value_ftype = {
         name: ftype
-        for ftype, name in re.findall(r"(integer\(c_int\)|real\(c_double\)|logical\(c_bool\)),\s*value\s*::\s*(\w+)",
-                                      shim)
+        for ftype, name in re.findall(
+            r"(integer\(c_int\)|real\(c_double\)|logical\(c_bool\)),\s*value\s*::\s*(\w+)", shim
+        )
     }
     ptr_ftype, ptr_shape, ptr_local = {}, {}, {}
     for p, local, shp in re.findall(r"call c_f_pointer\((\w+),\s*(\w+),\s*\[([^\]]*)\]\)", shim):
@@ -359,15 +365,17 @@ def _parse_abi(shim: str):
     return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local
 
 
-def synth_call_inputs(shim,
-                      *,
-                      n,
-                      seed,
-                      float_range=(-1.0, 1.0),
-                      int_fill=None,
-                      scalar_overrides=None,
-                      array_overrides=None,
-                      mesh_buffers=None):
+def synth_call_inputs(
+    shim,
+    *,
+    n,
+    seed,
+    float_range=(-1.0, 1.0),
+    int_fill=None,
+    scalar_overrides=None,
+    array_overrides=None,
+    mesh_buffers=None,
+):
     """Parse the shim's flat C ABI and synthesize ``(call_plan, inputs, ptr_args,
     ptr_local)`` -- ctypes call plan plus random/pinned input buffers.
 
@@ -382,8 +390,7 @@ def synth_call_inputs(shim,
     # Refin-ctrl arrays span the full level range, not mesh size n -- size their
     # extent symbols to _REFIN_CTRL_EXTENT so the negative lower bound stays in bounds.
     dimvals = {
-        s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n)
-        for s in dim_symbols
+        s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n) for s in dim_symbols
     }
     rng = np.random.default_rng(seed)
     inputs, call_plan = {}, []
@@ -395,8 +402,9 @@ def synth_call_inputs(shim,
             mesh_buf = mesh_buffers.get(ptr_local[arg])
             if mesh_buf is not None:  # explicit per-element buffer (real mesh connectivity)
                 if tuple(mesh_buf.shape) != shape:
-                    raise ValueError(f"mesh buffer for {ptr_local[arg]!r} has shape "
-                                     f"{tuple(mesh_buf.shape)}, harness expects {shape}")
+                    raise ValueError(
+                        f"mesh buffer for {ptr_local[arg]!r} has shape {tuple(mesh_buf.shape)}, harness expects {shape}"
+                    )
                 base = np.asfortranarray(mesh_buf.astype(npdt))
             elif override is not None:  # pinned to a constant (e.g. a valid loop bound)
                 base = np.asfortranarray(np.full(shape, override, dtype=npdt))
@@ -419,7 +427,8 @@ def synth_call_inputs(shim,
                 # Extent args ride dimvals (refin-ctrl-aware) to match the c_f_pointer shape.
                 int_default = int_fill if int_fill is not None else 0
                 v = scalar_overrides.get(
-                    arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default))
+                    arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default)
+                )
             call_plan.append(("val", arg, _CT[ft], v))
     return call_plan, inputs, list(ptr_shape), ptr_local
 
@@ -431,12 +440,12 @@ def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None, arra
     cdll = ctypes.CDLL(str(so_path))
     # ICON namelist/config globals otherwise read as BSS 0 -- seeded identically
     # on DUT and reference (see _resolve_module_seeds) to stay bit-exact.
-    for mangled, length, value in (module_seeds or []):
+    for mangled, length, value in module_seeds or []:
         cell = (ctypes.c_int * length).in_dll(cdll, mangled)
         for i in range(length):
             cell[i] = value
     # Allocatable module ARRAYS read module-direct (e.g. vct_a) -- unallocated in isolation; allocate + fill identically on both .so's.
-    for mangled, length in (array_seeds or []):
+    for mangled, length in array_seeds or []:
         _seed_alloc_array(cdll, mangled, length)
     fn = getattr(cdll, sym)
     argtypes, args = [], []
@@ -448,15 +457,9 @@ def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None, arra
     fn(*args)
 
 
-def _run_in_fork(so_path,
-                 call_plan,
-                 inputs,
-                 ptr_args,
-                 sym,
-                 save_prefix: Path,
-                 sdfg_so=None,
-                 module_seeds=None,
-                 array_seeds=None):
+def _run_in_fork(
+    so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, sdfg_so=None, module_seeds=None, array_seeds=None
+):
     """Run ``sym`` from ``so_path`` in a forked child on a copy of ``inputs``,
     saving each output to ``<save_prefix>_<arg>.npy``, then ``os._exit`` so the
     child's (occasionally heap-corrupting) teardown never runs.  Separate
@@ -479,19 +482,21 @@ def _run_in_fork(so_path,
     return status
 
 
-def build_dut_and_ref(tu_path: Path,
-                      entry: str,
-                      *,
-                      n: int,
-                      out: Path,
-                      module_seeds=None,
-                      module_array_seeds=None,
-                      do_not_emit=None,
-                      prelude_paths=None,
-                      inject_use_mpi=False,
-                      ref_solver_allocs=None,
-                      ref_global_binds=None,
-                      fc: str = "gfortran"):
+def build_dut_and_ref(
+    tu_path: Path,
+    entry: str,
+    *,
+    n: int,
+    out: Path,
+    module_seeds=None,
+    module_array_seeds=None,
+    do_not_emit=None,
+    prelude_paths=None,
+    inject_use_mpi=False,
+    ref_solver_allocs=None,
+    ref_global_binds=None,
+    fc: str = "gfortran",
+):
     """Build the DUT (SDFG behind a struct-flattened ``bind(c)`` shim) and the REF
     (the same shim retargeted at the original Fortran kernel), and return the
     artefacts needed to drive them.
@@ -566,14 +571,14 @@ def build_dut_and_ref(tu_path: Path,
     hook = os.environ.get("OCEAN_E2E_SDFG_HOOK")
     if hook:
         import importlib
+
         modname, fn = hook.split(":", 1)
         vars(importlib.import_module(modname))[fn](sdfg)
     clear_external_registry()  # DUT SDFG built -- drop the drop-list so it can't leak
     dace_name = sdfg.name  # bind(c) symbols + SDFG exports key off this, NOT name=
-    lib = build_fortran_library(sdfg,
-                                out_dir=str(out / "lib"),
-                                prelude_sources=[*extra_prelude, ref_tu],
-                                bind_c_shim=True)
+    lib = build_fortran_library(
+        sdfg, out_dir=str(out / "lib"), prelude_sources=[*extra_prelude, ref_tu], bind_c_shim=True
+    )
     shim = Path(lib.bind_c_shim_f90).read_text()
     # Seed the reference's grid-dim module globals (nproma/n_zlev) the DUT derives
     # from array extents -- else isolated reference reads 0 and OOBs.  Recovered
@@ -588,13 +593,15 @@ def build_dut_and_ref(tu_path: Path,
     # t_ocean_solve mixes ALLOCATABLE and POINTER scratch members; the pre-alloc
     # guard must match each kind (allocated rejects a pointer) -- recovered from
     # the binding's own associated(obj % comp) guards.
-    pointer_members = {(o.lower(), c.lower())
-                       for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
+    pointer_members = {
+        (o.lower(), c.lower()) for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)
+    }
     # A global-bind target needs an allocate only when the member is deferred-shape;
     # the binding guards exactly those with associated()/allocated(), so its own
     # guards classify array-vs-scalar members without a second spec field.
-    deferred_members = pointer_members | {(o.lower(), c.lower())
-                                          for o, c in re.findall(r"allocated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
+    deferred_members = pointer_members | {
+        (o.lower(), c.lower()) for o, c in re.findall(r"allocated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)
+    }
 
     # A solver-alloc extent may reference a seeded grid-dim global via its
     # <sym>__refmod rename; those not in module_dims come from module_seeds and
@@ -609,8 +616,9 @@ def build_dut_and_ref(tu_path: Path,
         for sym in sorted(referenced - size_derived):
             module = sym_module.get(sym)
             if module is None:
-                raise KeyError(f"solver-alloc extent references '{sym}__refmod' but '{sym}' is not a "
-                               f"module import in the binding")
+                raise KeyError(
+                    f"solver-alloc extent references '{sym}__refmod' but '{sym}' is not a module import in the binding"
+                )
             extra_refmod_imports.append((sym, module))
 
     # DUT: pre-allocate the stubbed solver-scratch host members (same list the
@@ -621,45 +629,68 @@ def build_dut_and_ref(tu_path: Path,
     if ref_solver_allocs or ref_global_binds:
         dut_shim = out / f"{dace_name}_c_dut.f90"
         dut_shim.write_text(
-            _inject_dut_shim_prologue(shim,
-                                      dace_name,
-                                      entry,
-                                      module_dims,
-                                      n,
-                                      solver_allocs=ref_solver_allocs,
-                                      pointer_members=pointer_members,
-                                      extra_refmod_imports=extra_refmod_imports,
-                                      global_binds=ref_global_binds,
-                                      deferred_members=deferred_members))
+            _inject_dut_shim_prologue(
+                shim,
+                dace_name,
+                entry,
+                module_dims,
+                n,
+                solver_allocs=ref_solver_allocs,
+                pointer_members=pointer_members,
+                extra_refmod_imports=extra_refmod_imports,
+                global_binds=ref_global_binds,
+                deferred_members=deferred_members,
+            )
+        )
         dut_so_path = out / f"lib{dace_name}_dut.so"
         sdfg_so = Path(lib.sdfg_so)
         _asan = ["-fsanitize=address", "-fno-omit-frame-pointer"] if os.environ.get("OCEAN_E2E_ASAN") else []
-        rl = subprocess.run([
-            fc, *_asan, "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
-            "-ffp-contract=off", "-frounding-math", "-fopenmp", f"-J{out}", *[str(p) for p in extra_prelude],
-            str(ref_tu),
-            str(lib.bindings_f90),
-            str(dut_shim), "-o",
-            str(dut_so_path), f"-L{sdfg_so.parent}", f"-Wl,-rpath,{sdfg_so.parent}", f"-l:{sdfg_so.name}"
-        ],
-                            capture_output=True,
-                            text=True,
-                            cwd=str(out))
+        rl = subprocess.run(
+            [
+                fc,
+                *_asan,
+                "-shared",
+                "-fPIC",
+                "-ffree-line-length-none",
+                "-O3",
+                "-g",
+                "-fno-fast-math",
+                "-ffp-contract=off",
+                "-frounding-math",
+                "-fopenmp",
+                f"-J{out}",
+                *[str(p) for p in extra_prelude],
+                str(ref_tu),
+                str(lib.bindings_f90),
+                str(dut_shim),
+                "-o",
+                str(dut_so_path),
+                f"-L{sdfg_so.parent}",
+                f"-Wl,-rpath,{sdfg_so.parent}",
+                f"-l:{sdfg_so.name}",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(out),
+        )
         if rl.returncode != 0:
             raise RuntimeError(f"DUT shim-prologue relink failed:\n{rl.stderr[-3000:]}")
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(
-        _retarget_shim(shim,
-                       dace_name,
-                       entry,
-                       module_dims,
-                       n,
-                       solver_allocs=ref_solver_allocs,
-                       pointer_members=pointer_members,
-                       extra_refmod_imports=extra_refmod_imports,
-                       global_binds=ref_global_binds,
-                       deferred_members=deferred_members))
+        _retarget_shim(
+            shim,
+            dace_name,
+            entry,
+            module_dims,
+            n,
+            solver_allocs=ref_solver_allocs,
+            pointer_members=pointer_members,
+            extra_refmod_imports=extra_refmod_imports,
+            global_binds=ref_global_binds,
+            deferred_members=deferred_members,
+        )
+    )
     ref_so = out / f"lib{dace_name}_ref.so"
     # No -fallow-argument-mismatch: it would silence a genuine shim/kernel ABI
     # mismatch instead of failing loudly.  Dual-typed MPI kernels are made sound
@@ -667,8 +698,11 @@ def build_dut_and_ref(tu_path: Path,
     # OCEAN_E2E_FINIT: poison uninitialised locals so a read shows up as a sNaN
     # (and a traceable trap) instead of whatever the heap held.  Diagnostic only
     # -- a reference that needs this to be reproducible is itself the bug.
-    _finit = ["-finit-real=snan", "-finit-integer=-99999999", "-fbacktrace", "-g"
-              ] if os.environ.get("OCEAN_E2E_FINIT") else []
+    _finit = (
+        ["-finit-real=snan", "-finit-integer=-99999999", "-fbacktrace", "-g"]
+        if os.environ.get("OCEAN_E2E_FINIT")
+        else []
+    )
     # OCEAN_E2E_ASAN: instrument the REF too so a real heap-buffer-overflow (not a
     # benign 8-vs-n_zlev array-conformance, which -fcheck=bounds would false-flag)
     # reports a precise line.  Run pytest with LD_PRELOAD=$(gcc -print-file-name=libasan.so).
@@ -690,11 +724,12 @@ def build_dut_and_ref(tu_path: Path,
             # resolves and single-rank halo calls are no-ops.
             *[str(p) for p in extra_prelude],
             str(ref_tu),
-            str(ref_shim)
+            str(ref_shim),
         ],
         capture_output=True,
         text=True,
-        cwd=str(out))
+        cwd=str(out),
+    )
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
 
@@ -709,22 +744,24 @@ def build_dut_and_ref(tu_path: Path,
     }
 
 
-def _build_and_compare(tu_path: Path,
-                       entry: str,
-                       scalar_overrides: dict,
-                       array_overrides: dict,
-                       float_range: tuple,
-                       n: int,
-                       seed: int,
-                       out: Path,
-                       int_fill=None,
-                       module_seeds=None,
-                       module_array_seeds=None,
-                       do_not_emit=None,
-                       prelude_paths=None,
-                       inject_use_mpi=False,
-                       ref_solver_allocs=None,
-                       ref_global_binds=None):
+def _build_and_compare(
+    tu_path: Path,
+    entry: str,
+    scalar_overrides: dict,
+    array_overrides: dict,
+    float_range: tuple,
+    n: int,
+    seed: int,
+    out: Path,
+    int_fill=None,
+    module_seeds=None,
+    module_array_seeds=None,
+    do_not_emit=None,
+    prelude_paths=None,
+    inject_use_mpi=False,
+    ref_solver_allocs=None,
+    ref_global_binds=None,
+):
     """Worker body (runs in a subprocess): build DUT + REF, drive both, return
     ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
     the orchestrating parent.
@@ -736,17 +773,19 @@ def _build_and_compare(tu_path: Path,
     so its dual-typed real*8/real*4 calls resolve through the stub's assumed-type
     interface (no ``-fallow-argument-mismatch``).
     """
-    art = build_dut_and_ref(tu_path,
-                            entry,
-                            n=n,
-                            out=out,
-                            module_seeds=module_seeds,
-                            module_array_seeds=module_array_seeds,
-                            do_not_emit=do_not_emit,
-                            prelude_paths=prelude_paths,
-                            inject_use_mpi=inject_use_mpi,
-                            ref_solver_allocs=ref_solver_allocs,
-                            ref_global_binds=ref_global_binds)
+    art = build_dut_and_ref(
+        tu_path,
+        entry,
+        n=n,
+        out=out,
+        module_seeds=module_seeds,
+        module_array_seeds=module_array_seeds,
+        do_not_emit=do_not_emit,
+        prelude_paths=prelude_paths,
+        inject_use_mpi=inject_use_mpi,
+        ref_solver_allocs=ref_solver_allocs,
+        ref_global_binds=ref_global_binds,
+    )
     dut_so_path, ref_so = art["dut_so"], art["ref_so"]
     dace_name, shim = art["dace_name"], art["shim"]
     seed_specs, array_specs = art["seed_specs"], art["array_specs"]
@@ -759,38 +798,43 @@ def _build_and_compare(tu_path: Path,
         with np.load(mesh_npz) as zf:
             mesh_buffers = {k: zf[k] for k in zf.files}
 
-    call_plan, inputs, ptr_args, _ptr_local = synth_call_inputs(shim,
-                                                                n=n,
-                                                                seed=seed,
-                                                                float_range=float_range,
-                                                                int_fill=int_fill,
-                                                                scalar_overrides=scalar_overrides,
-                                                                array_overrides=array_overrides,
-                                                                mesh_buffers=mesh_buffers)
-    sd = _run_in_fork(dut_so_path,
-                      call_plan,
-                      inputs,
-                      ptr_args,
-                      f"{dace_name}_c",
-                      out / "dut",
-                      sdfg_so=art["sdfg_so"],
-                      module_seeds=seed_specs,
-                      array_seeds=array_specs)
-    sr = _run_in_fork(ref_so,
-                      call_plan,
-                      inputs,
-                      ptr_args,
-                      f"{dace_name}_ref_c",
-                      out / "ref",
-                      module_seeds=seed_specs,
-                      array_seeds=array_specs)
+    call_plan, inputs, ptr_args, _ptr_local = synth_call_inputs(
+        shim,
+        n=n,
+        seed=seed,
+        float_range=float_range,
+        int_fill=int_fill,
+        scalar_overrides=scalar_overrides,
+        array_overrides=array_overrides,
+        mesh_buffers=mesh_buffers,
+    )
+    sd = _run_in_fork(
+        dut_so_path,
+        call_plan,
+        inputs,
+        ptr_args,
+        f"{dace_name}_c",
+        out / "dut",
+        sdfg_so=art["sdfg_so"],
+        module_seeds=seed_specs,
+        array_seeds=array_specs,
+    )
+    sr = _run_in_fork(
+        ref_so,
+        call_plan,
+        inputs,
+        ptr_args,
+        f"{dace_name}_ref_c",
+        out / "ref",
+        module_seeds=seed_specs,
+        array_seeds=array_specs,
+    )
 
     dut = {k: np.load(out / f"dut_{k}.npy") for k in ptr_args if (out / f"dut_{k}.npy").exists()}
     ref = {k: np.load(out / f"ref_{k}.npy") for k in ptr_args if (out / f"ref_{k}.npy").exists()}
     missing = [k for k in ptr_args if k not in dut or k not in ref]
     if missing:
-        raise RuntimeError(f"run did not produce all outputs (dut status={sd}, ref status={sr}); "
-                           f"missing {missing[:5]}")
+        raise RuntimeError(f"run did not produce all outputs (dut status={sd}, ref status={sr}); missing {missing[:5]}")
 
     max_diff, n_changed = 0.0, 0
     for arg in ptr_args:
@@ -812,23 +856,25 @@ def _build_and_compare(tu_path: Path,
     return max_diff, n_changed
 
 
-def run_kernel_e2e(tu_path: Path,
-                   entry: str,
-                   *,
-                   scalar_overrides=None,
-                   array_overrides=None,
-                   float_range=(-1.0, 1.0),
-                   n: int = 8,
-                   seed: int = 0,
-                   int_fill=None,
-                   module_seeds=None,
-                   module_array_seeds=None,
-                   do_not_emit=None,
-                   prelude_paths=None,
-                   inject_use_mpi=False,
-                   ref_solver_allocs=None,
-                   ref_global_binds=None,
-                   mesh_buffers=None) -> dict:
+def run_kernel_e2e(
+    tu_path: Path,
+    entry: str,
+    *,
+    scalar_overrides=None,
+    array_overrides=None,
+    float_range=(-1.0, 1.0),
+    n: int = 8,
+    seed: int = 0,
+    int_fill=None,
+    module_seeds=None,
+    module_array_seeds=None,
+    do_not_emit=None,
+    prelude_paths=None,
+    inject_use_mpi=False,
+    ref_solver_allocs=None,
+    ref_global_binds=None,
+    mesh_buffers=None,
+) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``; ``passed`` is False (with captured
     output) on any build/lowering/compile/run failure rather than crashing pytest.
@@ -855,28 +901,31 @@ def run_kernel_e2e(tu_path: Path,
     env["PYTHONPATH"] = os.pathsep.join([str(_HERE.parents[1]), str(_HERE.parents[2]), env.get("PYTHONPATH", "")])
     env["TMPDIR"] = str(out)
     env.setdefault("UCX_VFS_ENABLE", "n")
-    proc = subprocess.run([
-        sys.executable,
-        str(Path(__file__).resolve()),
-        str(tu_path.resolve()), entry,
-        json.dumps(scalar_overrides or {}),
-        json.dumps(array_overrides or {}),
-        json.dumps(list(float_range)),
-        str(n),
-        str(seed),
-        str(out),
-        json.dumps(int_fill),
-        json.dumps(module_seeds or {}),
-        json.dumps(list(do_not_emit or [])),
-        json.dumps([str(p) for p in (prelude_paths or [])]),
-        json.dumps(bool(inject_use_mpi)),
-        json.dumps(module_array_seeds or {}),
-        json.dumps(ref_solver_allocs or []),
-        json.dumps(ref_global_binds or [])
-    ],
-                          capture_output=True,
-                          text=True,
-                          env=env)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            str(tu_path.resolve()),
+            entry,
+            json.dumps(scalar_overrides or {}),
+            json.dumps(array_overrides or {}),
+            json.dumps(list(float_range)),
+            str(n),
+            str(seed),
+            str(out),
+            json.dumps(int_fill),
+            json.dumps(module_seeds or {}),
+            json.dumps(list(do_not_emit or [])),
+            json.dumps([str(p) for p in (prelude_paths or [])]),
+            json.dumps(bool(inject_use_mpi)),
+            json.dumps(module_array_seeds or {}),
+            json.dumps(ref_solver_allocs or []),
+            json.dumps(ref_global_binds or []),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
     output = proc.stdout + "\n" + proc.stderr
     passed = any(ln.startswith("RESULT: PASS") for ln in proc.stdout.splitlines())
     max_diff = next((float(ln.split(":", 1)[1]) for ln in proc.stdout.splitlines() if ln.startswith("MAXDIFF:")), None)
@@ -885,26 +934,43 @@ def run_kernel_e2e(tu_path: Path,
 
 
 def _main(argv):
-    (tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json,
-     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json, module_array_seeds_json,
-     ref_solver_allocs_json, ref_global_binds_json) = argv[1:17]
+    (
+        tu_path,
+        entry,
+        overrides_json,
+        array_overrides_json,
+        float_range_json,
+        n,
+        seed,
+        out,
+        int_fill_json,
+        module_seeds_json,
+        do_not_emit_json,
+        prelude_paths_json,
+        inject_use_mpi_json,
+        module_array_seeds_json,
+        ref_solver_allocs_json,
+        ref_global_binds_json,
+    ) = argv[1:17]
     try:
-        max_diff, n_changed = _build_and_compare(Path(tu_path),
-                                                 entry,
-                                                 json.loads(overrides_json),
-                                                 json.loads(array_overrides_json),
-                                                 tuple(json.loads(float_range_json)),
-                                                 int(n),
-                                                 int(seed),
-                                                 Path(out),
-                                                 json.loads(int_fill_json),
-                                                 module_seeds=json.loads(module_seeds_json),
-                                                 module_array_seeds=json.loads(module_array_seeds_json),
-                                                 do_not_emit=json.loads(do_not_emit_json),
-                                                 prelude_paths=json.loads(prelude_paths_json),
-                                                 inject_use_mpi=json.loads(inject_use_mpi_json),
-                                                 ref_solver_allocs=json.loads(ref_solver_allocs_json),
-                                                 ref_global_binds=json.loads(ref_global_binds_json))
+        max_diff, n_changed = _build_and_compare(
+            Path(tu_path),
+            entry,
+            json.loads(overrides_json),
+            json.loads(array_overrides_json),
+            tuple(json.loads(float_range_json)),
+            int(n),
+            int(seed),
+            Path(out),
+            json.loads(int_fill_json),
+            module_seeds=json.loads(module_seeds_json),
+            module_array_seeds=json.loads(module_array_seeds_json),
+            do_not_emit=json.loads(do_not_emit_json),
+            prelude_paths=json.loads(prelude_paths_json),
+            inject_use_mpi=json.loads(inject_use_mpi_json),
+            ref_solver_allocs=json.loads(ref_solver_allocs_json),
+            ref_global_binds=json.loads(ref_global_binds_json),
+        )
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)

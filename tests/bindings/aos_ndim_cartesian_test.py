@@ -5,6 +5,7 @@ over an N-D record array into SoA; for a fixed-shape VALUE member (e.g. ICON-O's
 ``p_vn_dual(:,:,:)%x``) all record indices are used and no presence guard is
 emitted. Text-only checks on emitted Fortran -- no flang/gfortran needed.
 """
+
 from dace_fortran.bindings.block_builders import _render_aos_copy_in, _render_aos_copy_out
 from dace_fortran.bindings.frozen_signature import FrozenArg
 
@@ -55,11 +56,14 @@ def test_ndim_cartesian_copy_in_indexes_all_outer_dims():
     assert "do aos_p_diag_p_vn_dual_x_i1 = 1, size(p_diag % p_vn_dual, 2)" in src
     assert "do aos_p_diag_p_vn_dual_x_i2 = 1, size(p_diag % p_vn_dual, 3)" in src
     # The element accessor uses all three indices (not a single-index 1/3 ref).
-    assert ("p_diag % p_vn_dual(aos_p_diag_p_vn_dual_x_i0, aos_p_diag_p_vn_dual_x_i1, "
-            "aos_p_diag_p_vn_dual_x_i2)%x") in src
+    assert (
+        "p_diag % p_vn_dual(aos_p_diag_p_vn_dual_x_i0, aos_p_diag_p_vn_dual_x_i1, aos_p_diag_p_vn_dual_x_i2)%x"
+    ) in src
     # Rank-4 allocate: three outer extents + the literal member extent.
-    assert ("allocate(p_diag_p_vn_dual_x(size(p_diag % p_vn_dual, 1), "
-            "size(p_diag % p_vn_dual, 2), size(p_diag % p_vn_dual, 3), 3)") in src
+    assert (
+        "allocate(p_diag_p_vn_dual_x(size(p_diag % p_vn_dual, 1), "
+        "size(p_diag % p_vn_dual, 2), size(p_diag % p_vn_dual, 3), 3)"
+    ) in src
 
 
 def test_static_value_member_emits_no_presence_guard():
@@ -75,9 +79,11 @@ def test_static_value_member_copy_out_scatters_all_dims():
     """When written, copy-out scatters back through all three element loops."""
     src = "\n".join(_render_aos_copy_out(_cartesian_member_arg(is_written=True)))
     assert "do aos_p_diag_p_vn_dual_x_i2 = 1, size(p_diag % p_vn_dual, 3)" in src
-    assert ("p_diag % p_vn_dual(aos_p_diag_p_vn_dual_x_i0, aos_p_diag_p_vn_dual_x_i1, "
-            "aos_p_diag_p_vn_dual_x_i2)%x = p_diag_p_vn_dual_x(aos_p_diag_p_vn_dual_x_i0, "
-            "aos_p_diag_p_vn_dual_x_i1, aos_p_diag_p_vn_dual_x_i2, 1:3)") in src
+    assert (
+        "p_diag % p_vn_dual(aos_p_diag_p_vn_dual_x_i0, aos_p_diag_p_vn_dual_x_i1, "
+        "aos_p_diag_p_vn_dual_x_i2)%x = p_diag_p_vn_dual_x(aos_p_diag_p_vn_dual_x_i0, "
+        "aos_p_diag_p_vn_dual_x_i1, aos_p_diag_p_vn_dual_x_i2, 1:3)"
+    ) in src
 
 
 def test_1d_allocatable_member_unchanged():

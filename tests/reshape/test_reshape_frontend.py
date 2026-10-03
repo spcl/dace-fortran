@@ -1,6 +1,7 @@
 """Frontend-recognition tests for Fortran ``RESHAPE``: each test asserts the SDFG
 carries a :class:`CopyLibraryNode` (the flat copy an ``hlfir.reshape`` with preserved
 element count produces)."""
+
 from pathlib import Path
 import sys
 
@@ -30,8 +31,7 @@ def test_reshape_2d_to_1d_recognised(tmp_path):
     """``out = RESHAPE(arr(n, m), SHAPE=[n*m])`` -> CopyLibraryNode."""
     sdfg = _build("reshape_2d_to_1d_probe.f90", "reshape_2d_to_1d", tmp_path)
     classes = _node_class_names(sdfg)
-    assert "CopyLibraryNode" in classes, \
-        f"expected RESHAPE to lower as CopyLibraryNode; got {sorted(classes)!r}"
+    assert "CopyLibraryNode" in classes, f"expected RESHAPE to lower as CopyLibraryNode; got {sorted(classes)!r}"
 
 
 def test_reshape_1d_to_2d_recognised(tmp_path):

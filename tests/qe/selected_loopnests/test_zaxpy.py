@@ -8,6 +8,7 @@ scatter y(ymap(i))+=x(i); double y(ymap(i))+=x(xmap(i)).
 
 Index maps are distinct-target permutations (QE's uniformSample shape) so scatter order can't affect
 the result; PRNG matches the SC26 artifacts (Xor64Rng/splitmix64, see _prng.xor64_uniform01)."""
+
 import numpy as np
 import pytest
 

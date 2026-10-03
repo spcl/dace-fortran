@@ -18,7 +18,7 @@ subroutine main(d)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     a = np.full([5], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0)
@@ -37,7 +37,7 @@ subroutine main(d, arrsize)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 10
     a = np.full([size], 42, order="F", dtype=np.float64)
@@ -56,7 +56,7 @@ subroutine main(d)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     a = np.full([60], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0)
@@ -74,7 +74,7 @@ subroutine main(d, arrsize)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     arrsize = 50
     a = np.full([arrsize + 10], 42, order="F", dtype=np.float64)
@@ -95,7 +95,7 @@ subroutine main(d, arrsize, arrsize2)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     arrsize = 50
     arrsize2 = 54
@@ -115,7 +115,7 @@ subroutine main(d)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     a = np.full([60], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0)
@@ -134,7 +134,7 @@ subroutine main(d, arrsize, arrsize2)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     arrsize = 50
     arrsize2 = 54
@@ -155,7 +155,7 @@ subroutine main(d, arrsize, arrsize2)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     arrsize = 5
     arrsize2 = 10
@@ -176,7 +176,7 @@ subroutine main(d, arrsize, arrsize2)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     arrsize = 5
     arrsize2 = 10
@@ -204,7 +204,7 @@ contains
   end subroutine other
 end module lib
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
 
     arrsize = 5
     arrsize2 = 10

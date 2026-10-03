@@ -12,7 +12,6 @@ World ranks pair by parity {0<->2, 1<->3}, so expected result is ``world_rank XO
 
 import ctypes
 import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -78,8 +77,8 @@ end subroutine run_sr
 _IFACE = OriginalInterface(
     entry="sr_usercomm",
     args=(
-        OriginalArg(name="buf", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="inout"),
-        OriginalArg(name="rbuf", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="out"),
+        OriginalArg(name="buf", fortran_type="real(c_double)", rank=1, shape=("n",), intent="inout"),
+        OriginalArg(name="rbuf", fortran_type="real(c_double)", rank=1, shape=("n",), intent="out"),
         OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
         OriginalArg(name="dst", fortran_type="integer(c_int)", rank=0, intent="in"),
         OriginalArg(name="src", fortran_type="integer(c_int)", rank=0, intent="in"),
@@ -118,12 +117,9 @@ def test_user_comm_split_send_recv(tmp_path: Path):
         sdfg.compile()
         driver_path = tmp_path / "driver.f90"
         driver_path.write_text(_DRIVER)
-        lib = build_fortran_library(sdfg,
-                                    _IFACE,
-                                    plan,
-                                    str(tmp_path / "lib"),
-                                    name="sr_usercomm",
-                                    extra_sources=[driver_path])
+        lib = build_fortran_library(
+            sdfg, _IFACE, plan, str(tmp_path / "lib"), name="sr_usercomm", extra_sources=[driver_path]
+        )
         return str(lib.so_path)
 
     so_path = build_on_root(world, _build_lib)

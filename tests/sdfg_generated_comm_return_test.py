@@ -11,6 +11,7 @@ SDFG writes is reflected back to the caller (so the "init once, reuse" guard
 holds across calls), for both a 1-element array carrier (the documented
 SDFG-external-return shape) and a bare scalar.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,7 @@ subroutine halo_step(comm, buf, n)
   end do
 end subroutine halo_step
 """
-    sdfg = build_sdfg(src, tmp_path, name='halo_step', entry='halo_step').build()
+    sdfg = build_sdfg(src, tmp_path, name="halo_step", entry="halo_step").build()
 
     n = 4
     comm = np.zeros(1, dtype=np.int32)  # declared outside, "not built yet"
@@ -85,7 +86,7 @@ subroutine halo_step_scalar(comm, buf, n)
   end do
 end subroutine halo_step_scalar
 """
-    sdfg = build_sdfg(src, tmp_path, name='halo_step_scalar', entry='halo_step_scalar').build()
+    sdfg = build_sdfg(src, tmp_path, name="halo_step_scalar", entry="halo_step_scalar").build()
 
     n = 4
     comm = np.int32(0)

@@ -28,12 +28,12 @@ subroutine main(d)
   d(2, 1) = 5.5 + s%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_basic_type2(tmp_path):
@@ -68,12 +68,12 @@ subroutine main(d)
   d(2, 1) = c%s%w(1, 1, 1) + s(1)%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 12)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 12
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_type_symbol(tmp_path):
@@ -105,12 +105,12 @@ subroutine internal_function(d, st)
   d(2, 1) = 2*bob(1)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_type_pardecl(tmp_path):
@@ -158,13 +158,13 @@ subroutine internal_function(d, st)
   d(:, 1) = bob(1) + bob2(1:5)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 11)
-    assert (a[1, 0] == 5.5)
-    assert (a[2, 0] == 5.5)
-    assert (a[1, 1] == 42)
+    assert a[0, 0] == 11
+    assert a[1, 0] == 5.5
+    assert a[2, 0] == 5.5
+    assert a[1, 1] == 42
 
 
 def test_fortran_frontend_type_struct(tmp_path):
@@ -204,12 +204,12 @@ subroutine internal_function(d,st)
   d(2, 1) = bob(1) + bob2(1)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([4, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_circular_type(tmp_path):
@@ -247,12 +247,12 @@ subroutine main(d)
   d(2, 1) = 5.5 + s%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_circular_type_parent_pointer_chase_is_rejected(tmp_path):
@@ -295,7 +295,7 @@ end subroutine kernel
 """
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
     with pytest.raises(RuntimeError, match=r"unresolved free symbol"):
-        build_sdfg(src, tmp_path / "sdfg", name='kernel').build()
+        build_sdfg(src, tmp_path / "sdfg", name="kernel").build()
 
 
 def test_fortran_frontend_type_in_call(tmp_path):
@@ -320,12 +320,12 @@ subroutine main(d)
   d(2, 1) = max(1.0, tmp(1, 1, 1))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_type_array(tmp_path):
@@ -362,7 +362,7 @@ subroutine f2(s)
   s%name%w(8, 10)%a = 42
 end subroutine f2
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -407,7 +407,7 @@ subroutine f2(s, x)
   s%name%wx(8, x(3, 3, 3)) = 43
 end subroutine f2
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -434,12 +434,12 @@ subroutine main(d)
   d(2, 1) = max(1.0, tmp(1, 1, 1))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_type_arg(tmp_path):
@@ -473,7 +473,7 @@ subroutine main(d)
   d(1, 1) = p_prog%pprog(1)%w(1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     # my_arr_d0/my_arr_d1 come from an inlined-callee alias's assumed-shape dims
     # surfacing as SDFG free symbols; any non-zero value works since the test neither
@@ -513,7 +513,7 @@ subroutine main(d)
   call deepest(p_prog%pprog(i)%w, d)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -543,15 +543,15 @@ subroutine main(d)
   call internal_function(d, st%z)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([4, 5], 42, order="F", dtype=np.float32)
     # sta_d0/sta_d1 shouldn't be needed -- st_z is concretely (3,3) and sta is just an
     # inlined alias; they surface only because asAssumedShapeAlias doesn't trace through
     # a flattened-field designate yet.
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_func_type_prefix(tmp_path):
@@ -579,10 +579,10 @@ subroutine main(d)
   d(1, 1) = custom_sum(d) ** 2.0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 1, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 625)
+    assert a[0, 0] == 625
 
 
 def test_fortran_frontend_func_type_body(tmp_path):
@@ -611,10 +611,10 @@ subroutine main(d)
   d(1, 1) = custom_sum(d) ** 2.0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     a = np.full([5, 5], 1, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 625)
+    assert a[0, 0] == 625
 
 
 # Alloc-array-of-records member -- the `LiftAllocArrayOfRecords` pre-pass target.
@@ -660,7 +660,7 @@ subroutine kernel(d, val)
 end subroutine kernel
 """
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel").build()
     ref = f2py_compile(src, tmp_path / "ref", "lift_simple_ref")
 
     val = np.float64(3.5)
@@ -740,7 +740,7 @@ subroutine kernel(out_rho, out_theta, out_w, nvar, wgt, rho_val, theta_val, w_va
 end subroutine kernel
 """
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel").build()
     ref = f2py_compile(src, tmp_path / "ref", "lift_icon_ref")
 
     rng = np.random.default_rng(0)
@@ -751,21 +751,23 @@ end subroutine kernel
     w_val = np.float64(rng.standard_normal())
 
     shape = (2, 3, 2)
-    out_rho_sdfg = np.zeros(shape, dtype=np.float64, order='F')
-    out_theta_sdfg = np.zeros(shape, dtype=np.float64, order='F')
-    out_w_sdfg = np.zeros(shape, dtype=np.float64, order='F')
-    out_rho_ref = np.zeros(shape, dtype=np.float64, order='F')
-    out_theta_ref = np.zeros(shape, dtype=np.float64, order='F')
-    out_w_ref = np.zeros(shape, dtype=np.float64, order='F')
+    out_rho_sdfg = np.zeros(shape, dtype=np.float64, order="F")
+    out_theta_sdfg = np.zeros(shape, dtype=np.float64, order="F")
+    out_w_sdfg = np.zeros(shape, dtype=np.float64, order="F")
+    out_rho_ref = np.zeros(shape, dtype=np.float64, order="F")
+    out_theta_ref = np.zeros(shape, dtype=np.float64, order="F")
+    out_w_ref = np.zeros(shape, dtype=np.float64, order="F")
 
-    sdfg(out_rho=out_rho_sdfg,
-         out_theta=out_theta_sdfg,
-         out_w=out_w_sdfg,
-         nvar=nvar,
-         wgt=wgt,
-         rho_val=rho_val,
-         theta_val=theta_val,
-         w_val=w_val)
+    sdfg(
+        out_rho=out_rho_sdfg,
+        out_theta=out_theta_sdfg,
+        out_w=out_w_sdfg,
+        nvar=nvar,
+        wgt=wgt,
+        rho_val=rho_val,
+        theta_val=theta_val,
+        w_val=w_val,
+    )
     ref.kernel(out_rho_ref, out_theta_ref, out_w_ref, nvar, wgt, rho_val, theta_val, w_val)
 
     np.testing.assert_allclose(out_rho_sdfg, out_rho_ref, rtol=1e-12, atol=1e-12)
@@ -821,7 +823,7 @@ subroutine kernel(out_v1, out_v2, i_idx, blk_idx, k_idx)
 end subroutine kernel
 """
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel").build()
     ref = f2py_compile(src, tmp_path / "ref", "aos_inner_scalar_ref")
 
     i_idx = np.int32(2)

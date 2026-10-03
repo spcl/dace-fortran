@@ -9,6 +9,7 @@ site. ``run_kernel_e2e`` drives the DUT (auto-generated ``bind(c)`` binding) and
 (stock Fortran kernel via the same shim) on one seeded input and compares every output
 buffer element-for-element. Build detail shared verbatim with
 :mod:`test_velocity_numerical_e2e`; only the ``integration`` marker differs."""
+
 import shutil
 from pathlib import Path
 
@@ -36,15 +37,8 @@ def test_velocity_percall_orig_vs_binding_bitexact():
         _TU,
         _ENTRY,
         int_fill=1,
-        module_seeds={
-            "nproma": 8,
-            "nflatlev": 1,
-            "nrdmax": 1
-        },
-        array_overrides={
-            "p_patch_nlev": 7,
-            "p_patch_nlevp1": 8
-        },
+        module_seeds={"nproma": 8, "nflatlev": 1, "nrdmax": 1},
+        array_overrides={"p_patch_nlev": 7, "p_patch_nlevp1": 8},
     )
     assert res["passed"], f"velocity orig-vs-binding build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, "no output buffer changed -- the call did no work (integration check is vacuous)"

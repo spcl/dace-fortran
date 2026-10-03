@@ -75,8 +75,9 @@ subroutine apply_square_shift(x, y, n)
 end subroutine apply_square_shift
 end module apply_square_shift_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_square_shift",
-                      entry="apply_square_shift_mod::apply_square_shift").build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="apply_square_shift", entry="apply_square_shift_mod::apply_square_shift"
+    ).build()
 
     rng = np.random.default_rng(1)
     n = 32
@@ -110,8 +111,7 @@ end module driver_mod
     sdfg = b.build()
 
     # inlined callee's scalar v must NOT show up as its own array
-    assert "v" not in b.arrays, \
-        f"elemental inner dummy 'v' leaked into arrays: {list(b.arrays.keys())}"
+    assert "v" not in b.arrays, f"elemental inner dummy 'v' leaked into arrays: {list(b.arrays.keys())}"
     assert "x" in sdfg.arrays, list(sdfg.arrays.keys())
 
 
@@ -200,8 +200,9 @@ contains
 end subroutine apply_softmax_step
 end module apply_softmax_step_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_softmax_step",
-                      entry="apply_softmax_step_mod::apply_softmax_step").build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="apply_softmax_step", entry="apply_softmax_step_mod::apply_softmax_step"
+    ).build()
 
     rng = np.random.default_rng(4)
     n = 16

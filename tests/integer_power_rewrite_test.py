@@ -32,7 +32,7 @@ def test_simple_identifier_cube():
 
 
 def test_parenthesised_base_keeps_its_parens():
-    assert (rewrite_integer_powers("z = (a - b)**2.0") == "z = ((a - b)*(a - b))")
+    assert rewrite_integer_powers("z = (a - b)**2.0") == "z = ((a - b)*(a - b))"
 
 
 def test_pure_designator_chain_base():
@@ -48,7 +48,7 @@ def test_double_exponent_form():
 
 
 def test_multiple_on_one_line():
-    assert (rewrite_integer_powers("r = a**2.0 + b**3.0") == "r = (a*a) + (b*b*b)")
+    assert rewrite_integer_powers("r = a**2.0 + b**3.0") == "r = (a*a) + (b*b*b)"
 
 
 # --- things the pass must NOT touch ---------------------------------
@@ -70,7 +70,8 @@ def test_multiple_on_one_line():
         "z = foealfa(ptare)**3.0",
         "z = a%b(i)%c**2.0",
         "d = custom_sum(d)**2.0",
-    ])
+    ],
+)
 def test_left_untouched(expr: str):
     assert rewrite_integer_powers(expr) == expr
 
@@ -89,17 +90,20 @@ def test_idempotent():
 # --- precedence preserved (numeric proof via Python eval) -----------
 
 
-@pytest.mark.parametrize("expr", [
-    "2*x**2.0",
-    "a/b**2.0",
-    "-x**2.0",
-    "c + x**3.0 + d",
-    "a*b**2.0 + c",
-    "(p - q)**2.0 / r",
-    "x**2.0 * y**3.0",
-    "1.0/(t - k)**2.0",
-    "-(a - b)**3.0",
-])
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "2*x**2.0",
+        "a/b**2.0",
+        "-x**2.0",
+        "c + x**3.0 + d",
+        "a*b**2.0 + c",
+        "(p - q)**2.0 / r",
+        "x**2.0 * y**3.0",
+        "1.0/(t - k)**2.0",
+        "-(a - b)**3.0",
+    ],
+)
 def test_eval_equivalent(expr: str):
     """Original ``**`` and rewritten ``*`` forms must be numerically close under arbitrary
     bindings -- catches a missing parenthesis flipping operator precedence.
@@ -112,8 +116,9 @@ def test_eval_equivalent(expr: str):
     rng = np.random.default_rng(0)
     env = {n: float(rng.uniform(1.5, 4.0)) for n in "abcdklpqrtxy"}
     rewritten = rewrite_integer_powers(expr)
-    assert math.isclose(eval(rewritten, {}, env), eval(expr, {}, env),
-                        rel_tol=1e-9), (f"{expr!r} -> {rewritten!r} changed the value")
+    assert math.isclose(eval(rewritten, {}, env), eval(expr, {}, env), rel_tol=1e-9), (
+        f"{expr!r} -> {rewritten!r} changed the value"
+    )
 
 
 # --- e2e: bridge vs gfortran on a base that needs wrapping ----------

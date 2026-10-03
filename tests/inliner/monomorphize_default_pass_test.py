@@ -5,6 +5,7 @@ Tests drive the real inline_to_ast pipeline (not the engine in isolation) to pin
 + ordering vs the call-resolution passes. SDFG-level proof (no ExternalCall) is in
 tests/sync_devirt_mpi_libnode_test.py.
 """
+
 import re
 import shutil
 import subprocess
@@ -162,8 +163,9 @@ def test_retype_consolidates_arm_module_no_cycle(tmp_path: Path):
     # and it compiles -- no "used before defined" / circular USE
     src = tmp_path / "consolidated.f90"
     src.write_text(out)
-    subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "consolidated.f90"],
-                          cwd=str(tmp_path))
+    subprocess.check_call(
+        ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "consolidated.f90"], cwd=str(tmp_path)
+    )
 
 
 #: Same cycle, but base is TYPES-ONLY (no CONTAINS) and the wrapper is in a THIRD
@@ -236,8 +238,9 @@ def test_retype_consolidates_into_types_only_base_with_third_module_wrapper(tmp_
     assert not walk(ast, f03.Procedure_Designator)
     src = tmp_path / "consolidated3.f90"
     src.write_text(out)
-    subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "consolidated3.f90"],
-                          cwd=str(tmp_path))
+    subprocess.check_call(
+        ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "consolidated3.f90"], cwd=str(tmp_path)
+    )
 
 
 #: Arm type is referenced by a type COMPONENT in yet another module (ICON's
@@ -1685,5 +1688,6 @@ def test_dummy_dispatch_helper_devirtualized(tmp_path: Path):
     assert "trans__t_triv" in low and "trans__t_sub" in low
     src = tmp_path / "dummy_dispatch.f90"
     src.write_text(ast.tofortran())
-    subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "dummy_dispatch.f90"],
-                          cwd=str(tmp_path))
+    subprocess.check_call(
+        ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "dummy_dispatch.f90"], cwd=str(tmp_path)
+    )

@@ -40,7 +40,6 @@ SDFG array because every use of it rebases to
 ``p_patch_edges_cell_idx``.  See ``RewritePointerAssigns.cpp``
 ``traceRebindChain`` (line ~290) for the walk to extend.
 """
-import pytest
 
 import dace_fortran
 
@@ -94,4 +93,5 @@ def test_pointer_rebind_chain_through_pointer_member_builds(tmp_path):
     assert "icidx" in arrays or "patch_edges_cell_idx" in arrays, (
         "neither the unfolded ``icidx`` array nor the post-rewrite "
         "rebased ``patch_edges_cell_idx`` is in the SDFG -- "
-        f"got arrays {sorted(arrays)!r}")
+        f"got arrays {sorted(arrays)!r}"
+    )

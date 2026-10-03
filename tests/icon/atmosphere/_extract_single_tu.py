@@ -5,6 +5,7 @@ Runs as a memory-capped subprocess (fparser on the ~140k-line merged closure can
 
 Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb] [halo_mode] [loop_exchange] [keep_acc]
 """
+
 import os
 import re
 import resource
@@ -64,32 +65,36 @@ def main(argv):
                 use_lines.append(f"  USE {m.group(1)}")
             log(f"  force-included {rel} (module {m.group(1) if m else '?'}, {len(content.splitlines())} lines)")
         if use_lines:
-            merged, nsub = re.subn(rf"(?im)^(\s*MODULE\s+{re.escape(entry_mod)}\s*$)",
-                                   lambda mm: mm.group(1) + "\n" + "\n".join(use_lines),
-                                   merged,
-                                   count=1)
+            merged, nsub = re.subn(
+                rf"(?im)^(\s*MODULE\s+{re.escape(entry_mod)}\s*$)",
+                lambda mm: mm.group(1) + "\n" + "\n".join(use_lines),
+                merged,
+                count=1,
+            )
             sources[str(mp)] = merged
             log(f"  injected {len(use_lines)} force-include USE(s) into module {entry_mod} (matched {nsub})")
 
         log("inline_to_single_tu(expand_cpp, tolerate_external_uses, monomorphize)")
-        tu = inline_to_single_tu(sources,
-                                 entry=entry,
-                                 out_dir=out_dir,
-                                 name="kernel_tu",
-                                 expand_cpp=True,
-                                 defines=cfg["defines"],
-                                 include_dirs=[SRC / "include"],
-                                 external_functions=cfg["external_functions"],
-                                 do_not_emit=cfg["do_not_emit"],
-                                 make_return_false=cfg["make_return_false"],
-                                 rename_specifics=cfg["rename_specifics"],
-                                 specialize_at_source=cfg["specialize_at_source"],
-                                 keep_type_components=cfg.get("keep_type_components"),
-                                 checkpoint_dir=(os.environ.get("ATMO_CHECKPOINT_DIR") or None),
-                                 tolerate_external_uses=True,
-                                 keep_acc_directives=keep_acc)
+        tu = inline_to_single_tu(
+            sources,
+            entry=entry,
+            out_dir=out_dir,
+            name="kernel_tu",
+            expand_cpp=True,
+            defines=cfg["defines"],
+            include_dirs=[SRC / "include"],
+            external_functions=cfg["external_functions"],
+            do_not_emit=cfg["do_not_emit"],
+            make_return_false=cfg["make_return_false"],
+            rename_specifics=cfg["rename_specifics"],
+            specialize_at_source=cfg["specialize_at_source"],
+            keep_type_components=cfg.get("keep_type_components"),
+            checkpoint_dir=(os.environ.get("ATMO_CHECKPOINT_DIR") or None),
+            tolerate_external_uses=True,
+            keep_acc_directives=keep_acc,
+        )
         n = len(Path(tu).read_text().splitlines())
-        log(f"  single TU: {n} lines in {time.time()-t0:.0f}s")
+        log(f"  single TU: {n} lines in {time.time() - t0:.0f}s")
         print(f"TU_PATH: {tu}", flush=True)
         print(f"TU_LINES: {n}", flush=True)
 
@@ -103,20 +108,21 @@ def main(argv):
             ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
             cwd=str(cdir),
             capture_output=True,
-            text=True)
+            text=True,
+        )
         if r.returncode != 0:
             print(r.stderr[-6000:], flush=True)
-            print(f"RESULT: FAIL compile after {time.time()-t0:.0f}s", flush=True)
+            print(f"RESULT: FAIL compile after {time.time() - t0:.0f}s", flush=True)
             return 1
-        log(f"  COMPILES in {time.time()-t0:.0f}s total")
+        log(f"  COMPILES in {time.time() - t0:.0f}s total")
         print("RESULT: PASS", flush=True)
         return 0
     except MemoryError:
-        print(f"RESULT: FAIL MemoryError (hit {mem_gb}GB cap) after {time.time()-t0:.0f}s", flush=True)
+        print(f"RESULT: FAIL MemoryError (hit {mem_gb}GB cap) after {time.time() - t0:.0f}s", flush=True)
         return 2
     except Exception:
         traceback.print_exc()
-        print(f"RESULT: FAIL after {time.time()-t0:.0f}s", flush=True)
+        print(f"RESULT: FAIL after {time.time() - t0:.0f}s", flush=True)
         return 1
 
 

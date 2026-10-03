@@ -5,13 +5,16 @@ fails loudly instead of silently mis-placing a directive.
 
 Usage: annotate_velocity_acc.py [<inlined_tu.f90> <annotated.f90>]
 """
+
 import sys
 from pathlib import Path
 
-SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-    Path(__file__).resolve().parent / "velocity_advection_inlined_single_tu.f90"
-DST = Path(sys.argv[2]) if len(sys.argv) > 2 else \
-    Path(__file__).resolve().parent / "velocity_advection_acc.f90"
+SRC = (
+    Path(sys.argv[1])
+    if len(sys.argv) > 1
+    else Path(__file__).resolve().parent / "velocity_advection_inlined_single_tu.f90"
+)
+DST = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parent / "velocity_advection_acc.f90"
 
 VARIANT = "noloopexch" if "no_loop_exchange" in SRC.name else "loopexch"
 
@@ -45,106 +48,203 @@ ACCE = "      !$ACC END PARALLEL"
 # (line, where, expected_prefix, [directive lines]) -- where is "before" or "after".
 INS = [
     # --- rot_vertex_ri_lib -----------------------------------------------------
-    (125, "before", "    DO jb = i_startblk, i_endblk", [
-        "!$OMP PARALLEL",
-        "!$OMP DO PRIVATE(jb, jv, jk, i_startidx, i_endidx) SCHEDULE(guided)",
-    ]),
-    (127, "before", "      DO jv = i_startidx, i_endidx", [
-        "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "      !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        125,
+        "before",
+        "    DO jb = i_startblk, i_endblk",
+        [
+            "!$OMP PARALLEL",
+            "!$OMP DO PRIVATE(jb, jv, jk, i_startidx, i_endidx) SCHEDULE(guided)",
+        ],
+    ),
+    (
+        127,
+        "before",
+        "      DO jv = i_startidx, i_endidx",
+        [
+            "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "      !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (131, "after", "      END DO", ["      !$ACC END PARALLEL"]),
     (132, "after", "    END DO", ["!$OMP END DO NOWAIT", "!$OMP END PARALLEL"]),
     # --- cells2verts_scalar_ri_lib --------------------------------------------
-    (159, "before", "    DO jb = i_startblk, i_endblk", [
-        "!$OMP PARALLEL",
-        "!$OMP DO PRIVATE(jb, jv, jk, i_startidx, i_endidx) SCHEDULE(guided)",
-    ]),
-    (161, "before", "      DO jv = i_startidx, i_endidx", [
-        "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "      !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        159,
+        "before",
+        "    DO jb = i_startblk, i_endblk",
+        [
+            "!$OMP PARALLEL",
+            "!$OMP DO PRIVATE(jb, jv, jk, i_startidx, i_endidx) SCHEDULE(guided)",
+        ],
+    ),
+    (
+        161,
+        "before",
+        "      DO jv = i_startidx, i_endidx",
+        [
+            "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "      !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (165, "after", "      END DO", ["      !$ACC END PARALLEL"]),
     (166, "after", "    END DO", ["!$OMP END DO NOWAIT", "!$OMP END PARALLEL"]),
     # --- velocity_tendencies: data region -------------------------------------
-    (469, "before", "    IF (lextra_diffu) THEN", [
-        "    !$ACC DATA CREATE(z_w_concorr_mc, z_w_con_c, cfl_clipping, z_w_con_c_full, z_v_grad_w) &",
-        "    !$ACC   CREATE(z_w_v, zeta, z_ekinh, levmask, levelmask) &",
-        "    !$ACC   PRESENT(z_w_concorr_me, z_kin_hor_e, z_vt_ie) &",
-        "    !$ACC   PRESENT(p_diag, p_prog, p_int, p_metrics, p_patch)",
-    ]),
-    (478, "before", "    IF (istep == 1) THEN", [
-        "!$OMP PARALLEL PRIVATE(rl_start, rl_end, i_startblk, i_endblk, rl_start_2, rl_end_2, i_startblk_2, "
-        "i_endblk_2)",
-    ]),
+    (
+        469,
+        "before",
+        "    IF (lextra_diffu) THEN",
+        [
+            "    !$ACC DATA CREATE(z_w_concorr_mc, z_w_con_c, cfl_clipping, z_w_con_c_full, z_v_grad_w) &",
+            "    !$ACC   CREATE(z_w_v, zeta, z_ekinh, levmask, levelmask) &",
+            "    !$ACC   PRESENT(z_w_concorr_me, z_kin_hor_e, z_vt_ie) &",
+            "    !$ACC   PRESENT(p_diag, p_prog, p_int, p_metrics, p_patch)",
+        ],
+    ),
+    (
+        478,
+        "before",
+        "    IF (istep == 1) THEN",
+        [
+            "!$OMP PARALLEL PRIVATE(rl_start, rl_end, i_startblk, i_endblk, rl_start_2, rl_end_2, i_startblk_2, "
+            "i_endblk_2)",
+        ],
+    ),
     # istep==1 edge block
-    (483, "before", "      DO jb = i_startblk, i_endblk",
-     ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"]),
-    (485, "before", "        DO je = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(128, 1)",
-    ]),
+    (
+        483,
+        "before",
+        "      DO jb = i_startblk, i_endblk",
+        ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"],
+    ),
+    (
+        485,
+        "before",
+        "        DO je = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(128, 1)",
+        ],
+    ),
     (489, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (490, "before", "        DO jk = 2, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        490,
+        "before",
+        "        DO jk = 2, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (495, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (497, "before", "          DO jk = 2, nlev", [
-        "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "          !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        497,
+        "before",
+        "          DO jk = 2, nlev",
+        [
+            "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "          !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (501, "after", "          END DO", ["          !$ACC END PARALLEL"]),
-    (503, "before", "        DO jk = nflatlev_jg, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        503,
+        "before",
+        "        DO jk = nflatlev_jg, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (507, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (509, "before", "          DO je = i_startidx, i_endidx", [
-        "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "          !$ACC LOOP GANG VECTOR",
-    ]),
+    (
+        509,
+        "before",
+        "          DO je = i_startidx, i_endidx",
+        [
+            "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "          !$ACC LOOP GANG VECTOR",
+        ],
+    ),
     (514, "after", "          END DO", ["          !$ACC END PARALLEL"]),
-    (516, "before", "          DO je = i_startidx, i_endidx", [
-        "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "          !$ACC LOOP GANG VECTOR",
-    ]),
+    (
+        516,
+        "before",
+        "          DO je = i_startidx, i_endidx",
+        [
+            "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "          !$ACC LOOP GANG VECTOR",
+        ],
+    ),
     (521, "after", "          END DO", ["          !$ACC END PARALLEL"]),
     (523, "after", "      END DO", ["!$OMP END DO"]),
     # z_v_grad_w block
-    (530, "before", "      DO jb = i_startblk, i_endblk",
-     ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"]),
-    (532, "before", "        DO je = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        530,
+        "before",
+        "      DO jb = i_startblk, i_endblk",
+        ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"],
+    ),
+    (
+        532,
+        "before",
+        "        DO je = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (536, "after", "        END DO", ["        !$ACC END PARALLEL"]),
     (537, "after", "      END DO", ["!$OMP END DO"]),
     # deep-atmosphere z_v_grad_w correction
-    (540, "before", "      DO jb = i_startblk, i_endblk",
-     ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"]),
-    (542, "before", "        DO je = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        540,
+        "before",
+        "      DO jb = i_startblk, i_endblk",
+        ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx) SCHEDULE(guided)"],
+    ),
+    (
+        542,
+        "before",
+        "        DO je = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (546, "after", "        END DO", ["        !$ACC END PARALLEL"]),
     (547, "after", "      END DO", ["!$OMP END DO"]),
     # cell block
-    (557, "before", "    DO jb = i_startblk, i_endblk", [
-        "!$OMP DO PRIVATE(jb, jk, jc, i_startidx, i_endidx, i_startidx_2, i_endidx_2, z_w_con_c, &",
-        "!$OMP            z_w_concorr_mc, difcoef, vcfl, maxvcfl, cfl_clipping, clip_count) SCHEDULE(guided)",
-    ]),
+    (
+        557,
+        "before",
+        "    DO jb = i_startblk, i_endblk",
+        [
+            "!$OMP DO PRIVATE(jb, jk, jc, i_startidx, i_endidx, i_startidx_2, i_endidx_2, z_w_con_c, &",
+            "!$OMP            z_w_concorr_mc, difcoef, vcfl, maxvcfl, cfl_clipping, clip_count) SCHEDULE(guided)",
+        ],
+    ),
     (559, "before", "      DO jc = i_startidx, i_endidx", [ACCP, "      !$ACC LOOP GANG VECTOR TILE(32, 4)"]),
     (563, "after", "      END DO", [ACCE]),
-    (565, "before", "        DO jc = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        565,
+        "before",
+        "        DO jc = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (569, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (570, "before", "        DO jk = nflatlev_jg + 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
-    ]),
+    (
+        570,
+        "before",
+        "        DO jk = nflatlev_jg + 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR COLLAPSE(2)",
+        ],
+    ),
     (574, "after", "        END DO", ["        !$ACC END PARALLEL"]),
     (576, "before", "      DO jk = 1, nlev", [ACCP, "      !$ACC LOOP GANG VECTOR COLLAPSE(2)"]),
     (580, "after", "      END DO", [ACCE]),
@@ -155,13 +255,22 @@ INS = [
     (589, "before", "      DO jk = MAX(3, nrdmax_jg - 2), nlev - 3", [ACCP, "      !$ACC LOOP GANG VECTOR"]),
     (591, "after", "      END DO", [ACCE]),
     # CFL clipping: gang over jk, two vector loops, CYCLE keeps the CPU short-circuit
-    (593, "before", "      DO jk = MAX(3, nrdmax_jg - 2), nlev - 3", [
-        "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) COPY(maxvcfl)",
-        "      !$ACC LOOP GANG PRIVATE(clip_count) REDUCTION(MAX: maxvcfl)",
-    ]),
+    (
+        593,
+        "before",
+        "      DO jk = MAX(3, nrdmax_jg - 2), nlev - 3",
+        [
+            "      !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1) COPY(maxvcfl)",
+            "      !$ACC LOOP GANG PRIVATE(clip_count) REDUCTION(MAX: maxvcfl)",
+        ],
+    ),
     (595, "before", "        DO jc = i_startidx, i_endidx", ["        !$ACC LOOP VECTOR REDUCTION(+: clip_count)"]),
-    (600, "before", "        DO jc = i_startidx, i_endidx",
-     ["        !$ACC LOOP VECTOR PRIVATE(vcfl) REDUCTION(MAX: maxvcfl)"]),
+    (
+        600,
+        "before",
+        "        DO jc = i_startidx, i_endidx",
+        ["        !$ACC LOOP VECTOR PRIVATE(vcfl) REDUCTION(MAX: maxvcfl)"],
+    ),
     (612, "after", "      END DO", [ACCE]),
     (613, "before", "      DO jk = 1, nlev", [ACCP, "      !$ACC LOOP GANG VECTOR COLLAPSE(2)"]),
     (617, "after", "      END DO", [ACCE]),
@@ -170,49 +279,96 @@ INS = [
     (622, "before", "      DO jk = 2, nlev", [ACCP, "      !$ACC LOOP GANG(STATIC: 1) VECTOR TILE(32, 4)"]),
     (627, "before", "      DO jc = i_startidx_2, i_endidx_2", ["      !$ACC LOOP GANG(STATIC: 1) VECTOR TILE(32, 4)"]),
     (631, "after", "      END DO", [ACCE]),
-    (633, "before", "        DO jk = MAX(3, nrdmax_jg - 2), nlev - 3", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP SEQ",
-    ]),
-    (635, "before", "            DO jc = i_startidx_2, i_endidx_2",
-     ["            !$ACC LOOP GANG VECTOR PRIVATE(difcoef)"]),
+    (
+        633,
+        "before",
+        "        DO jk = MAX(3, nrdmax_jg - 2), nlev - 3",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP SEQ",
+        ],
+    ),
+    (
+        635,
+        "before",
+        "            DO jc = i_startidx_2, i_endidx_2",
+        ["            !$ACC LOOP GANG VECTOR PRIVATE(difcoef)"],
+    ),
     (642, "after", "        END DO", ["        !$ACC END PARALLEL"]),
     (644, "after", "    END DO", ["!$OMP END DO"]),
-    (645, "before", "    DO jk = MAX(3, nrdmax_jg - 2), nlev - 3", [
-        "    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "    !$ACC LOOP GANG VECTOR",
-        "!$OMP DO PRIVATE(jk)",
-    ]),
+    (
+        645,
+        "before",
+        "    DO jk = MAX(3, nrdmax_jg - 2), nlev - 3",
+        [
+            "    !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "    !$ACC LOOP GANG VECTOR",
+            "!$OMP DO PRIVATE(jk)",
+        ],
+    ),
     (647, "after", "    END DO", ["!$OMP END DO", "    !$ACC END PARALLEL"]),
     # horizontal wind advection
-    (652, "before", "    DO jb = i_startblk, i_endblk",
-     ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx, ie, w_con_e, difcoef) SCHEDULE(guided)"]),
-    (655, "before", "        DO je = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        652,
+        "before",
+        "    DO jb = i_startblk, i_endblk",
+        ["!$OMP DO PRIVATE(jb, jk, je, i_startidx, i_endidx, ie, w_con_e, difcoef) SCHEDULE(guided)"],
+    ),
+    (
+        655,
+        "before",
+        "        DO je = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (659, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (661, "before", "          DO jk = 1, nlev", [
-        "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "          !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        661,
+        "before",
+        "          DO jk = 1, nlev",
+        [
+            "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "          !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (665, "after", "          END DO", ["          !$ACC END PARALLEL"]),
-    (668, "before", "        DO je = i_startidx, i_endidx", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        668,
+        "before",
+        "        DO je = i_startidx, i_endidx",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (672, "after", "        END DO", ["        !$ACC END PARALLEL"]),
-    (674, "before", "          DO jk = 1, nlev", [
-        "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "          !$ACC LOOP GANG VECTOR TILE(32, 4)",
-    ]),
+    (
+        674,
+        "before",
+        "          DO jk = 1, nlev",
+        [
+            "          !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "          !$ACC LOOP GANG VECTOR TILE(32, 4)",
+        ],
+    ),
     (678, "after", "          END DO", ["          !$ACC END PARALLEL"]),
-    (683, "before", "        DO jk = MAX(3, nrdmax_jg - 2), nlev - 4", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP SEQ",
-    ]),
-    (685, "before", "            DO je = i_startidx, i_endidx",
-     ["            !$ACC LOOP GANG VECTOR PRIVATE(difcoef, w_con_e)"]),
+    (
+        683,
+        "before",
+        "        DO jk = MAX(3, nrdmax_jg - 2), nlev - 4",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP SEQ",
+        ],
+    ),
+    (
+        685,
+        "before",
+        "            DO je = i_startidx, i_endidx",
+        ["            !$ACC LOOP GANG VECTOR PRIVATE(difcoef, w_con_e)"],
+    ),
     (693, "after", "        END DO", ["        !$ACC END PARALLEL"]),
     (695, "after", "    END DO", ["!$OMP END DO", "!$OMP END PARALLEL", "    !$ACC WAIT"]),
     (699, "after", "    p_diag % max_vcfl_dyn = max_vcfl_dyn", ["    !$ACC END DATA"]),
@@ -227,32 +383,50 @@ INS = [
 NOLOOPEXCH = {
     127: ("      DO jk = slev, elev", None),
     161: ("      DO jk = slev, elev", None),
-    485: ("        DO jk = 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(1, 128)",
-    ]),
-    532: ("        DO jk = 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
-    ]),
-    542: ("        DO jk = 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
-    ]),
+    485: (
+        "        DO jk = 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(1, 128)",
+        ],
+    ),
+    532: (
+        "        DO jk = 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
+        ],
+    ),
+    542: (
+        "        DO jk = 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
+        ],
+    ),
     559: ("      DO jk = 1, nlev", [ACCP, "      !$ACC LOOP GANG VECTOR TILE(4, 32)"]),
-    565: ("        DO jk = nflatlev_jg, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
-    ]),
+    565: (
+        "        DO jk = nflatlev_jg, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
+        ],
+    ),
     627: ("      DO jk = 2, nlev", ["      !$ACC LOOP GANG(STATIC: 1) VECTOR TILE(4, 32)"]),
-    655: ("        DO jk = 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
-    ]),
-    668: ("        DO jk = 1, nlev", [
-        "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
-        "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
-    ]),
+    655: (
+        "        DO jk = 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
+        ],
+    ),
+    668: (
+        "        DO jk = 1, nlev",
+        [
+            "        !$ACC PARALLEL DEFAULT(PRESENT) ASYNC(1)",
+            "        !$ACC LOOP GANG VECTOR TILE(4, 32)",
+        ],
+    ),
 }
 
 if VARIANT == "noloopexch":

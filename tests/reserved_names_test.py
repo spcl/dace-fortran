@@ -76,6 +76,7 @@ subroutine main(d)
 end subroutine main
 """
     from _util import build_sdfg as _bs
+
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = _bs(src, sdfg_dir, name="main")
@@ -99,6 +100,7 @@ subroutine main(d, test)
 end subroutine main
 """
     from _util import build_sdfg as _bs
+
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = _bs(src, sdfg_dir, name="main")
@@ -131,20 +133,18 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
         entry="main",
         mangled="_QPmain",
         args=(
-            FrozenArg(fortran_name="d",
-                      sdfg_name="d",
-                      kind="array",
-                      dtype="float64",
-                      rank=1,
-                      shape=("2", ),
-                      intent="inout"),
-            FrozenArg(fortran_name="test",
-                      sdfg_name="program_test",
-                      kind="array",
-                      dtype="int32",
-                      rank=1,
-                      shape=("2", ),
-                      intent="in"),
+            FrozenArg(
+                fortran_name="d", sdfg_name="d", kind="array", dtype="float64", rank=1, shape=("2",), intent="inout"
+            ),
+            FrozenArg(
+                fortran_name="test",
+                sdfg_name="program_test",
+                kind="array",
+                dtype="int32",
+                rank=1,
+                shape=("2",),
+                intent="in",
+            ),
         ),
         free_symbols=(),
     )

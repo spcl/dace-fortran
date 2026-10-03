@@ -20,6 +20,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 def _tasklet_codes(sdfg) -> list[str]:
     from dace.sdfg.state import SDFGState, ControlFlowRegion
     from dace.sdfg import nodes as nd
+
     out = []
 
     def walk(region):

@@ -13,6 +13,7 @@ state BIT-FOR-BIT). Pins three properties against gfortran with a small driver:
 
 Real t_hydro_ocean_state types are replaced with minimal same-name modules carrying only the touched
 fields, so the test needs just gfortran (no flang/SDFG/ICON build)."""
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -265,16 +266,25 @@ def test_ocean_diff_deepcopy_and_compare(tmp_path: Path):
     shutil.copy(_DIFF_F90, tmp_path / "mo_ocean_diff.f90")
 
     exe = tmp_path / "test_ocean_diff"
-    compile = subprocess.run([
-        "gfortran", "-ffree-line-length-none", "-fcheck=all", "-g", "min_types.f90", "mo_ocean_diff.f90", "driver.f90",
-        "-o",
-        str(exe)
-    ],
-                             cwd=str(tmp_path),
-                             capture_output=True,
-                             text=True)
+    compile = subprocess.run(
+        [
+            "gfortran",
+            "-ffree-line-length-none",
+            "-fcheck=all",
+            "-g",
+            "min_types.f90",
+            "mo_ocean_diff.f90",
+            "driver.f90",
+            "-o",
+            str(exe),
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
     assert compile.returncode == 0, f"mo_ocean_diff.f90 did not compile:\n{compile.stderr}"
 
     run = subprocess.run([str(exe)], cwd=str(tmp_path), capture_output=True, text=True)
-    assert run.returncode == 0 and "PASS" in run.stdout, \
+    assert run.returncode == 0 and "PASS" in run.stdout, (
         f"differential helper driver failed:\nstdout={run.stdout}\nstderr={run.stderr}"
+    )

@@ -28,6 +28,7 @@ ICON-vs-DaCe comparison stays bit-exact.  Switch to ``-O3
 -fno-fast-math -ffp-contract=off`` with ``--release`` for production
 timings (numerical envelope drops to 1 ULP).
 """
+
 import argparse
 import os
 import shutil
@@ -47,7 +48,6 @@ from icon.full.test_dycore_velocity_external_e2e import (
     _velocity_iface,
     _CALLER_PATH,
     _SYNC_FORTRAN_SRC,
-    _SYNC_CPP_SRC,
     _DYCORE_WRAPPER_SRC,
     _make_sdfg_shim_for_outer,
     _build_sync_helpers,
@@ -94,7 +94,10 @@ _FP_CONTRACT = os.environ.get("DACE_FORTRAN_FP_CONTRACT", "off")
 if _FP_CONTRACT not in ("off", "fast"):
     raise SystemExit(f"DACE_FORTRAN_FP_CONTRACT must be off|fast, got {_FP_CONTRACT!r}")
 if _FP_CONTRACT == "fast":
-    _swap = lambda flags: tuple(f.replace("-ffp-contract=off", "-ffp-contract=fast") for f in flags)
+
+    def _swap(flags):
+        return tuple(f.replace("-ffp-contract=off", "-ffp-contract=fast") for f in flags)
+
     _RELEASE_FFLAGS = _swap(_RELEASE_FFLAGS)
     _RELEASE_CXX_FLAGS = _swap(_RELEASE_CXX_FLAGS)
     _O0_FFLAGS = _swap(_O0_FFLAGS)
@@ -247,7 +250,8 @@ def acc_transfer_plan(sdfg, residency_path) -> AccTransferPlan:
         f"[build_icon_dace_libs] acc residency {residency_path}: "
         f"update host {list(plan.update_host)}, update device {list(plan.update_device)}, "
         f"use_device {list(plan.use_device)}",
-        flush=True)
+        flush=True,
+    )
     return plan
 
 
@@ -320,7 +324,8 @@ def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_
     print(
         f"[build_icon_dace_libs] ICON defines from {icon_build}: {len(args['defines'])} -D, "
         f"{len(args['include_dirs'])} -I",
-        flush=True)
+        flush=True,
+    )
     velocity_real = icon_src / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
     # Prefer a pristine ``.bak`` when an ICON workflow has patched the live file
     # (run_icon_e2e.sh's DaCe dispatch patch keeps the original there).
@@ -329,8 +334,9 @@ def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_
     print(f"[build_icon_dace_libs] real ICON velocity source: {entry_src}", flush=True)
 
     if os.environ.get("DACE_FORTRAN_ACC_RESIDENCY"):
-        sidecar = dace_fortran.write_acc_residency_sidecar(entry_src,
-                                                           _VELOCITY_ENTRY_QUALIFIED.split("::")[-1], sdfg_dir)
+        sidecar = dace_fortran.write_acc_residency_sidecar(
+            entry_src, _VELOCITY_ENTRY_QUALIFIED.split("::")[-1], sdfg_dir
+        )
         print(f"[build_icon_dace_libs] ACC residency sidecar: {sidecar}", flush=True)
 
     hlfir = dace_fortran.emit_hlfir_from_codebase(
@@ -350,12 +356,14 @@ def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_
         dace_fortran.clear_external_registry()
 
 
-def build_velocity_inner_wrap(velocity_source: Path,
-                              out_dir: Path,
-                              release: bool,
-                              icon_src: Path = None,
-                              icon_build: Path = None,
-                              acc_residency: Path = None):
+def build_velocity_inner_wrap(
+    velocity_source: Path,
+    out_dir: Path,
+    release: bool,
+    icon_src: Path = None,
+    icon_build: Path = None,
+    acc_residency: Path = None,
+):
     """Build ``libvelocity_inner_wrap.so`` from
     ``mo_velocity_advection.f90``.  The output dir gets the .so + the
     .mod (``velocity_tendencies_dace_bindings.mod``) ICON needs at
@@ -383,8 +391,7 @@ def build_velocity_inner_wrap(velocity_source: Path,
 
     print(f"[build_icon_dace_libs] velocity source: {velocity_source}", flush=True)
     print(f"[build_icon_dace_libs] output dir:      {out_dir}", flush=True)
-    print(f"[build_icon_dace_libs] FP flags ({'release' if release else 'debug'}): "
-          f"{' '.join(fflags)}", flush=True)
+    print(f"[build_icon_dace_libs] FP flags ({'release' if release else 'debug'}): {' '.join(fflags)}", flush=True)
 
     sdfg_dir = out_dir / "_sdfg_build"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -465,18 +472,21 @@ def build_velocity_inner_wrap(velocity_source: Path,
         print(f"[build_icon_dace_libs] .mod:     {mod_path}", flush=True)
         print(
             f"\nICON build flags:\n"
-            f"  export FCFLAGS=\"-I{out_dir} ${{FCFLAGS-}}\"\n"
-            f"  export LDFLAGS=\"-L{out_dir} -Wl,-rpath,{out_dir} "
-            f"-l:{lib.so_path.name} ${{LDFLAGS-}}\"\n",
-            flush=True)
+            f'  export FCFLAGS="-I{out_dir} ${{FCFLAGS-}}"\n'
+            f'  export LDFLAGS="-L{out_dir} -Wl,-rpath,{out_dir} '
+            f'-l:{lib.so_path.name} ${{LDFLAGS-}}"\n',
+            flush=True,
+        )
     return lib, callee_ptr_members
 
 
-def build_dycore_wrapper(velocity_source: Path,
-                         inner_lib_so: Path,
-                         out_dir: Path,
-                         release: bool,
-                         callee_ptr_scalar_members: frozenset = frozenset()):
+def build_dycore_wrapper(
+    velocity_source: Path,
+    inner_lib_so: Path,
+    out_dir: Path,
+    release: bool,
+    callee_ptr_scalar_members: frozenset = frozenset(),
+):
     """Build ``libdycore_wrapper.so`` -- the outer SDFG that calls
     ``velocity_tendencies`` (resolved at runtime from
     ``libvelocity_inner_wrap.so``) and a Fortran/C++ pair of
@@ -531,7 +541,7 @@ def build_dycore_wrapper(velocity_source: Path,
             Arg(kind="scalar", dtype="float64", intent="in"),
             Arg(kind="scalar", dtype="bool", intent="in"),
         ),
-        libraries=(str(inner_lib_so), ),
+        libraries=(str(inner_lib_so),),
         dynamic_extents_abi=True,
         module_symbol_forward=_VELOCITY_MODULE_FORWARD,
         callee_ptr_scalar_members=callee_ptr_scalar_members,
@@ -540,14 +550,14 @@ def build_dycore_wrapper(velocity_source: Path,
         "sync_patch_array",
         c_name="sync_patch_array_c",
         args=sync_args,
-        libraries=(str(sync_lib_so), ),
+        libraries=(str(sync_lib_so),),
         dynamic_extents_abi=True,
     )
     keep_external(
         "sync_patch_cpp_via",
         c_name="sync_patch_cpp_via_c",
         args=sync_args,
-        libraries=(str(sync_lib_so), ),
+        libraries=(str(sync_lib_so),),
         dynamic_extents_abi=True,
     )
 
@@ -557,10 +567,9 @@ def build_dycore_wrapper(velocity_source: Path,
         outer_sdfg_dir = out_dir / "sdfg"
         outer_sdfg_dir.mkdir(parents=True, exist_ok=True)
         outer_src = velocity_src + _SYNC_FORTRAN_SRC + _DYCORE_WRAPPER_SRC
-        outer_sdfg = build_sdfg(outer_src,
-                                outer_sdfg_dir,
-                                name="dycore_wrapper",
-                                entry="_QMmo_dycore_wrapperPdycore_wrapper").build()
+        outer_sdfg = build_sdfg(
+            outer_src, outer_sdfg_dir, name="dycore_wrapper", entry="_QMmo_dycore_wrapperPdycore_wrapper"
+        ).build()
         outer_sdfg.name = "dycore_wrapper"
         outer_sdfg.build_folder = str(out_dir / "dacecache")
         outer_iface = _velocity_iface("dycore_wrapper")
@@ -589,56 +598,69 @@ def build_dycore_wrapper(velocity_source: Path,
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--velocity-source",
-                    type=Path,
-                    default=(Path(__file__).resolve().parents[1] / "tests" / "icon" / "full" / "velocity_full.f90"),
-                    help="Pre-merged self-contained ICON ``mo_velocity_advection`` "
-                    "source.  Defaults to the e2e test's ``velocity_full.f90``.")
-    ap.add_argument("--icon-src",
-                    type=Path,
-                    default=None,
-                    help="ICON source tree (e.g. tests/icon/full/icon-model).  With --icon-build, "
-                    "builds the SDFG from ICON's REAL mo_velocity_advection.f90 instead of the "
-                    "pre-merged stub-typed --velocity-source.  Required for an in-ICON run: a lib "
-                    "built from the stub types SEGVs in the first velocity_tendencies call.")
-    ap.add_argument("--icon-build",
-                    type=Path,
-                    default=None,
-                    help="Build dir of the ICON CONFIGURATION this lib will be linked into.  Supplies "
-                    "the real -D defines (which decide conditional type layouts) and the real .mod "
-                    "the bind_c shim compiles against.  MUST match the target ICON's configure "
-                    "options -- defines from a differently-configured build reintroduce the layout "
-                    "mismatch this route removes.")
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--velocity-source",
+        type=Path,
+        default=(Path(__file__).resolve().parents[1] / "tests" / "icon" / "full" / "velocity_full.f90"),
+        help="Pre-merged self-contained ICON ``mo_velocity_advection`` "
+        "source.  Defaults to the e2e test's ``velocity_full.f90``.",
+    )
+    ap.add_argument(
+        "--icon-src",
+        type=Path,
+        default=None,
+        help="ICON source tree (e.g. tests/icon/full/icon-model).  With --icon-build, "
+        "builds the SDFG from ICON's REAL mo_velocity_advection.f90 instead of the "
+        "pre-merged stub-typed --velocity-source.  Required for an in-ICON run: a lib "
+        "built from the stub types SEGVs in the first velocity_tendencies call.",
+    )
+    ap.add_argument(
+        "--icon-build",
+        type=Path,
+        default=None,
+        help="Build dir of the ICON CONFIGURATION this lib will be linked into.  Supplies "
+        "the real -D defines (which decide conditional type layouts) and the real .mod "
+        "the bind_c shim compiles against.  MUST match the target ICON's configure "
+        "options -- defines from a differently-configured build reintroduce the layout "
+        "mismatch this route removes.",
+    )
     ap.add_argument("--out-dir", type=Path, required=True, help="Where libvelocity_inner_wrap.so + .mod files go.")
-    ap.add_argument("--release",
-                    action="store_true",
-                    help="Use -O3 -fno-fast-math -ffp-contract=off instead of -O0.  "
-                    "Numerical envelope drops to 1 ULP but performance matches a "
-                    "stock ICON production build.")
-    ap.add_argument("--with-dycore",
-                    action="store_true",
-                    help="Also build ``libdycore_wrapper.so`` -- the outer SDFG "
-                    "that dispatches to the inner velocity .so over the C "
-                    "ABI (``velocity_tendencies_c``) AND calls a Fortran/C++ "
-                    "sync helper pair.  ICON itself does NOT link this "
-                    "artifact (its real ``mo_solve_nonhydro`` signature does "
-                    "not match the wrapper), but building it validates the "
-                    "SDFG-to-SDFG C-ABI chain.")
-    ap.add_argument("--acc-residency",
-                    type=Path,
-                    default=os.environ.get("DACE_FORTRAN_ACC_RESIDENCY_SIDECAR") or None,
-                    help="``<routine>.acc_residency.json`` sidecar (see "
-                    "``python -m dace_fortran.acc_residency``).  Every argument ICON "
-                    "keeps on the device gets an ``!$ACC UPDATE HOST`` before the SDFG "
-                    "call and, if the SDFG writes it, an ``!$ACC UPDATE DEVICE`` after; "
-                    "a device argument whose SDFG array is itself on GPU storage is "
-                    "passed through ``!$ACC HOST_DATA USE_DEVICE`` with no copy.  Any "
-                    "other residency/storage crossing is a hard error.  Defaults to "
-                    "$DACE_FORTRAN_ACC_RESIDENCY_SIDECAR, else to the sidecar the "
-                    "DACE_FORTRAN_ACC_RESIDENCY hook writes during the real-source "
-                    "lowering; with none of them the wrapper is CPU-only as before.")
+    ap.add_argument(
+        "--release",
+        action="store_true",
+        help="Use -O3 -fno-fast-math -ffp-contract=off instead of -O0.  "
+        "Numerical envelope drops to 1 ULP but performance matches a "
+        "stock ICON production build.",
+    )
+    ap.add_argument(
+        "--with-dycore",
+        action="store_true",
+        help="Also build ``libdycore_wrapper.so`` -- the outer SDFG "
+        "that dispatches to the inner velocity .so over the C "
+        "ABI (``velocity_tendencies_c``) AND calls a Fortran/C++ "
+        "sync helper pair.  ICON itself does NOT link this "
+        "artifact (its real ``mo_solve_nonhydro`` signature does "
+        "not match the wrapper), but building it validates the "
+        "SDFG-to-SDFG C-ABI chain.",
+    )
+    ap.add_argument(
+        "--acc-residency",
+        type=Path,
+        default=os.environ.get("DACE_FORTRAN_ACC_RESIDENCY_SIDECAR") or None,
+        help="``<routine>.acc_residency.json`` sidecar (see "
+        "``python -m dace_fortran.acc_residency``).  Every argument ICON "
+        "keeps on the device gets an ``!$ACC UPDATE HOST`` before the SDFG "
+        "call and, if the SDFG writes it, an ``!$ACC UPDATE DEVICE`` after; "
+        "a device argument whose SDFG array is itself on GPU storage is "
+        "passed through ``!$ACC HOST_DATA USE_DEVICE`` with no copy.  Any "
+        "other residency/storage crossing is a hard error.  Defaults to "
+        "$DACE_FORTRAN_ACC_RESIDENCY_SIDECAR, else to the sidecar the "
+        "DACE_FORTRAN_ACC_RESIDENCY hook writes during the real-source "
+        "lowering; with none of them the wrapper is CPU-only as before.",
+    )
     args = ap.parse_args()
 
     if not args.velocity_source.exists():
@@ -658,18 +680,22 @@ def main():
         print(f"error: no ICON build at {args.icon_build} (expected a configured Makefile)", file=sys.stderr)
         return 1
 
-    inner_lib, callee_ptr_members = build_velocity_inner_wrap(args.velocity_source,
-                                                              args.out_dir,
-                                                              release=args.release,
-                                                              icon_src=args.icon_src,
-                                                              icon_build=args.icon_build,
-                                                              acc_residency=args.acc_residency)
+    inner_lib, callee_ptr_members = build_velocity_inner_wrap(
+        args.velocity_source,
+        args.out_dir,
+        release=args.release,
+        icon_src=args.icon_src,
+        icon_build=args.icon_build,
+        acc_residency=args.acc_residency,
+    )
     if args.with_dycore:
-        build_dycore_wrapper(args.velocity_source,
-                             inner_lib.so_path,
-                             args.out_dir / "_dycore_build",
-                             release=args.release,
-                             callee_ptr_scalar_members=callee_ptr_members)
+        build_dycore_wrapper(
+            args.velocity_source,
+            inner_lib.so_path,
+            args.out_dir / "_dycore_build",
+            release=args.release,
+            callee_ptr_scalar_members=callee_ptr_members,
+        )
     return 0
 
 

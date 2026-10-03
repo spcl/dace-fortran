@@ -8,8 +8,12 @@ one I/O statement and expands to a C++ tasklet calling into the shipped
 ``dace_fortran_io.f90`` runtime (``iso_c_binding`` wrappers, linked via
 ``libgfortran``), so transfers keep exact Fortran list-directed semantics.
 """
+
 from dace.library import register_library
-from .nodes import *
-from .environments import *
+
+from .environments import FortranIO
+from .nodes import NamelistRead, Read, Write
+
+__all__ = ["FortranIO", "NamelistRead", "Read", "Write"]
 
 register_library(__name__, "fortran_io")

@@ -35,19 +35,19 @@ DO j = 1, klev
 ENDDO
 END SUBROUTINE filter
 """
-    ref = f2py(src, tmp_path / 'ref', 'filter_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "filter_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='filter', entry='filter').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="filter", entry="filter").build()
 
     rng = np.random.default_rng(7)
     klon, klev = 4, 3
     za = np.asfortranarray(rng.random((klon, klev)))
     zlcond2 = np.asfortranarray(rng.random(klon))
 
-    out_ref = np.zeros((klon, klev), order='F', dtype=np.int32)
+    out_ref = np.zeros((klon, klev), order="F", dtype=np.int32)
     ref.filter(za=za, zlcond2=zlcond2, out=out_ref)
 
-    out = np.zeros((klon, klev), order='F', dtype=np.int32)
+    out = np.zeros((klon, klev), order="F", dtype=np.int32)
     sdfg(za=za, zlcond2=zlcond2, out=out, klon=klon, klev=klev)
     np.testing.assert_array_equal(out, out_ref)

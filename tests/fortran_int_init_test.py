@@ -16,7 +16,7 @@ subroutine main(d)
   d(1) = int(z'000000ffffffffff', i8)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.full([2], 42, order="F", dtype=np.int64)
     sdfg(d=d)
     assert d[0] == int("000000ffffffffff", 16)

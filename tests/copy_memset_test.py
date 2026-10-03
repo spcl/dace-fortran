@@ -38,8 +38,9 @@ def test_copy_and_memset_numerical(tmp_path):
     mod = _f2py(_SRC_PATH, tmp_path / "ref", "copy_and_memset_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="copy_and_memset",
-                      pipeline="hlfir-propagate-shapes").build()
+    sdfg = build_sdfg(
+        _SRC_PATH.read_text(), sdfg_dir, name="copy_and_memset", pipeline="hlfir-propagate-shapes"
+    ).build()
     sdfg.validate()
 
     rng = np.random.default_rng(9)
@@ -68,11 +69,12 @@ def test_copy_and_memset_structure(tmp_path):
     loop decompositions."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="copy_and_memset",
-                      pipeline="hlfir-propagate-shapes").build()
+    sdfg = build_sdfg(
+        _SRC_PATH.read_text(), sdfg_dir, name="copy_and_memset", pipeline="hlfir-propagate-shapes"
+    ).build()
 
     from dace.sdfg.state import LoopRegion, SDFGState
-    from dace.libraries.standard.nodes import (CopyLibraryNode, FillLibraryNode)
+    from dace.libraries.standard.nodes import CopyLibraryNode, FillLibraryNode
 
     def iter_states(region):
         for n in region.nodes():

@@ -21,7 +21,7 @@ res(4) = UBOUND(input, 2)
 
 END SUBROUTINE intrinsic_bound_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_bound_test_function").build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -43,7 +43,7 @@ res(4) = UBOUND(input, 2)
 
 END SUBROUTINE intrinsic_bound_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_bound_test_function").build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -84,8 +84,9 @@ res(4) = UBOUND(input, 2)
 
 END SUBROUTINE intrinsic_bound_test_function2
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -128,8 +129,9 @@ res(4) = UBOUND(input, 2)
 
 END SUBROUTINE intrinsic_bound_test_function2
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -174,8 +176,9 @@ res(4) = UBOUND(input, 2)
 
 END SUBROUTINE intrinsic_bound_test_function3
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -218,8 +221,9 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -263,8 +267,9 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -317,8 +322,9 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
-                      entry='intrinsic_bound_test_function').build()
+    sdfg = build_sdfg(
+        src, tmp_path, name="intrinsic_bound_test_function", entry="intrinsic_bound_test_function"
+    ).build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)

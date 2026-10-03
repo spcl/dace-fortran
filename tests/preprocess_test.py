@@ -193,16 +193,18 @@ def test_double_idempotent():
 
 
 def test_strip_openmp_acc_sentinels():
-    src = ("subroutine k(a, n)\n"
-           "  real(8) :: a(n)\n"
-           "  integer :: i, n\n"
-           "!$OMP PARALLEL DO\n"
-           "  do i = 1, n\n"
-           "!$ACC LOOP VECTOR\n"
-           "    a(i) = a(i) + 1.0D0\n"
-           "  end do\n"
-           "!$OMP END PARALLEL DO\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(a, n)\n"
+        "  real(8) :: a(n)\n"
+        "  integer :: i, n\n"
+        "!$OMP PARALLEL DO\n"
+        "  do i = 1, n\n"
+        "!$ACC LOOP VECTOR\n"
+        "    a(i) = a(i) + 1.0D0\n"
+        "  end do\n"
+        "!$OMP END PARALLEL DO\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     assert "!$OMP" not in out
     assert "!$ACC" not in out
@@ -213,28 +215,32 @@ def test_strip_openmp_acc_sentinels():
 def test_strip_vendor_dir_directives():
     """``!DIR$`` vendor directives (Intel/Cray IVDEP/ATTRIBUTES) flang-new warns on --
     dropped like the accelerator sentinels; real code preserved."""
-    src = ("subroutine k(a, n)\n"
-           "  real(8) :: a(n)\n"
-           "  integer :: i, n\n"
-           "!DIR$ IVDEP\n"
-           "  do i = 1, n\n"
-           "!DIR$ ATTRIBUTES ALIGN : 64 :: a\n"
-           "    a(i) = a(i) + 1.0D0\n"
-           "  end do\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(a, n)\n"
+        "  real(8) :: a(n)\n"
+        "  integer :: i, n\n"
+        "!DIR$ IVDEP\n"
+        "  do i = 1, n\n"
+        "!DIR$ ATTRIBUTES ALIGN : 64 :: a\n"
+        "    a(i) = a(i) + 1.0D0\n"
+        "  end do\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     assert "!DIR$" not in out and "IVDEP" not in out
     assert "do i = 1, n" in out and "a(i) = a(i) + 1.0D0" in out
 
 
 def test_strip_openmp_continuation_and_conditional():
-    src = ("subroutine k\n"
-           "  integer :: i\n"
-           "!$OMP PARALLEL DEFAULT(SHARED) &\n"
-           "!$OMP&   PRIVATE(i)\n"
-           "!$ i = 0\n"
-           "  i = 1\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k\n"
+        "  integer :: i\n"
+        "!$OMP PARALLEL DEFAULT(SHARED) &\n"
+        "!$OMP&   PRIVATE(i)\n"
+        "!$ i = 0\n"
+        "  i = 1\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     assert "!$OMP" not in out and "!$ " not in out
     assert "i = 1" in out
@@ -243,21 +249,23 @@ def test_strip_openmp_continuation_and_conditional():
 
 
 def test_strip_omp_acc_ifdef_blocks_and_else():
-    src = ("subroutine k(a, n)\n"
-           "  integer :: n\n"
-           "  real(8) :: a(n)\n"
-           "#ifdef _OPENACC\n"
-           "  call acc_only_path(a, n)\n"
-           "#else\n"
-           "  call host_path(a, n)\n"
-           "#endif\n"
-           "#ifdef _OPENMP\n"
-           "  call omp_path(a, n)\n"
-           "#endif\n"
-           "#ifndef _OPENMP\n"
-           "  call serial_fallback(a, n)\n"
-           "#endif\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(a, n)\n"
+        "  integer :: n\n"
+        "  real(8) :: a(n)\n"
+        "#ifdef _OPENACC\n"
+        "  call acc_only_path(a, n)\n"
+        "#else\n"
+        "  call host_path(a, n)\n"
+        "#endif\n"
+        "#ifdef _OPENMP\n"
+        "  call omp_path(a, n)\n"
+        "#endif\n"
+        "#ifndef _OPENMP\n"
+        "  call serial_fallback(a, n)\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     # OPENACC body dropped, #else body kept.
     assert "acc_only_path" not in out and "host_path" in out
@@ -270,14 +278,16 @@ def test_strip_omp_acc_ifdef_blocks_and_else():
 
 
 def test_strip_omp_acc_passes_through_unrelated_cpp():
-    src = ("subroutine k(a)\n"
-           "  real(8) :: a(:)\n"
-           "#ifdef __SWAPDIM\n"
-           "  a = a + 1.0D0\n"
-           "#else\n"
-           "  a = a - 1.0D0\n"
-           "#endif\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(a)\n"
+        "  real(8) :: a(:)\n"
+        "#ifdef __SWAPDIM\n"
+        "  a = a + 1.0D0\n"
+        "#else\n"
+        "  a = a - 1.0D0\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     # unrelated #ifdef __SWAPDIM block untouched (both directives+branches survive -- not this pass's job)
     assert "#ifdef __SWAPDIM" in out and "#else" in out and "#endif" in out
@@ -285,12 +295,14 @@ def test_strip_omp_acc_passes_through_unrelated_cpp():
 
 
 def test_strip_omp_drops_omp_definitions_include():
-    src = ("module m\n"
-           "#include \"omp_definitions.inc\"\n"
-           "#include \"hamocc_omp_definitions.inc\"\n"
-           "#include \"icon_definitions.inc\"\n"
-           "  implicit none\n"
-           "end module\n")
+    src = (
+        "module m\n"
+        '#include "omp_definitions.inc"\n'
+        '#include "hamocc_omp_definitions.inc"\n'
+        '#include "icon_definitions.inc"\n'
+        "  implicit none\n"
+        "end module\n"
+    )
     out = strip_openmp_directives(src)
     assert "omp_definitions.inc" not in out
     assert "hamocc_omp_definitions.inc" not in out
@@ -299,14 +311,16 @@ def test_strip_omp_drops_omp_definitions_include():
 
 
 def test_strip_omp_handles_defined_paren_form():
-    src = ("subroutine k\n"
-           "#if defined(_OPENMP)\n"
-           "  call omp_only(); call omp_only_2()\n"
-           "#endif\n"
-           "#if !defined(_OPENACC)\n"
-           "  call host_fallback()\n"
-           "#endif\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k\n"
+        "#if defined(_OPENMP)\n"
+        "  call omp_only(); call omp_only_2()\n"
+        "#endif\n"
+        "#if !defined(_OPENACC)\n"
+        "  call host_fallback()\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
     out = strip_openmp_directives(src)
     assert "omp_only" not in out
     assert "host_fallback" in out
@@ -317,13 +331,7 @@ def test_strip_omp_handles_defined_paren_form():
 def test_strip_openmp_idempotent_and_clean_passthrough():
     clean = "subroutine k\n  integer :: i\n  i = 1\nend subroutine\n"
     assert strip_openmp_directives(clean) == clean
-    noisy = ("subroutine k\n"
-             "!$OMP PARALLEL DO\n"
-             "#ifdef _OPENMP\n"
-             "  call omp()\n"
-             "#endif\n"
-             "  i = 1\n"
-             "end subroutine\n")
+    noisy = "subroutine k\n!$OMP PARALLEL DO\n#ifdef _OPENMP\n  call omp()\n#endif\n  i = 1\nend subroutine\n"
     once = strip_openmp_directives(noisy)
     twice = strip_openmp_directives(once)
     assert once == twice
@@ -353,17 +361,19 @@ def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
     """A #include above a MODULE opener must be captured into the module's block --
     otherwise its macros vanish from the merged source and downstream refs break
     (the ICON failure mode)."""
-    (tmp_path / "mod_a.f90").write_text("! header comment\n"
-                                        "#include \"defs.inc\"\n"
-                                        "#define LOCAL_MACRO 1\n"
-                                        "MODULE mod_a\n"
-                                        "  integer :: x = LOCAL_MACRO\n"
-                                        "END MODULE mod_a\n")
+    (tmp_path / "mod_a.f90").write_text(
+        "! header comment\n"
+        '#include "defs.inc"\n'
+        "#define LOCAL_MACRO 1\n"
+        "MODULE mod_a\n"
+        "  integer :: x = LOCAL_MACRO\n"
+        "END MODULE mod_a\n"
+    )
     src = "subroutine k\n  use mod_a\nend subroutine\n"
     out = merge_used_modules(src, search_dirs=[tmp_path])
     # module inlined AND its preceding cpp preamble/comment carried with it, so cpp resolves the include/macros
     assert "MODULE mod_a" in out
-    assert "#include \"defs.inc\"" in out
+    assert '#include "defs.inc"' in out
     assert "#define LOCAL_MACRO 1" in out
     assert "! header comment" in out
 
@@ -371,14 +381,16 @@ def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
 def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
     """Two modules back-to-back in one file: mod_b's preamble walk must stop at
     mod_a's END MODULE, not retroactively pull part of mod_a into mod_b's block."""
-    (tmp_path / "two_mods.f90").write_text("MODULE mod_a\n"
-                                           "  integer :: a_value = 1\n"
-                                           "END MODULE mod_a\n"
-                                           "! comment between\n"
-                                           "#define SHARED_MACRO 7\n"
-                                           "MODULE mod_b\n"
-                                           "  integer :: b_value = SHARED_MACRO\n"
-                                           "END MODULE mod_b\n")
+    (tmp_path / "two_mods.f90").write_text(
+        "MODULE mod_a\n"
+        "  integer :: a_value = 1\n"
+        "END MODULE mod_a\n"
+        "! comment between\n"
+        "#define SHARED_MACRO 7\n"
+        "MODULE mod_b\n"
+        "  integer :: b_value = SHARED_MACRO\n"
+        "END MODULE mod_b\n"
+    )
     src = "subroutine k\n  use mod_a\n  use mod_b\nend subroutine\n"
     out = merge_used_modules(src, search_dirs=[tmp_path])
     # both modules present
@@ -391,12 +403,7 @@ def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
 
 def test_merge_passthrough_for_self_contained_source(tmp_path):
     """A source USEing only intrinsic modules (or none) is returned unchanged -- merge is a no-op."""
-    src = ("subroutine k(a, n)\n"
-           "  use iso_c_binding\n"
-           "  integer :: n\n"
-           "  real(8) :: a(n)\n"
-           "  a(1) = 0.0d0\n"
-           "end subroutine\n")
+    src = "subroutine k(a, n)\n  use iso_c_binding\n  integer :: n\n  real(8) :: a(n)\n  a(1) = 0.0d0\nend subroutine\n"
     assert merge_used_modules(src, search_dirs=[tmp_path]) == src
 
 
@@ -409,16 +416,17 @@ def _gfortran_compiles(text: str) -> bool:
     import shutil
     import subprocess
     from tempfile import TemporaryDirectory
+
     if not shutil.which("gfortran"):
         import pytest
+
         pytest.skip("gfortran not on PATH")
     with TemporaryDirectory() as td:
         f = Path(td) / "m.f90"
         f.write_text(text)
-        r = subprocess.run(["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c",
-                            str(f)],
-                           cwd=td,
-                           capture_output=True)
+        r = subprocess.run(
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+        )
         if r.returncode:
             print(r.stderr.decode())
         return r.returncode == 0
@@ -427,23 +435,27 @@ def _gfortran_compiles(text: str) -> bool:
 def _two_module_project(tmp_path):
     """A driver module that ``USE``s a helper module across files -- the shape
     that needs a real merge (regex splice or fparser inline)."""
-    (tmp_path / "helper.f90").write_text("module helper\n"
-                                         "  implicit none\n"
-                                         "contains\n"
-                                         "  real function dbl(x)\n"
-                                         "    real, intent(in) :: x\n"
-                                         "    dbl = 2.0 * x\n"
-                                         "  end function dbl\n"
-                                         "end module helper\n")
-    driver = ("module drv\n"
-              "  use helper, only: dbl\n"
-              "  implicit none\n"
-              "contains\n"
-              "  subroutine run(a)\n"
-              "    real, intent(inout) :: a\n"
-              "    a = dbl(a)\n"
-              "  end subroutine run\n"
-              "end module drv\n")
+    (tmp_path / "helper.f90").write_text(
+        "module helper\n"
+        "  implicit none\n"
+        "contains\n"
+        "  real function dbl(x)\n"
+        "    real, intent(in) :: x\n"
+        "    dbl = 2.0 * x\n"
+        "  end function dbl\n"
+        "end module helper\n"
+    )
+    driver = (
+        "module drv\n"
+        "  use helper, only: dbl\n"
+        "  implicit none\n"
+        "contains\n"
+        "  subroutine run(a)\n"
+        "    real, intent(inout) :: a\n"
+        "    a = dbl(a)\n"
+        "  end subroutine run\n"
+        "end module drv\n"
+    )
     return driver
 
 
@@ -469,12 +481,14 @@ def test_merge_engine_regex_and_fparser_both_compile(tmp_path):
 def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
     """fparser resolves ``USE iso_c_binding`` from a built-in stub while parsing, but
     doesn't emit the stub (compiler ships its own); REAL(c_double) lowers to REAL(KIND=8)."""
-    src = ("subroutine k(a)\n"
-           "  use iso_c_binding, only: c_double\n"
-           "  implicit none\n"
-           "  real(c_double), intent(inout) :: a\n"
-           "  a = a * 2.0_c_double\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(a)\n"
+        "  use iso_c_binding, only: c_double\n"
+        "  implicit none\n"
+        "  real(c_double), intent(inout) :: a\n"
+        "  a = a * 2.0_c_double\n"
+        "end subroutine\n"
+    )
     out = preprocess_fortran_source(src, search_dirs=[tmp_path], merge_engine="fparser")
     # stub module not emitted; USE iso_c_binding kept so the compiler's own intrinsic
     # module resolves c_double -- single TU compiles without a colliding stub definition
@@ -485,6 +499,7 @@ def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
 def test_merge_engine_invalid_raises(tmp_path):
     """An unknown ``merge_engine`` is a clear error."""
     import pytest
+
     with pytest.raises(ValueError, match="merge_engine"):
         preprocess_fortran_source("subroutine k\nend subroutine\n", search_dirs=[tmp_path], merge_engine="bogus")
 
@@ -503,10 +518,7 @@ def test_kind_eq_form_rewrites_to_default_fp64():
 
 def test_type_paren_short_form_rewrites():
     """``REAL(wp)`` shorthand also rewrites; ``INTEGER(wp)`` likewise."""
-    src = ("subroutine k(x, n)\n"
-           "  real(wp) :: x\n"
-           "  integer(wp) :: n\n"
-           "end subroutine\n")
+    src = "subroutine k(x, n)\n  real(wp) :: x\n  integer(wp) :: n\nend subroutine\n"
     out = normalize_kind_parameters(src)
     assert "real(8)" in out
     assert "integer(8)" in out
@@ -515,10 +527,7 @@ def test_type_paren_short_form_rewrites():
 
 def test_literal_kind_suffix_rewrites():
     """``1.0_wp``, ``1.0E0_wp``, ``2_wp`` all rewrite to the literal kind."""
-    src = ("subroutine k(x)\n"
-           "  real(8) :: x\n"
-           "  x = 1.0_wp + 2.5E0_wp + 3_wp\n"
-           "end subroutine\n")
+    src = "subroutine k(x)\n  real(8) :: x\n  x = 1.0_wp + 2.5E0_wp + 3_wp\nend subroutine\n"
     out = normalize_kind_parameters(src)
     assert "1.0_8" in out
     assert "2.5E0_8" in out
@@ -529,15 +538,17 @@ def test_literal_kind_suffix_rewrites():
 def test_local_integer_param_binding_is_left_alone():
     """``INTEGER, PARAMETER :: wp = 8`` already resolves; alias sites are left alone
     too -- the rewrite would no-op anyway, so byte-identical output surfaces upstream issues."""
-    src = ("module m\n"
-           "  integer, parameter :: wp = 8\n"
-           "contains\n"
-           "  subroutine k(x)\n"
-           "    real(kind=wp), intent(in) :: x\n"
-           "    real(kind=wp) :: y\n"
-           "    y = 1.0_wp\n"
-           "  end subroutine\n"
-           "end module\n")
+    src = (
+        "module m\n"
+        "  integer, parameter :: wp = 8\n"
+        "contains\n"
+        "  subroutine k(x)\n"
+        "    real(kind=wp), intent(in) :: x\n"
+        "    real(kind=wp) :: y\n"
+        "    y = 1.0_wp\n"
+        "  end subroutine\n"
+        "end module\n"
+    )
     out = normalize_kind_parameters(src)
     # locally-bound alias is dropped from the substitution set, original wp references survive verbatim
     assert "kind=wp" in out
@@ -555,10 +566,7 @@ def test_kind_map_override_per_alias():
 def test_kind_map_none_disables_one_alias():
     """``kind_map={"wp": None}`` leaves ``wp`` alone but still
     rewrites the other defaults (``sp`` etc.)."""
-    src = ("subroutine k(x, y)\n"
-           "  real(KIND=wp) :: x\n"
-           "  real(KIND=sp) :: y\n"
-           "end subroutine\n")
+    src = "subroutine k(x, y)\n  real(KIND=wp) :: x\n  real(KIND=sp) :: y\nend subroutine\n"
     out = normalize_kind_parameters(src, kind_map={"wp": None})
     assert "KIND=wp" in out  # wp left alone
     assert "KIND=4" in out and "KIND=sp" not in out  # sp still rewritten
@@ -573,11 +581,7 @@ def test_passthrough_flag_disables_pass():
 def test_custom_alias_via_kind_map():
     """ECMWF-style aliases (``JPRB``/``JPIM``) aren't in the default
     table -- the caller supplies them via ``kind_map``."""
-    src = ("subroutine k(x, n)\n"
-           "  real(KIND=JPRB) :: x\n"
-           "  integer(KIND=JPIM) :: n\n"
-           "  x = 1.0_JPRB\n"
-           "end subroutine\n")
+    src = "subroutine k(x, n)\n  real(KIND=JPRB) :: x\n  integer(KIND=JPIM) :: n\n  x = 1.0_JPRB\nend subroutine\n"
     out = normalize_kind_parameters(src, kind_map={"JPRB": 8, "JPIM": 4})
     assert "KIND=8" in out
     assert "KIND=4" in out
@@ -587,7 +591,7 @@ def test_custom_alias_via_kind_map():
 
 def test_idempotent_on_already_resolved_source():
     """A second pass over already-substituted source must be a no-op."""
-    src = ("subroutine k(x)\n  real(KIND=wp) :: x\n  x = 1.0_wp\nend subroutine\n")
+    src = "subroutine k(x)\n  real(KIND=wp) :: x\n  x = 1.0_wp\nend subroutine\n"
     once = normalize_kind_parameters(src)
     twice = normalize_kind_parameters(once)
     assert once == twice
@@ -596,11 +600,13 @@ def test_idempotent_on_already_resolved_source():
 def test_does_not_touch_strings_or_comments():
     """Kind aliases that appear inside character literals or after a
     ``!`` comment are not rewritten -- they're not real code."""
-    src = ("subroutine k(x)\n"
-           "  real(kind=wp) :: x  ! 1.0_wp here is a comment\n"
-           '  character(len=20) :: s = "REAL(KIND=wp)"\n'
-           "  x = 1.0_wp\n"
-           "end subroutine\n")
+    src = (
+        "subroutine k(x)\n"
+        "  real(kind=wp) :: x  ! 1.0_wp here is a comment\n"
+        '  character(len=20) :: s = "REAL(KIND=wp)"\n'
+        "  x = 1.0_wp\n"
+        "end subroutine\n"
+    )
     out = normalize_kind_parameters(src)
     # Code sites rewritten.
     assert "kind=8" in out
@@ -613,11 +619,7 @@ def test_does_not_touch_strings_or_comments():
 def test_does_not_touch_user_variable_with_alias_name_prefix():
     """A user identifier containing "wp" as a substring (twp, wpos) must not be
     rewritten -- the pattern is bounded by word boundaries."""
-    src = ("subroutine k(twp, wpos)\n"
-           "  real(8) :: twp\n"
-           "  integer :: wpos\n"
-           "  twp = real(wpos, kind=8)\n"
-           "end subroutine\n")
+    src = "subroutine k(twp, wpos)\n  real(8) :: twp\n  integer :: wpos\n  twp = real(wpos, kind=8)\nend subroutine\n"
     out = normalize_kind_parameters(src)
     assert out == src
 
@@ -632,14 +634,16 @@ def test_handles_double_precision_alias_dp():
 def test_handles_selected_real_kind_rhs():
     """``wp = SELECTED_REAL_KIND(...)`` doesn't match the integer-literal PARAMETER
     regex, so the alias falls through to substitution -- the externally-defined case in disguise."""
-    src = ("module m\n"
-           "  integer, parameter :: wp = SELECTED_REAL_KIND(15,300)\n"
-           "contains\n"
-           "  subroutine k(x)\n"
-           "    real(kind=wp), intent(out) :: x\n"
-           "    x = 1.0_wp\n"
-           "  end subroutine\n"
-           "end module\n")
+    src = (
+        "module m\n"
+        "  integer, parameter :: wp = SELECTED_REAL_KIND(15,300)\n"
+        "contains\n"
+        "  subroutine k(x)\n"
+        "    real(kind=wp), intent(out) :: x\n"
+        "    x = 1.0_wp\n"
+        "  end subroutine\n"
+        "end module\n"
+    )
     out = normalize_kind_parameters(src)
     assert "kind=8" in out
     assert "1.0_8" in out

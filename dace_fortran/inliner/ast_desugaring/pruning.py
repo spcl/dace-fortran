@@ -37,9 +37,16 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
     alias_map = alias_map or analysis.alias_specs(ast)
     for sp in reversed(walk(ast, f03.Specification_Part)):
         # Fix the kind parameter of literals referring to a variable: fparser leaves them as plain strings, not Names.
-        for lit in walk(sp.parent,
-                        (f03.Real_Literal_Constant, f03.Signed_Real_Literal_Constant, f03.Int_Literal_Constant,
-                         f03.Signed_Int_Literal_Constant, f03.Logical_Literal_Constant)):
+        for lit in walk(
+            sp.parent,
+            (
+                f03.Real_Literal_Constant,
+                f03.Signed_Real_Literal_Constant,
+                f03.Int_Literal_Constant,
+                f03.Signed_Int_Literal_Constant,
+                f03.Logical_Literal_Constant,
+            ),
+        ):
             val, kind = lit.children
             if not isinstance(kind, str):
                 continue
@@ -61,7 +68,8 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
                 continue
             box = alias_map[sc_spec].parent
             if box is not sp.parent and isinstance(
-                    box, (f03.Function_Subprogram, f03.Subroutine_Subprogram, f03.Main_Program)):
+                box, (f03.Function_Subprogram, f03.Subroutine_Subprogram, f03.Main_Program)
+            ):
                 # `nm` is used in a deeper subprogram: consolidate it there, when
                 # that subprogram's own Specification_Part is processed -- UNLESS
                 # it has none (a body of only host-associated references), in
@@ -107,7 +115,7 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
 def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
     """Drops modules not transitively reachable (via `USE`) from `entry_points` (all modules
     if None), and topologically sorts the survivors so each is defined before it is used."""
-    TOPLEVEL = '__toplevel__'
+    TOPLEVEL = "__toplevel__"
 
     def _get_module(n: Base) -> str:
         p: Optional[Base] = n
@@ -173,9 +181,14 @@ def prune_coarsely(ast: f03.Program, keepers: Iterable[types.SPEC]) -> f03.Progr
             vname = utils.find_name_of_stmt(v)
             box = alias_map[k[:-2] if k[-2] == analysis.INTERFACE_NAMESPACE else k[:-1]].parent
             for nm in walk(box, f03.Name):
-                if (nm.string != vname or isinstance(nm.parent, (f03.Rename, f03.Use_Stmt)) or isinstance(
+                if (
+                    nm.string != vname
+                    or isinstance(nm.parent, (f03.Rename, f03.Use_Stmt))
+                    or isinstance(
                         nm.parent,
-                    (f03.Function_Stmt, f03.End_Function_Stmt, f03.Subroutine_Stmt, f03.End_Subroutine_Stmt))):
+                        (f03.Function_Stmt, f03.End_Function_Stmt, f03.Subroutine_Stmt, f03.End_Subroutine_Stmt),
+                    )
+                ):
                     continue
                 scope_spec = analysis.search_scope_spec(nm)
                 if scope_spec == k:
@@ -290,14 +303,15 @@ def prune_coarsely(ast: f03.Program, keepers: Iterable[types.SPEC]) -> f03.Progr
                 elist_tdecl = elist.parent
                 assert isinstance(
                     elist_tdecl,
-                    (f03.Type_Declaration_Stmt, f03.Procedure_Declaration_Stmt, f03.Proc_Component_Def_Stmt))
+                    (f03.Type_Declaration_Stmt, f03.Procedure_Declaration_Stmt, f03.Proc_Component_Def_Stmt),
+                )
                 if not elist.children:
                     utils.remove_self(elist_tdecl)
                 removed_something = True
 
     for iface in walk(ast, f03.Interface_Stmt):
-        name, = iface.children
-        if name and name != 'ABSTRACT':
+        (name,) = iface.children
+        if name and name != "ABSTRACT":
             continue
         idef = iface.parent
         if not idef.children[1:-1]:
@@ -349,8 +363,8 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
         else:
             name_list.items = tuple(kept)
     for iface in walk(ast, f03.Interface_Stmt):
-        name, = iface.children
-        if name and name != 'ABSTRACT':
+        (name,) = iface.children
+        if name and name != "ABSTRACT":
             continue
         idef = iface.parent
         if not idef.children[1:-1]:
@@ -365,8 +379,14 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
 
     ``f2py_safe`` gives every emptied derived type a placeholder member (see below).
     Only needed on the f2py-wrapped path (CLOUDSC); a plain gfortran TU compiles empty types fine."""
-    PRUNABLE_OBJECT_CLASSES = (f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt, f03.Derived_Type_Stmt,
-                               f03.Entity_Decl, f03.Component_Decl)
+    PRUNABLE_OBJECT_CLASSES = (
+        f03.Program_Stmt,
+        f03.Subroutine_Stmt,
+        f03.Function_Stmt,
+        f03.Derived_Type_Stmt,
+        f03.Entity_Decl,
+        f03.Component_Decl,
+    )
 
     ident_map = analysis.identifier_specs(ast)
     alias_map = analysis.alias_specs(ast)
@@ -378,7 +398,8 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
         for nm in walk(node, f03.Name):
             loc = analysis.search_real_local_alias_spec(nm, alias_map)
             scope_spec = analysis.search_scope_spec(nm.parent)
-            if not loc or not scope_spec: continue
+            if not loc or not scope_spec:
+                continue
             nm_spec = analysis.ident_spec(alias_map[loc])
             if isinstance(nm.parent, f03.Entity_Decl) and nm is nm.parent.children[0]:
                 fnargs = ast_utils.atmost_one(ast_utils.children_of_type(alias_map[scope_spec], f03.Dummy_Arg_List))
@@ -386,21 +407,26 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
                 if any(a.string == nm.string for a in fnargs):
                     survivors.add(nm_spec)
                 continue
-            if isinstance(nm.parent, f03.Component_Decl) and nm is nm.parent.children[0]: continue
-            if isinstance(nm.parent, f03.Pointer_Assignment_Stmt) and nm is nm.parent.children[0]: continue
+            if isinstance(nm.parent, f03.Component_Decl) and nm is nm.parent.children[0]:
+                continue
+            if isinstance(nm.parent, f03.Pointer_Assignment_Stmt) and nm is nm.parent.children[0]:
+                continue
 
             for j in reversed(range(len(scope_spec))):
-                anc_spec = scope_spec[:j + 1]
-                if anc_spec in survivors: continue
+                anc_spec = scope_spec[: j + 1]
+                if anc_spec in survivors:
+                    continue
                 # INTERFACE_NAMESPACE is a synthetic scope-spec segment, not an object, so it's
                 # absent from alias_map -- skip an ancestor that doesn't resolve rather than index it blindly.
                 anc_node = alias_map.get(anc_spec)
-                if anc_node is None: continue
+                if anc_node is None:
+                    continue
                 survivors.add(anc_spec)
                 if isinstance(anc_node, PRUNABLE_OBJECT_CLASSES):
                     _keep_from(anc_node.parent)
 
-            if not nm_spec or nm_spec not in alias_map or nm_spec in survivors: continue
+            if not nm_spec or nm_spec not in alias_map or nm_spec in survivors:
+                continue
             survivors.add(nm_spec)
             keep_node = alias_map[nm_spec]
             if isinstance(keep_node, PRUNABLE_OBJECT_CLASSES):
@@ -415,15 +441,15 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
         # (``this % comp => x``) is a Data_Pointer_Object, not a Data_Ref, so it's invisible to
         # walk(Data_Ref) -- without this, an only-ever-assigned pointer component is wrongly pruned.
         comp_refs: List[Base] = list(walk(node, f03.Data_Ref))
-        comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if '%' in dpo.tofortran()]
+        comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if "%" in dpo.tofortran()]
         for dr in comp_refs:
             root, rest = analysis.lookup_dataref(dr, alias_map)
             if rest and isinstance(rest[0], f03.Section_Subscript_List):
                 root, rest = f03.Part_Ref(f"{root.tofortran()}({rest[0].tofortran()})"), rest[1:]
             scope_spec = analysis.find_scope_spec(dr)
             for upto in range(1, len(rest) + 1):
-                anc_nodes: Tuple[f03.Name, ...] = (root, ) + rest[:upto]
-                ancref = f03.Data_Ref('%'.join([c.tofortran() for c in anc_nodes]))
+                anc_nodes: Tuple[f03.Name, ...] = (root,) + rest[:upto]
+                ancref = f03.Data_Ref("%".join([c.tofortran() for c in anc_nodes]))
                 ancspec = analysis.find_dataref_component_spec(ancref, scope_spec, alias_map)
                 survivors.add(ancspec)
 
@@ -433,20 +459,23 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
     killed: Set[types.SPEC] = set()
     for ns in sorted(set(ident_map.keys()) - survivors):
         ns_node = ident_map[ns]
-        if not isinstance(ns_node, PRUNABLE_OBJECT_CLASSES): continue
+        if not isinstance(ns_node, PRUNABLE_OBJECT_CLASSES):
+            continue
         is_killed = False
         for i in range(len(ns) - 1):
-            anc_spec = ns[:i + 1]
+            anc_spec = ns[: i + 1]
             if anc_spec in killed:
                 killed.add(ns)
                 is_killed = True
                 break
-        if is_killed: continue
+        if is_killed:
+            continue
         ns_typ = analysis.find_type_of_entity(ns_node, alias_map)
         if isinstance(ns_node, f03.Entity_Decl) and ns_typ is not None and ns_typ.pointer:
             for pa in walk(ast, f03.Pointer_Assignment_Stmt):
                 dst = pa.children[0]
-                if not isinstance(dst, f03.Name): continue
+                if not isinstance(dst, f03.Name):
+                    continue
                 dst_spec = analysis.search_real_local_alias_spec(dst, alias_map)
                 if dst_spec and alias_map[dst_spec] is ns_node:
                     utils.remove_self(pa)
@@ -460,13 +489,14 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
             elist_spart = elist_tdecl.parent
             assert isinstance(elist_spart, f03.Specification_Part)
             for c in elist_spart.children:
-                if not isinstance(c, f03.Equivalence_Stmt): continue
+                if not isinstance(c, f03.Equivalence_Stmt):
+                    continue
                 _, eqvs = c.children
                 eqvs = eqvs.children if eqvs else tuple()
                 for eqv in eqvs:
                     eqa, eqbs = eqv.children
                     eqbs = eqbs.children if eqbs else tuple()
-                    eqz = (eqa, ) + eqbs
+                    eqz = (eqa,) + eqbs
                     assert all(isinstance(z, f03.Part_Ref) for z in eqz) and len(eqz) == 2
                     eqz = tuple(z for z in eqz if analysis.search_real_local_alias_spec(z.children[0], alias_map) != ns)
                     if len(eqz) < 2:
@@ -500,7 +530,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
             # is never truly empty; a placeholder here would duplicate the inherited component and
             # gfortran rejects it ("already in the parent type").
             attrs = tstmt.children[0]
-            if attrs and any(isinstance(a, f03.Type_Attr_Spec) and a.children[0] == 'EXTENDS' for a in attrs.children):
+            if attrs and any(isinstance(a, f03.Type_Attr_Spec) and a.children[0] == "EXTENDS" for a in attrs.children):
                 continue
             utils.replace_node(tstmt, (tstmt, f03.Data_Component_Def_Stmt("INTEGER :: pruned_type_placeholder")))
 
@@ -537,7 +567,7 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
     """Helper to prune an `If_Construct` (a multi-line IF block)."""
     ifthen = ib.children[0]
     assert isinstance(ifthen, f03.If_Then_Stmt)
-    cond, = ifthen.children
+    (cond,) = ifthen.children
     cval = analysis.const_eval_basic_type(cond, alias_map)
     if cval is None:
         return
@@ -556,14 +586,14 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
     cut = elifat[0]
     cut_cond_node = ib.children[cut]
     if isinstance(cut_cond_node, f03.Else_Stmt):
-        actions = ib.children[cut + 1:-1]
+        actions = ib.children[cut + 1 : -1]
         utils.replace_node(ib, actions)
         return
 
     assert isinstance(cut_cond_node, f03.Else_If_Stmt)
     cut_cond, _ = cut_cond_node.children
-    utils.remove_children(ib, ib.children[1:(cut + 1)])
-    utils.set_children(ifthen, (cut_cond, ))
+    utils.remove_children(ib, ib.children[1 : (cut + 1)])
+    utils.set_children(ifthen, (cut_cond,))
     _prune_branches_in_ifblock(ib, alias_map)
 
 

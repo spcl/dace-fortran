@@ -29,7 +29,7 @@ subroutine main(a, b, out)
   out = SIGN(a, b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     for a_in, b_in, expected in [(3.0, 5.0, 3.0), (3.0, -5.0, -3.0), (-3.0, 5.0, 3.0), (-3.0, -5.0, -3.0)]:
         out = np.zeros(1, dtype=np.float64)
         sdfg(a=a_in, b=b_in, out=out)
@@ -45,7 +45,7 @@ subroutine main(a, b, out)
   out = SIGN(a, b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     for a_in, b_in, expected in [(7, 3, 7), (7, -3, -7), (-7, 3, 7), (-7, -3, -7)]:
         out = np.zeros(1, dtype=np.int32)
         sdfg(a=a_in, b=b_in, out=out)
@@ -66,7 +66,7 @@ subroutine main(a, b, out)
   out = DIM(a, b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     for a_in, b_in, expected in [(5.0, 3.0, 2.0), (3.0, 5.0, 0.0), (-1.0, -3.0, 2.0), (4.0, 4.0, 0.0)]:
         out = np.zeros(1, dtype=np.float64)
         sdfg(a=a_in, b=b_in, out=out)
@@ -82,7 +82,7 @@ subroutine main(a, b, out)
   out = DIM(a, b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     for a_in, b_in, expected in [(8, 3, 5), (3, 8, 0), (-2, -7, 5), (4, 4, 0)]:
         out = np.zeros(1, dtype=np.int32)
         sdfg(a=a_in, b=b_in, out=out)
@@ -104,7 +104,7 @@ subroutine main(arr, n, m, out)
   out = SHAPE(arr)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(0)
     n, m = 4, 7
     arr = np.asfortranarray(rng.random((n, m)))
@@ -123,7 +123,7 @@ subroutine main(arr, n, m, p, out)
   out = SHAPE(arr)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(1)
     n, m, p = 3, 5, 2
     arr = np.asfortranarray(rng.random((n, m, p)))

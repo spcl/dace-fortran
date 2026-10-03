@@ -4,6 +4,7 @@ Covers: (1) emitter text-output structural checks (no compile), (2)
 ``UnsupportedShimInterfaceError`` on unsupported derived-type interfaces, (3)
 e2e -- build+link+ctypes-call the shim, compare against a gfortran reference.
 """
+
 import ctypes
 import re
 import shutil
@@ -18,7 +19,6 @@ from dace_fortran.bindings import (
     Member,
     OriginalArg,
     OriginalInterface,
-    UnsupportedShimInterfaceError,
     build_fortran_library,
     emit_bind_c_shim,
 )
@@ -40,8 +40,8 @@ def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
         entry="kern",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
-            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="out"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n",), intent="in"),
+            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n",), intent="out"),
         ),
     )
     out = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90"))
@@ -56,7 +56,7 @@ def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
     assert "call c_f_pointer(y_p, y, [n])" in text
     assert "call kern_dace(n, x, y)" in text
     assert "call kern_dace_finalize()" in text
-    assert ("use kern_dace_bindings, only: kern_dace, kern_dace_finalize" in text)
+    assert "use kern_dace_bindings, only: kern_dace, kern_dace_finalize" in text
 
 
 def test_emit_shim_scalar_output_is_length1_array(tmp_path: Path):
@@ -66,7 +66,7 @@ def test_emit_shim_scalar_output_is_length1_array(tmp_path: Path):
         entry="reduce",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n",), intent="in"),
             OriginalArg(name="s", fortran_type="real(c_double)", rank=0, intent="out"),
         ),
     )
@@ -113,8 +113,7 @@ def test_emit_shim_forwards_module_var_array_extents(tmp_path: Path):
     assert text.count("integer(c_int), value :: nproma") == 1
     assert text.count("integer(c_int), value :: n_zlev") == 1
     # Prepended (extents first), ahead of the scalar dummy + array ptrs.
-    assert ("subroutine ppm_c(nproma, n_zlev, vt, tracer_p, w_p, flux_p) "
-            "bind(c, name='ppm_c')" in text)
+    assert "subroutine ppm_c(nproma, n_zlev, vt, tracer_p, w_p, flux_p) bind(c, name='ppm_c')" in text
     # c_f_pointer shapes resolve against the forwarded names; n_zlev + 1 rides verbatim.
     assert "call c_f_pointer(tracer_p, tracer, [nproma, n_zlev])" in text
     assert "call c_f_pointer(w_p, w, [nproma, n_zlev + 1])" in text
@@ -128,7 +127,7 @@ def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
         entry="kern",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="a", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="inout"),
+            OriginalArg(name="a", fortran_type="real(c_double)", rank=1, shape=("n",), intent="inout"),
         ),
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
@@ -144,16 +143,15 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     TRUE bounds ``(lb : lb + d - 1)`` and element-copies in/out per ``intent``."""
     iface = OriginalInterface(
         entry="kern",
-        args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"), ),
+        args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"),),
         struct_types={
-            "t_state":
-            DerivedType(
+            "t_state": DerivedType(
                 name="t_state",
                 module="mo_state",
-                members=(Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?", )), ),
+                members=(Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?",)),),
             )
         },
-        used_modules={"mo_state": ("t_state", )},
+        used_modules={"mo_state": ("t_state",)},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     # Per-dim lower-bound then extent arg precede the pointer arg.
@@ -173,10 +171,9 @@ def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
     slot per member, plus a local instance assembled by copy-in/copy-out."""
     iface = OriginalInterface(
         entry="kern",
-        args=(OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0, intent="inout", struct_type="t_fields"), ),
+        args=(OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0, intent="inout", struct_type="t_fields"),),
         struct_types={
-            "t_fields":
-            DerivedType(
+            "t_fields": DerivedType(
                 name="t_fields",
                 module="mo_fields",
                 members=(
@@ -212,19 +209,19 @@ def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
     whole-array ``arr%x`` descent."""
     iface = OriginalInterface(
         entry="kern",
-        args=(OriginalArg(name="p",
-                          fortran_type="type(t_cc)",
-                          rank=2,
-                          intent="inout",
-                          struct_type="t_cc",
-                          shape=(":", ":")), ),
+        args=(
+            OriginalArg(
+                name="p", fortran_type="type(t_cc)", rank=2, intent="inout", struct_type="t_cc", shape=(":", ":")
+            ),
+        ),
         struct_types={
-            "t_cc":
-            DerivedType(name="t_cc",
-                        module="mo_cc",
-                        members=(Member(name="x", fortran_type="real(c_double)", rank=1, shape=("3", )), ))
+            "t_cc": DerivedType(
+                name="t_cc",
+                module="mo_cc",
+                members=(Member(name="x", fortran_type="real(c_double)", rank=1, shape=("3",)),),
+            )
         },
-        used_modules={"mo_cc": ("t_cc", )},
+        used_modules={"mo_cc": ("t_cc",)},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     # Local allocatable + PER-FIELD outer-extent value args (<flat>_<field>_d<i>),
@@ -251,21 +248,23 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
     One shared allocate (array-of-records) uses the first field's extents."""
     iface = OriginalInterface(
         entry="kern",
-        args=(OriginalArg(name="s", fortran_type="type(t_edges)", rank=0, intent="in", struct_type="t_edges"), ),
+        args=(OriginalArg(name="s", fortran_type="type(t_edges)", rank=0, intent="in", struct_type="t_edges"),),
         struct_types={
-            "t_edges":
-            DerivedType(name="t_edges",
-                        module="mo_edges",
-                        members=(Member(name="pnc",
-                                        fortran_type="type(t_tv)",
-                                        rank=3,
-                                        shape=("?", "?", "?"),
-                                        struct_name="t_tv"), )),
-            "t_tv":
-            DerivedType(name="t_tv",
-                        module="mo_edges",
-                        members=(Member(name="v1", fortran_type="real(c_double)",
-                                        rank=0), Member(name="v2", fortran_type="real(c_double)", rank=0))),
+            "t_edges": DerivedType(
+                name="t_edges",
+                module="mo_edges",
+                members=(
+                    Member(name="pnc", fortran_type="type(t_tv)", rank=3, shape=("?", "?", "?"), struct_name="t_tv"),
+                ),
+            ),
+            "t_tv": DerivedType(
+                name="t_tv",
+                module="mo_edges",
+                members=(
+                    Member(name="v1", fortran_type="real(c_double)", rank=0),
+                    Member(name="v2", fortran_type="real(c_double)", rank=0),
+                ),
+            ),
         },
         used_modules={"mo_edges": ("t_edges", "t_tv")},
     )
@@ -280,8 +279,9 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
     # v2_p) -- emit_library's per_member_soa interleave.
     sig = re.search(r"subroutine\s+kern_c\(([^)]*)\)", text, re.S).group(1).replace("&", " ")
     order = [a.strip() for a in sig.split(",") if a.strip()]
-    assert order.index("s_pnc_v1_d0") < order.index("s_pnc_v1_p") < order.index("s_pnc_v2_d0") \
-        < order.index("s_pnc_v2_p"), f"per-field extent/pointer interleave wrong: {order}"
+    assert (
+        order.index("s_pnc_v1_d0") < order.index("s_pnc_v1_p") < order.index("s_pnc_v2_d0") < order.index("s_pnc_v2_p")
+    ), f"per-field extent/pointer interleave wrong: {order}"
     # Single shared allocate from the first field's extents.
     assert "allocate(s%pnc(s_pnc_v1_d0, s_pnc_v1_d1, s_pnc_v1_d2))" in text
 
@@ -295,30 +295,32 @@ def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_p
         entry="kern",
         args=(
             OriginalArg(name="patch", fortran_type="type(t_patch3d)", rank=0, intent="in", struct_type="t_patch3d"),
-            OriginalArg(name="fld", fortran_type="real(c_double)", rank=1, intent="inout", shape=("patch_p1d_nblk", )),
+            OriginalArg(name="fld", fortran_type="real(c_double)", rank=1, intent="inout", shape=("patch_p1d_nblk",)),
         ),
         struct_types={
-            "t_patch3d":
-            DerivedType(name="t_patch3d",
-                        module="mo_dom",
-                        members=(Member(name="p1d",
-                                        fortran_type="type(t_pv)",
-                                        rank=1,
-                                        shape=("?", ),
-                                        struct_name="t_pv"), )),
-            "t_pv":
-            DerivedType(name="t_pv",
-                        module="mo_dom",
-                        members=(Member(name="nblk", fortran_type="integer(c_int)", rank=0),
-                                 Member(name="dolic", fortran_type="integer(c_int)", rank=2, shape=("?", "?")))),
+            "t_patch3d": DerivedType(
+                name="t_patch3d",
+                module="mo_dom",
+                members=(Member(name="p1d", fortran_type="type(t_pv)", rank=1, shape=("?",), struct_name="t_pv"),),
+            ),
+            "t_pv": DerivedType(
+                name="t_pv",
+                module="mo_dom",
+                members=(
+                    Member(name="nblk", fortran_type="integer(c_int)", rank=0),
+                    Member(name="dolic", fortran_type="integer(c_int)", rank=2, shape=("?", "?")),
+                ),
+            ),
         },
         used_modules={"mo_dom": ("t_patch3d", "t_pv")},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     assert "allocate(patch%p1d(1))" in text
     assert "patch%p1d(1)%nblk = patch_p1d_nblk" in text
-    assert ("allocate(patch%p1d(1)%dolic(patch_p1d_dolic_lb0 : patch_p1d_dolic_lb0 + patch_p1d_dolic_d0 - 1, "
-            "patch_p1d_dolic_lb1 : patch_p1d_dolic_lb1 + patch_p1d_dolic_d1 - 1))") in text
+    assert (
+        "allocate(patch%p1d(1)%dolic(patch_p1d_dolic_lb0 : patch_p1d_dolic_lb0 + patch_p1d_dolic_d0 - 1, "
+        "patch_p1d_dolic_lb1 : patch_p1d_dolic_lb1 + patch_p1d_dolic_d1 - 1))"
+    ) in text
     assert "patch%p1d(1)%dolic = patch_p1d_dolic" in text
     assert "integer(c_int), value :: patch_p1d_nblk" in text
     assert text.count("patch_p1d_nblk") == 4  # header arg + decl + struct copy + array shape
@@ -466,19 +468,20 @@ end subroutine shim_kern_c
 # shapes it can't carry yet (nested struct, allocatable member, ...).
 _STRUCT_IFACE = OriginalInterface(
     entry="shim_kern",
-    args=(OriginalArg(name="fld",
-                      fortran_type="type(t_shim_fields)",
-                      rank=0,
-                      intent="inout",
-                      struct_type="t_shim_fields"), ),
+    args=(
+        OriginalArg(
+            name="fld", fortran_type="type(t_shim_fields)", rank=0, intent="inout", struct_type="t_shim_fields"
+        ),
+    ),
     struct_types={
-        "t_shim_fields":
-        DerivedType(name="t_shim_fields",
-                    module="mo_shim_fields",
-                    members=(
-                        Member(name="a", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
-                        Member(name="b", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
-                    ))
+        "t_shim_fields": DerivedType(
+            name="t_shim_fields",
+            module="mo_shim_fields",
+            members=(
+                Member(name="a", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
+                Member(name="b", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
+            ),
+        )
     },
     used_modules={"mo_shim_fields": ("t_shim_fields", "NX", "NY")},
 )
@@ -501,6 +504,7 @@ def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
     sdfg.name = name
     sdfg.build_folder = str(tmp_path / "dacecache")
     from dace_fortran.bindings import FlattenPlan
+
     plan = FlattenPlan.from_dict(plan_dict)
     lib = build_fortran_library(
         sdfg,
@@ -583,14 +587,16 @@ def test_snapshot_skips_pointer_to_record_handle_member(tmp_path):
     """Struct-layout snapshot omits a pointer-to-record handle member; shim
     reconstructs real data members (``area``, ``nblks_e``) but none of the handle's pointee record."""
     from dace_fortran.bindings.fortran_interface import build_auto_interface
+
     sdfg_dir = tmp_path / "sdfg"
     sdfg = build_sdfg(_HANDLE_SNAPSHOT_SRC, sdfg_dir, name="kern", entry="m_handle_snap::kern").build()
     iface = build_auto_interface(sdfg._fortran_interface_raw, "kern")
     # The handle member carries no layout the shim can reconstruct.
     tp = iface.struct_types["t_patch"]
     member_names = {m.name for m in tp.members}
-    assert "comm_pat_c" not in member_names, \
+    assert "comm_pat_c" not in member_names, (
         f"pointer-to-record handle leaked into the struct snapshot: {sorted(member_names)}"
+    )
     assert {"nblks_e", "area"} <= member_names, f"real data members missing: {sorted(member_names)}"
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     assert "comm_pat_c" not in text, "shim reconstructed the pointer-to-record handle"

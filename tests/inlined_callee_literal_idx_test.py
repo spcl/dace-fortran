@@ -55,12 +55,14 @@ def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
     sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer_mod::outer").build()
     sdfg.validate()
 
-    inferred_offset = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')
-    assert inferred_offset == -5, (f"expected offset_arr_d0 == -5 (literal propagated through "
-                                   f"inlined subroutine + load/store chain); got {inferred_offset}.  "
-                                   f"This is the bridge gap identified in velocity_full bisection.")
+    inferred_offset = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0")
+    assert inferred_offset == -5, (
+        f"expected offset_arr_d0 == -5 (literal propagated through "
+        f"inlined subroutine + load/store chain); got {inferred_offset}.  "
+        f"This is the bridge gap identified in velocity_full bisection."
+    )
 
     arr = np.asfortranarray(np.array([100, 200, 300, 400, 500], dtype=np.int32))  # 5 elements
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out, arr_d0=np.int64(5))
     assert out[0] == 100, f"arr(-5) (first element with lb=-5) should be 100; got {out[0]}"

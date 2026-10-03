@@ -2,6 +2,7 @@
 bare ``hlfir.region_assign``) must raise, not be silently skipped by ``buildAST`` --
 skipping used to drop the computation and produce a wrong result with no error.
 """
+
 from pathlib import Path
 
 import pytest

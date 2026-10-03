@@ -31,6 +31,7 @@ Every subroutine fills its own target deterministically so the test is
 self-contained -- only the ``intent(out)`` result (and any scalar
 ``intent(in)`` index) crosses the boundary.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -677,7 +678,7 @@ subroutine main(out)
   out = reshape(a, [20])
 end subroutine main
 """
-    mod = f2py_compile(src, tmp_path / "ref", "h_call", only=("main", ))
+    mod = f2py_compile(src, tmp_path / "ref", "h_call", only=("main",))
     ref = np.asarray(mod.main(), dtype=np.float64)
 
     out = np.zeros(20, order="F", dtype=np.float64)
@@ -717,7 +718,7 @@ subroutine main(out)
   call total(p, 12, out)
 end subroutine main
 """
-    mod = f2py_compile(src, tmp_path / "ref", "h_ro_call", only=("main", ))
+    mod = f2py_compile(src, tmp_path / "ref", "h_ro_call", only=("main",))
     ref = float(np.asarray(mod.main(), dtype=np.float64))
 
     out = np.zeros(1, order="F", dtype=np.float64)
@@ -758,7 +759,7 @@ subroutine main(out)
   out = reshape(a, [20])
 end subroutine main
 """
-    mod = f2py_compile(src, tmp_path / "ref", "h_sec_call", only=("main", ))
+    mod = f2py_compile(src, tmp_path / "ref", "h_sec_call", only=("main",))
     ref = np.asarray(mod.main(), dtype=np.float64)
 
     out = np.zeros(20, order="F", dtype=np.float64)

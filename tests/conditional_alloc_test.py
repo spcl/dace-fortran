@@ -10,7 +10,6 @@ patterns the bridge must tell apart:
 
 Each kernel checked against an f2py reference on several inputs.
 """
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -113,8 +112,12 @@ subroutine probe(sel, n1, n2, n3, n4, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src, [(1, 5, 3, 7, 2), (2, 5, 3, 7, 2), (3, 5, 3, 7, 2), (4, 5, 3, 7, 2)],
-                ["sel", "n1", "n2", "n3", "n4"])
+    sdfg = _run(
+        tmp_path,
+        src,
+        [(1, 5, 3, 7, 2), (2, 5, 3, 7, 2), (3, 5, 3, 7, 2), (4, 5, 3, 7, 2)],
+        ["sel", "n1", "n2", "n3", "n4"],
+    )
     assert "a_alloc1" not in sdfg.arrays
     assert str(sdfg.arrays["a"].shape) == "(a_d0,)"
 
@@ -310,4 +313,4 @@ subroutine probe(n, out)
 end subroutine probe
 end module probe_mod
 """
-    _run(tmp_path, src, [(5, ), (3, ), (8, )], ["n"])
+    _run(tmp_path, src, [(5,), (3,), (8,)], ["n"])

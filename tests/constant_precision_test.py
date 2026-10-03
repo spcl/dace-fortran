@@ -31,7 +31,7 @@ subroutine main(out)
 end subroutine main
 end module main_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main_mod::main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main_mod::main").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 3.14159265358979323846 * 2.0
@@ -47,7 +47,7 @@ subroutine main(out)
   out = 1.0d0 / 3.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 1.0 / 3.0
@@ -64,7 +64,7 @@ subroutine main(out)
   out = 1.234567890123456d0 * 2.0d0 + 0.987654321098765d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 1.234567890123456 * 2.0 + 0.987654321098765
@@ -76,7 +76,8 @@ def _tasklet_code(sdfg) -> str:
     import dace
 
     return "\n".join(
-        str(n.code.as_string) for st in sdfg.states() for n in st.nodes() if isinstance(n, dace.nodes.Tasklet))
+        str(n.code.as_string) for st in sdfg.states() for n in st.nodes() if isinstance(n, dace.nodes.Tasklet)
+    )
 
 
 _SRC_F32 = """
@@ -139,8 +140,9 @@ def test_single_constant_emits_float32_cast(tmp_path: Path):
 
     code = _tasklet_code(sdfg)
     # bridge emits bare float32(...); d-face's cppunparse lowers it to dace::float32(...) at codegen for correct single-precision rounding (verified below).
-    assert "float32(" in code, (f"fp32 constant must be wrapped in a float32(...) cast for correct "
-                                f"rounding; tasklet code was: {code}")
+    assert "float32(" in code, (
+        f"fp32 constant must be wrapped in a float32(...) cast for correct rounding; tasklet code was: {code}"
+    )
     assert sdfg.arrays["y"].dtype.type == np.float32
 
     ref = f2py_compile(_SRC_F32, d / "ref", "cst32_ref")
@@ -162,8 +164,7 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
-    assert "float32(0.1)" in code, (f"expected shortest-roundtrip f32 literal float32(0.1); "
-                                    f"got: {code}")
+    assert "float32(0.1)" in code, f"expected shortest-roundtrip f32 literal float32(0.1); got: {code}"
     assert "float32(0.2)" in code, code
-    assert "0.10000000149011612" not in code, (f"f32 constant widened to f64 17-digit form: {code}")
+    assert "0.10000000149011612" not in code, f"f32 constant widened to f64 17-digit form: {code}"
     assert "0.20000000298023224" not in code, code

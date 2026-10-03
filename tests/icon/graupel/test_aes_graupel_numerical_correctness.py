@@ -4,15 +4,28 @@ Compiles ``mo_aes_graupel + mo_aes_thermo + mo_kind + mo_physical_constants`` as
 
 Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used to size from unbound extents that call-time auto-fill defaulted to 1, under-allocating and overflowing the heap, until the ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it.
 """
+
 import numpy as np
 import pytest
 
 from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files
 
-from ._graupel_harness import (DEP_SOURCES, ENTRY, ORIGINAL_SOURCE, SCENARIOS, Config, assert_families_fire,
-                               assert_match, compile_reference, copy_fields, physical_columns, run_reference, run_sdfg,
-                               zero_outputs)
+from ._graupel_harness import (
+    DEP_SOURCES,
+    ENTRY,
+    ORIGINAL_SOURCE,
+    SCENARIOS,
+    Config,
+    assert_families_fire,
+    assert_match,
+    compile_reference,
+    copy_fields,
+    physical_columns,
+    run_reference,
+    run_sdfg,
+    zero_outputs,
+)
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -28,10 +41,9 @@ def reference(tmp_path_factory):
 @pytest.fixture(scope="module")
 def sdfg(tmp_path_factory):
     out = tmp_path_factory.mktemp("graupel_orig_sdfg")
-    built = build_sdfg_from_files([*DEP_SOURCES, ORIGINAL_SOURCE],
-                                  entry=ENTRY,
-                                  name="graupel_run",
-                                  out_dir=out / "build")
+    built = build_sdfg_from_files(
+        [*DEP_SOURCES, ORIGINAL_SOURCE], entry=ENTRY, name="graupel_run", out_dir=out / "build"
+    )
     built.validate()
     return built
 
@@ -57,21 +69,20 @@ def test_aes_graupel_e2e_offsets(reference, sdfg):
     """``ivstart > 1``, ``ivend < nvec`` and ``kstart > 1`` match gfortran; columns and levels outside the range are untouched."""
     inputs, ref, got = _run_both(reference, sdfg, Config(2, len(SCENARIOS) - 1, 4))
     assert_match(ref, got, RTOL, ATOL)
-    for n in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'):
+    for n in ("t", "qv", "qc", "qi", "qr", "qs", "qg"):
         np.testing.assert_array_equal(got[n][:, :3], inputs[n][:, :3])
         np.testing.assert_array_equal(got[n][[0, len(SCENARIOS) - 1]], inputs[n][[0, len(SCENARIOS) - 1]])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import tempfile
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as tmp:
         ref_lib = compile_reference(Path(tmp) / "ref", [ORIGINAL_SOURCE])
-        built = build_sdfg_from_files([*DEP_SOURCES, ORIGINAL_SOURCE],
-                                      entry=ENTRY,
-                                      name="graupel_run",
-                                      out_dir=Path(tmp) / "build")
+        built = build_sdfg_from_files(
+            [*DEP_SOURCES, ORIGINAL_SOURCE], entry=ENTRY, name="graupel_run", out_dir=Path(tmp) / "build"
+        )
         built.validate()
         test_aes_graupel_e2e_numerical(ref_lib, built)
         test_aes_graupel_e2e_offsets(ref_lib, built)

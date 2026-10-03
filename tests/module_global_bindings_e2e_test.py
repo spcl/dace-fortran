@@ -2,6 +2,7 @@
 
 Each case is compared against a gfortran reference: the same shim calling the original (un-transformed) subroutine.
 """
+
 import ctypes
 import subprocess
 from pathlib import Path
@@ -24,8 +25,8 @@ def _iface(sub: str) -> OriginalInterface:
     return OriginalInterface(
         entry=sub,
         args=(
-            OriginalArg(name='x', fortran_type='real(c_double)', rank=1, shape=(str(_N), ), intent='in'),
-            OriginalArg(name='y', fortran_type='real(c_double)', rank=1, shape=(str(_N), ), intent='out'),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=(str(_N),), intent="in"),
+            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=(str(_N),), intent="out"),
         ),
     )
 
@@ -54,19 +55,29 @@ end subroutine run_kern
 
 
 def _gfortran(out_so: Path, *sources, mod_dir: Path):
-    subprocess.check_call([
-        "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
-        f"-J{mod_dir}", *[str(s) for s in sources], "-o",
-        str(out_so)
-    ],
-                          cwd=mod_dir)
+    subprocess.check_call(
+        [
+            "gfortran",
+            "-shared",
+            "-fPIC",
+            "-O0",
+            "-fno-fast-math",
+            "-ffp-contract=off",
+            "-ffree-line-length-none",
+            f"-J{mod_dir}",
+            *[str(s) for s in sources],
+            "-o",
+            str(out_so),
+        ],
+        cwd=mod_dir,
+    )
 
 
 def _invoke(lib, x, set_vals, n_read):
     """Call ``run_kern`` through ``lib`` and return ``(y, [read values])``."""
-    y = np.zeros(_N, dtype=np.float64, order='F')
-    set_bufs = [np.array([v], dtype=np.float64, order='F') for v in set_vals]
-    read_bufs = [np.zeros(1, dtype=np.float64, order='F') for _ in range(n_read)]
+    y = np.zeros(_N, dtype=np.float64, order="F")
+    set_bufs = [np.array([v], dtype=np.float64, order="F") for v in set_vals]
+    read_bufs = [np.zeros(1, dtype=np.float64, order="F") for _ in range(n_read)]
     fn = lib.run_kern
     fn.restype = None
     fn.argtypes = [ctypes.c_void_p] * (2 + len(set_bufs) + len(read_bufs))
@@ -94,13 +105,15 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
     dace_shim = tmp_path / "dace_shim.f90"
     dace_shim.write_text(_shim(f"{sub}_dace", (f"{sub}_dace_bindings", f"{sub}_dace"), uses, set_pairs, read_pairs))
-    lib = build_fortran_library(sdfg,
-                                _iface(sub),
-                                plan,
-                                str(tmp_path / "lib"),
-                                name=f"{sub}_lib",
-                                prelude_sources=[src_path],
-                                extra_sources=[dace_shim])
+    lib = build_fortran_library(
+        sdfg,
+        _iface(sub),
+        plan,
+        str(tmp_path / "lib"),
+        name=f"{sub}_lib",
+        prelude_sources=[src_path],
+        extra_sources=[dace_shim],
+    )
     dace_lib = lib.load()
 
     ref_dir = tmp_path / "ref"
@@ -113,14 +126,13 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
     x = np.asfortranarray(np.arange(1, _N + 1, dtype=np.float64))
     y_dace, reads_dace = _invoke(dace_lib, x, set_vals, len(read_pairs))
-    y_ref, reads_ref = _invoke(ref_lib, x.copy(order='F'), set_vals, len(read_pairs))
+    y_ref, reads_ref = _invoke(ref_lib, x.copy(order="F"), set_vals, len(read_pairs))
 
     np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="binding output disagrees with reference")
     for nm, dval, rval in zip(reads, reads_dace, reads_ref):
-        np.testing.assert_allclose(dval,
-                                   rval,
-                                   rtol=1e-12,
-                                   err_msg=f"module global {nm!r} write-back disagrees with reference")
+        np.testing.assert_allclose(
+            dval, rval, rtol=1e-12, err_msg=f"module global {nm!r} write-back disagrees with reference"
+        )
 
 
 def test_e2e_parameter_baked(tmp_path: Path):
@@ -160,13 +172,15 @@ contains
   end subroutine apply_cfg
 end module mod_cfg
 """
-    _e2e(tmp_path,
-         "cfg",
-         src,
-         kern_mod="mod_cfg",
-         sub="apply_cfg",
-         uses=[("mod_cfg", "cfg_scale")],
-         sets=[("cfg_scale", 3.0)])
+    _e2e(
+        tmp_path,
+        "cfg",
+        src,
+        kern_mod="mod_cfg",
+        sub="apply_cfg",
+        uses=[("mod_cfg", "cfg_scale")],
+        sets=[("cfg_scale", 3.0)],
+    )
 
 
 def test_e2e_initialised_readonly_global_baked(tmp_path: Path):
@@ -207,14 +221,16 @@ contains
   end subroutine bump
 end module mod_acc
 """
-    _e2e(tmp_path,
-         "acc",
-         src,
-         kern_mod="mod_acc",
-         sub="bump",
-         uses=[("mod_acc", "counter")],
-         sets=[("counter", 100.0)],
-         reads=["counter"])
+    _e2e(
+        tmp_path,
+        "acc",
+        src,
+        kern_mod="mod_acc",
+        sub="bump",
+        uses=[("mod_acc", "counter")],
+        sets=[("counter", 100.0)],
+        reads=["counter"],
+    )
 
 
 def test_e2e_written_global_no_init_writeback(tmp_path: Path):
@@ -235,14 +251,16 @@ contains
   end subroutine use_tmp
 end module mod_scr
 """
-    _e2e(tmp_path,
-         "scr",
-         src,
-         kern_mod="mod_scr",
-         sub="use_tmp",
-         uses=[("mod_scr", "tmpval")],
-         sets=[("tmpval", 0.0)],
-         reads=["tmpval"])
+    _e2e(
+        tmp_path,
+        "scr",
+        src,
+        kern_mod="mod_scr",
+        sub="use_tmp",
+        uses=[("mod_scr", "tmpval")],
+        sets=[("tmpval", 0.0)],
+        reads=["tmpval"],
+    )
 
 
 def test_e2e_cross_module_written_writeback(tmp_path: Path):
@@ -268,14 +286,16 @@ contains
   end subroutine use_state
 end module mod_kern_b
 """
-    _e2e(tmp_path,
-         "xstate",
-         src,
-         kern_mod="mod_kern_b",
-         sub="use_state",
-         uses=[("mod_state_x", "accum")],
-         sets=[("accum", 1.0)],
-         reads=["accum"])
+    _e2e(
+        tmp_path,
+        "xstate",
+        src,
+        kern_mod="mod_kern_b",
+        sub="use_state",
+        uses=[("mod_state_x", "accum")],
+        sets=[("accum", 1.0)],
+        reads=["accum"],
+    )
 
 
 def test_e2e_allocatable_module_array_zero_copy_alias(tmp_path: Path):
@@ -329,13 +349,15 @@ subroutine run_kern(xin, yout, gset) bind(c, name="run_kern")
   call apply_alias_dace(xin, yout)
 end subroutine run_kern
 """)
-    lib = build_fortran_library(sdfg,
-                                _iface("apply_alias"),
-                                plan,
-                                str(tmp_path / "lib"),
-                                name="alias_lib",
-                                prelude_sources=[src_path],
-                                extra_sources=[dace_shim])
+    lib = build_fortran_library(
+        sdfg,
+        _iface("apply_alias"),
+        plan,
+        str(tmp_path / "lib"),
+        name="alias_lib",
+        prelude_sources=[src_path],
+        extra_sources=[dace_shim],
+    )
     dace_lib = lib.load()
 
     ref_dir = tmp_path / "ref"
@@ -360,5 +382,5 @@ end subroutine run_kern
 
     x = np.asfortranarray(np.arange(1, _N + 1, dtype=np.float64))
     y_dace, _ = _invoke(dace_lib, x, [5.0], 0)
-    y_ref, _ = _invoke(ref_lib, x.copy(order='F'), [5.0], 0)
+    y_ref, _ = _invoke(ref_lib, x.copy(order="F"), [5.0], 0)
     np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="aliased module array disagrees with reference")

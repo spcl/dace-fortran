@@ -20,6 +20,7 @@ first-arm-baked contract.
 
 Companion doc: bug2_char_flatten_sibling_checks.md
 """
+
 import shutil
 from pathlib import Path
 
@@ -96,9 +97,11 @@ def _call_kwargs(sdfg, n, y, a_c, a_r, *, a_c_present, a_r_present):
         kw["a_r_present"] = a_r_present
     if "flag" in args:
         import dace
+
         desc = sdfg.arrays["flag"]
-        kw["flag"] = (desc.dtype.type(ord("c")) if isinstance(desc, dace.data.Scalar) else np.array([ord("c")],
-                                                                                                    dtype=np.int8))
+        kw["flag"] = (
+            desc.dtype.type(ord("c")) if isinstance(desc, dace.data.Scalar) else np.array([ord("c")], dtype=np.int8)
+        )
     return kw
 
 
@@ -118,10 +121,12 @@ def test_first_arm_baked_and_computes(tmp_path: Path):
 def _flag_stores(sdfg) -> dict:
     """``set_<flag>`` tasklet bodies, one per logical the char dispatch computes."""
     import dace
+
     return {
-        nd.label[len("set_"):]: nd.code.as_string.strip()
+        nd.label[len("set_") :]: nd.code.as_string.strip()
         for st in sdfg.all_states()
-        for nd in st.nodes() if isinstance(nd, dace.nodes.Tasklet) and nd.label.startswith("set_add_")
+        for nd in st.nodes()
+        if isinstance(nd, dace.nodes.Tasklet) and nd.label.startswith("set_add_")
     }
 
 
@@ -149,9 +154,9 @@ def test_dead_arm_validation_pruned_or_compensated(tmp_path: Path):
         "dead-arm optional still gates the kernel: 'a_r_present' is a free "
         f"symbol of the SDFG (free symbols: {sorted(free)}), its arm did not fold "
         "FALSE, and the emitted wrapper hardwires the flag instead of forwarding "
-        "present(a_r)")
-    assert "a_r_present = 0  !" not in text, \
-        "wrapper still hardwires the dead arm's optional to absent"
+        "present(a_r)"
+    )
+    assert "a_r_present = 0  !" not in text, "wrapper still hardwires the dead arm's optional to absent"
 
 
 def test_dead_arm_absent_still_computes(tmp_path: Path):
@@ -165,7 +170,4 @@ def test_dead_arm_absent_still_computes(tmp_path: Path):
     a_c = np.array([1.0, 2.0, 3.0, 4.0])
     a_r = np.zeros(n)  # dead-arm dummy; zero-filled, never legitimately read
     sdfg(**_call_kwargs(sdfg, n, y, a_c, a_r, a_c_present=1, a_r_present=0))
-    np.testing.assert_allclose(y,
-                               a_c,
-                               err_msg="kernel skipped the baked arm when the dead arm's "
-                               "optional was absent")
+    np.testing.assert_allclose(y, a_c, err_msg="kernel skipped the baked arm when the dead arm's optional was absent")

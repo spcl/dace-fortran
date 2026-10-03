@@ -10,6 +10,7 @@ Non-halo externals (both modes): the inner ``velocity_tendencies`` kernel, MPI
 collectives, comm-pattern construction, terminal I/O/timers.  Slow (~140k-line
 closure) and memory-heavy -- extraction runs in a memory-capped subprocess.
 """
+
 import os
 from pathlib import Path
 
@@ -129,8 +130,14 @@ ATMO_VELOCITY_UNION_COMPONENTS = {
     "t_grid_vertices": ["edge_idx", "edge_blk"],
     "t_int_state": ["geofac_rot", "geofac_n2s"],
     "t_nh_diag": ["max_vcfl_dyn"],
-    "t_nh_metrics":
-    ["coeff_gradekin", "coeff1_dwdz", "coeff2_dwdz", "deepatmo_gradh_ifc", "deepatmo_invr_mc", "deepatmo_invr_ifc"],
+    "t_nh_metrics": [
+        "coeff_gradekin",
+        "coeff1_dwdz",
+        "coeff2_dwdz",
+        "deepatmo_gradh_ifc",
+        "deepatmo_invr_mc",
+        "deepatmo_invr_ifc",
+    ],
 }
 
 #: MIRROR of :data:`ATMO_VELOCITY_UNION_COMPONENTS`: members ``solve_nh`` reads but
@@ -152,21 +159,87 @@ ATMO_SOLVE_NH_UNION_COMPONENTS = {
     # ddt_vn_{dmp,adv,cor,pgr,phd,iau,ray,grf} are per-process contributions solve_nh
     # SUMS; velocity writes only the _pc arrays -- kept for member-for-member match.
     "t_nh_diag": [
-        "exner_pr", "mass_fl_e", "rho_ic", "theta_v_ic", "grf_tend_vn", "grf_tend_w", "grf_tend_rho", "grf_tend_mflx",
-        "grf_bdy_mflx", "grf_tend_thv", "vn_ie_int", "w_int", "w_ubc", "theta_v_ic_int", "theta_v_ic_ubc", "rho_ic_int",
-        "rho_ic_ubc", "mflx_ic_int", "mflx_ic_ubc", "vn_incr", "exner_incr", "rho_incr", "ddt_exner_phy", "ddt_vn_phy",
-        "exner_dyn_incr", "mass_fl_e_sv", "ddt_vn_dyn", "ddt_vn_dyn_is_associated", "ddt_vn_dmp", "ddt_vn_adv",
-        "ddt_vn_cor", "ddt_vn_pgr", "ddt_vn_phd", "ddt_vn_iau", "ddt_vn_ray", "ddt_vn_grf", "ddt_vn_dmp_is_associated",
-        "ddt_vn_pgr_is_associated", "ddt_vn_phd_is_associated", "ddt_vn_iau_is_associated", "ddt_vn_ray_is_associated",
-        "ddt_vn_grf_is_associated"
+        "exner_pr",
+        "mass_fl_e",
+        "rho_ic",
+        "theta_v_ic",
+        "grf_tend_vn",
+        "grf_tend_w",
+        "grf_tend_rho",
+        "grf_tend_mflx",
+        "grf_bdy_mflx",
+        "grf_tend_thv",
+        "vn_ie_int",
+        "w_int",
+        "w_ubc",
+        "theta_v_ic_int",
+        "theta_v_ic_ubc",
+        "rho_ic_int",
+        "rho_ic_ubc",
+        "mflx_ic_int",
+        "mflx_ic_ubc",
+        "vn_incr",
+        "exner_incr",
+        "rho_incr",
+        "ddt_exner_phy",
+        "ddt_vn_phy",
+        "exner_dyn_incr",
+        "mass_fl_e_sv",
+        "ddt_vn_dyn",
+        "ddt_vn_dyn_is_associated",
+        "ddt_vn_dmp",
+        "ddt_vn_adv",
+        "ddt_vn_cor",
+        "ddt_vn_pgr",
+        "ddt_vn_phd",
+        "ddt_vn_iau",
+        "ddt_vn_ray",
+        "ddt_vn_grf",
+        "ddt_vn_dmp_is_associated",
+        "ddt_vn_pgr_is_associated",
+        "ddt_vn_phd_is_associated",
+        "ddt_vn_iau_is_associated",
+        "ddt_vn_ray_is_associated",
+        "ddt_vn_grf_is_associated",
     ],
     "t_nh_metrics": [
-        "rayleigh_w", "rayleigh_vn", "scalfac_dd3d", "hmask_dd3d", "vwind_expl_wgt", "vwind_impl_wgt",
-        "inv_ddqz_z_full", "wgtfacq_c", "wgtfacq1_c", "zdiff_gradp", "coeff_gradp", "exner_exfac", "theta_ref_mc",
-        "theta_ref_me", "theta_ref_ic", "exner_ref_mc", "rho_ref_mc", "rho_ref_me", "d_exner_dz_ref_ic",
-        "d2dexdz2_fac1_mc", "d2dexdz2_fac2_mc", "pg_exdist", "vertidx_gradp", "pg_edgeidx", "pg_edgeblk", "pg_vertidx",
-        "bdy_halo_c_idx", "bdy_halo_c_blk", "bdy_mflx_e_idx", "bdy_mflx_e_blk", "deepatmo_divh_mc", "deepatmo_divzu_mc",
-        "deepatmo_divzl_mc", "pg_listdim", "bdy_halo_c_dim", "bdy_mflx_e_dim", "mask_prog_halo_c"
+        "rayleigh_w",
+        "rayleigh_vn",
+        "scalfac_dd3d",
+        "hmask_dd3d",
+        "vwind_expl_wgt",
+        "vwind_impl_wgt",
+        "inv_ddqz_z_full",
+        "wgtfacq_c",
+        "wgtfacq1_c",
+        "zdiff_gradp",
+        "coeff_gradp",
+        "exner_exfac",
+        "theta_ref_mc",
+        "theta_ref_me",
+        "theta_ref_ic",
+        "exner_ref_mc",
+        "rho_ref_mc",
+        "rho_ref_me",
+        "d_exner_dz_ref_ic",
+        "d2dexdz2_fac1_mc",
+        "d2dexdz2_fac2_mc",
+        "pg_exdist",
+        "vertidx_gradp",
+        "pg_edgeidx",
+        "pg_edgeblk",
+        "pg_vertidx",
+        "bdy_halo_c_idx",
+        "bdy_halo_c_blk",
+        "bdy_mflx_e_idx",
+        "bdy_mflx_e_blk",
+        "deepatmo_divh_mc",
+        "deepatmo_divzu_mc",
+        "deepatmo_divzl_mc",
+        "pg_listdim",
+        "bdy_halo_c_dim",
+        "bdy_mflx_e_dim",
+        "mask_prog_halo_c",
     ],
 }
 
@@ -184,7 +257,7 @@ def atmo_config(halo_mode: str, entry: str = "", loop_exchange: bool = True) -> 
     h = halo_config(halo_mode)
     keep = None
     if halo_mode == "inlined":
-        keep = (ATMO_SOLVE_NH_UNION_COMPONENTS if "velocity_tendencies" in entry else ATMO_VELOCITY_UNION_COMPONENTS)
+        keep = ATMO_SOLVE_NH_UNION_COMPONENTS if "velocity_tendencies" in entry else ATMO_VELOCITY_UNION_COMPONENTS
     return dict(
         external_functions=ATMO_BASE_EXTERNAL_FUNCTIONS + h["external_functions"],
         force_include=h["force_include"],
@@ -216,27 +289,42 @@ KERNELS = [
 SINGLE_TU_ARTIFACTS = [
     ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh", True),
     ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh", True),
-    ("velocity_advection", "inlined", "velocity_advection_inlined_single_tu.f90",
-     "mo_velocity_advection::velocity_tendencies", True),
-    ("velocity_advection", "inlined", "velocity_advection_inlined_no_loop_exchange_single_tu.f90",
-     "mo_velocity_advection::velocity_tendencies", False),
+    (
+        "velocity_advection",
+        "inlined",
+        "velocity_advection_inlined_single_tu.f90",
+        "mo_velocity_advection::velocity_tendencies",
+        True,
+    ),
+    (
+        "velocity_advection",
+        "inlined",
+        "velocity_advection_inlined_no_loop_exchange_single_tu.f90",
+        "mo_velocity_advection::velocity_tendencies",
+        False,
+    ),
 ]
 
 #: ``(filename, loop_exchange)`` for the velocity kernel only.  Derived from
 #: :data:`SINGLE_TU_ARTIFACTS` so a new variant lands in the numerical tests by editing one table.
-VELOCITY_TU_VARIANTS = [(filename, loop_exchange) for key, _, filename, _, loop_exchange in SINGLE_TU_ARTIFACTS
-                        if key == "velocity_advection"]
+VELOCITY_TU_VARIANTS = [
+    (filename, loop_exchange)
+    for key, _, filename, _, loop_exchange in SINGLE_TU_ARTIFACTS
+    if key == "velocity_advection"
+]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
 
 
-def extract_single_tu(source_relpath: str,
-                      entry: str,
-                      out_dir: Path,
-                      halo_mode: str = "inlined",
-                      mem_gb: float = 12.0,
-                      loop_exchange: bool = True,
-                      keep_acc_directives: bool = False) -> dict:
+def extract_single_tu(
+    source_relpath: str,
+    entry: str,
+    out_dir: Path,
+    halo_mode: str = "inlined",
+    mem_gb: float = 12.0,
+    loop_exchange: bool = True,
+    keep_acc_directives: bool = False,
+) -> dict:
     """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in a
     memory-capped subprocess (fparser parse peaks near 9 GB).  Returns a dict with
     ``passed``/``tu_path``/``tu_lines``/``output``.
@@ -255,16 +343,23 @@ def extract_single_tu(source_relpath: str,
     env["TMPDIR"] = str(out_dir)
     env.setdefault("UCX_VFS_ENABLE", "n")
     env["PYTHONHASHSEED"] = "0"
-    proc = subprocess.run([
-        sys.executable,
-        str(_EXTRACT_SCRIPT), source_relpath, entry,
-        str(out_dir),
-        str(mem_gb), halo_mode, "1" if loop_exchange else "0", "1" if keep_acc_directives else "0"
-    ],
-                          capture_output=True,
-                          text=True,
-                          env=env,
-                          cwd=str(out_dir))
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_EXTRACT_SCRIPT),
+            source_relpath,
+            entry,
+            str(out_dir),
+            str(mem_gb),
+            halo_mode,
+            "1" if loop_exchange else "0",
+            "1" if keep_acc_directives else "0",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(out_dir),
+    )
     tu_path, tu_lines = None, None
     for line in proc.stdout.splitlines():
         if line.startswith("TU_PATH:"):

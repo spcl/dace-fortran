@@ -2,6 +2,7 @@
 the SDFG carries the right :class:`CShift` lib node with memlets covering the full shift
 dimension.  Tests stop at SDFG-build time -- the lib node's pure expansion stub
 (``NotImplementedError``) never runs."""
+
 from pathlib import Path
 import sys
 
@@ -93,6 +94,7 @@ def test_cshift_memlets_cover_full_arrays(tmp_path):
     assert len(nodes) == 1
     state, node = nodes[0]
     import sympy
+
     memlets = _connector_memlets(sdfg, state, node)
     assert "_x" in memlets and "_out" in memlets
     # subset volume == full descriptor volume; sympy.simplify needed since direct ``==``

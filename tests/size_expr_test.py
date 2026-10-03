@@ -4,7 +4,6 @@ Extent from a constant-indexed array element (``buf(dims(1))``), an arithmetic e
 
 Each case builds an SDFG and an f2py reference from the same source, writes back the realised size, and compares numerically so a wrong extent shows up as a wrong value.  Assumes the element-extent source array is intent(in) -- reading it at SDFG entry is then equivalent to reading it at the allocation point.
 """
-from pathlib import Path
 
 import numpy as np
 import pytest

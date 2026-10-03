@@ -5,6 +5,7 @@ the old ``dace_fortran.hlfir_to_sdfg`` import path working.
 
 ``__all__`` pins the surface so re-exports don't trip F401.
 """
+
 from dace_fortran.builder import (
     DEFAULT_PIPELINE,
     MULTI_FILE_PIPELINE,

@@ -31,10 +31,10 @@ subroutine main(mask, n, res)
   res = COUNT(mask)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(0)
     n = 16
-    mask = (rng.random(n) > 0.5)
+    mask = rng.random(n) > 0.5
     res = np.zeros(1, dtype=np.int32)
     sdfg(mask=mask, n=n, res=res)
     assert int(res[0]) == int(mask.sum())
@@ -50,7 +50,7 @@ subroutine main(mask, n, m, res)
   res = COUNT(mask)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(1)
     n, m = 6, 8
     mask = np.asfortranarray(rng.random((n, m)) > 0.5)
@@ -75,7 +75,7 @@ subroutine main(mask, n, m, res)
   res = COUNT(mask, dim=2)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(2)
     n, m = 5, 7
     mask = np.asfortranarray(rng.random((n, m)) > 0.5)
@@ -94,7 +94,7 @@ subroutine main(mask, n, m, res)
   res = COUNT(mask, dim=1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(3)
     n, m = 4, 6
     mask = np.asfortranarray(rng.random((n, m)) > 0.5)
@@ -119,7 +119,7 @@ subroutine main(a, b, n, res)
   res = COUNT(a .eq. b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(4)
     n = 12
     a = np.ascontiguousarray(rng.integers(0, 5, size=n, dtype=np.int32))
@@ -140,7 +140,7 @@ subroutine main(a, n, lo, hi, res)
   res = COUNT((a .gt. lo) .and. (a .lt. hi))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(5)
     n, lo_val, hi_val = 20, 3, 8
     a = np.ascontiguousarray(rng.integers(0, 12, size=n, dtype=np.int32))

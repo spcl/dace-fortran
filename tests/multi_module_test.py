@@ -36,7 +36,7 @@ subroutine main(v, dt)
   call apply_gravity(v, dt)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     v = np.array([10.0], dtype=np.float64)
     sdfg(v=v, dt=0.1)
     np.testing.assert_allclose(v[0], 10.0 - 9.81 * 0.1, rtol=1e-12)
@@ -69,7 +69,7 @@ subroutine main(x, y)
   call scale(x, y)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     y = np.zeros(1, dtype=np.float64)
     sdfg(x=4.0, y=y)
     np.testing.assert_allclose(y[0], 4.0 * 2.5, rtol=1e-12)
@@ -105,7 +105,7 @@ subroutine main(x)
   call times_two(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     x = np.array([3.0], dtype=np.float64)
     sdfg(x=x)
     np.testing.assert_allclose(x[0], (3.0 + 1.0) * 2.0, rtol=1e-12)
@@ -132,7 +132,7 @@ subroutine main(src_arr, a)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     src_arr = np.arange(1, 9, dtype=np.float64)
     a = np.zeros(8, dtype=np.float64)
     sdfg(src_arr=src_arr, a=a, i=0)
@@ -154,7 +154,7 @@ subroutine main(out)
   out = my_pi * 2.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 3.14159265358979323846 * 2.0, rtol=1e-10)

@@ -11,6 +11,7 @@ minloc/maxloc, cshift.
 Still gaps (``?``): hlfir.reshape (not in the dispatch table); hlfir.sum/product/minval/
 maxval/any/all with DIM (goes through buildSectionReduceAssign, not the libcall path).
 """
+
 import numpy as np
 import pytest
 
@@ -34,9 +35,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="qe_pattern", entry="m::qe_pattern").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
-    res = np.zeros(3, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    res = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=A, q=q, s=np.float64(2.0), res=res)
     np.testing.assert_allclose(res, (A.T @ q) / 2.0)
 
@@ -56,8 +57,8 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshift_inline", entry="m::cshift_inline").build()
-    arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order='F')
-    res = np.zeros(5, dtype=np.float64, order='F')
+    arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
+    res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res)
     expected = 2.0 - np.roll(arr, -1)
     np.testing.assert_allclose(res, expected)

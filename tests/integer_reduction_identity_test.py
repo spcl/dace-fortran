@@ -5,6 +5,7 @@ as the identity even for ints; casting a non-finite double to int is UB in C++, 
 INT_MIN at -O0 regardless of intent. Fix: ``dispatch.cpp::identityForType`` now picks
 ``2^(w-1)-1`` / ``-2^(w-1)`` by integer bit-width; float types still get inf/-inf.
 """
+
 import numpy as np
 import pytest
 
@@ -22,9 +23,9 @@ integer :: res
 res = MINVAL(arr)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([5, 3, -1, 7, 2], dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([5, 3, -1, 7, 2], dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == -1, f"MINVAL should be -1, got {res[0]}"
 
@@ -38,9 +39,9 @@ integer :: res
 res = MAXVAL(arr)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([5, 3, -1, 7, 2], dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([5, 3, -1, 7, 2], dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == 7, f"MAXVAL should be 7, got {res[0]}"
 
@@ -55,9 +56,9 @@ integer :: res
 res = MINVAL(arr(2:4))
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([10, 3, -1, 7, 100], dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([10, 3, -1, 7, 100], dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == -1, f"MINVAL of [3, -1, 7] should be -1, got {res[0]}"
 
@@ -71,9 +72,9 @@ integer :: res
 res = MAXVAL(arr(2:4))
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([10, 3, -1, 7, 100], dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([10, 3, -1, 7, 100], dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == 7, f"MAXVAL of [3, -1, 7] should be 7, got {res[0]}"
 
@@ -87,12 +88,11 @@ integer :: res
 res = MINVAL(empty)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    empty = np.zeros((0, ), dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    empty = np.zeros((0,), dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(empty=empty, res=res)
-    assert res[0] == np.iinfo(np.int32).max, \
-        f"MINVAL of empty int32 should be INT_MAX, got {res[0]}"
+    assert res[0] == np.iinfo(np.int32).max, f"MINVAL of empty int32 should be INT_MAX, got {res[0]}"
 
 
 def test_maxval_empty_int32_returns_min(tmp_path):
@@ -104,12 +104,11 @@ integer :: res
 res = MAXVAL(empty)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    empty = np.zeros((0, ), dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    empty = np.zeros((0,), dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(empty=empty, res=res)
-    assert res[0] == np.iinfo(np.int32).min, \
-        f"MAXVAL of empty int32 should be INT_MIN, got {res[0]}"
+    assert res[0] == np.iinfo(np.int32).min, f"MAXVAL of empty int32 should be INT_MIN, got {res[0]}"
 
 
 def test_minval_float64_still_uses_inf(tmp_path):
@@ -121,9 +120,9 @@ double precision :: res
 res = MINVAL(arr)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([5.5, 3.3, -1.1, 7.7, 2.2], dtype=np.float64, order='F')
-    res = np.zeros((1, ), dtype=np.float64, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([5.5, 3.3, -1.1, 7.7, 2.2], dtype=np.float64, order="F")
+    res = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == -1.1, f"MINVAL float should be -1.1, got {res[0]}"
 
@@ -137,8 +136,8 @@ integer :: res
 res = SUM(arr)
 END SUBROUTINE f
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name='f').build()
-    arr = np.array([1, 2, 3, 4, 5], dtype=np.int32, order='F')
-    res = np.zeros((1, ), dtype=np.int32, order='F')
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f").build()
+    arr = np.array([1, 2, 3, 4, 5], dtype=np.int32, order="F")
+    res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == 15, f"SUM should be 15, got {res[0]}"

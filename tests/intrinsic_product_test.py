@@ -20,7 +20,7 @@ res(3) = PRODUCT(d(2:5))
 
 END SUBROUTINE intrinsic_product_array_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_product_array_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_product_array_function").build()
 
     size = 7
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -48,10 +48,10 @@ res(1) = PRODUCT(d, 1)
 
 END SUBROUTINE intrinsic_product_array_dim_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_product_array_dim_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_product_array_dim_function").build()
 
-    d = np.array([1, 2, 3, 4, 5], dtype=np.int32, order='F')
-    res = np.zeros(2, dtype=np.int32, order='F')
+    d = np.array([1, 2, 3, 4, 5], dtype=np.int32, order="F")
+    res = np.zeros(2, dtype=np.int32, order="F")
     sdfg(d=d, res=res)
     assert int(res[0]) == 120
 
@@ -69,7 +69,7 @@ res(4) = PRODUCT(d(2:4, 2:3))
 
 END SUBROUTINE intrinsic_product_2d_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_product_2d_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_product_2d_test_function").build()
 
     sizes = [5, 3]
     d = np.full(sizes, 42, order="F", dtype=np.float64)

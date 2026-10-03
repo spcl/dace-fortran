@@ -56,7 +56,7 @@ aa(1,1)=res(1,1,1)
 
 END SUBROUTINE viewlens
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f'_QP{test_name}_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f"_QP{test_name}_function").build()
     a = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
     b = np.full([2, 2, 2], 42, order="F", dtype=np.float64)
     b[0, 0, 0] = 1
@@ -108,7 +108,7 @@ ENDDO
 
 END SUBROUTINE viewlens
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f'_QP{test_name}_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f"_QP{test_name}_function").build()
     a = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
     b = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
     c = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
@@ -159,7 +159,7 @@ ENDDO
 
 END SUBROUTINE viewlens
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f'_QP{test_name}_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name=test_name, entry=f"_QP{test_name}_function").build()
     a = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
     b = np.full([10, 11, 12], 42, order="F", dtype=np.float64)
 

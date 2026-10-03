@@ -38,15 +38,15 @@ ENDDO
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'view_multi_write_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "view_multi_write_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='view_multi_write', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="view_multi_write", entry="driver").build()
 
     klon, klev, nb = 4, 5, 3
 
     def fresh():
-        return np.full([klon, klev, nb], 42.0, order='F', dtype=np.float64)
+        return np.full([klon, klev, nb], 42.0, order="F", dtype=np.float64)
 
     t_ref, q_ref, a_ref = fresh(), fresh(), fresh()
     ref.kernel_mod.driver(t_ref, q_ref, a_ref, klon, klev, nb)

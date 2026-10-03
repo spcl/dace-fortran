@@ -38,10 +38,11 @@ end subroutine kernel
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="kernel").build()
 
     # For every state touching 'out': if it has both an in-edge and an out-edge on 'out', it must have >= 2 access nodes.
     from dace.sdfg import nodes as nd
+
     bad = []
     for state in sdfg.all_states():
         out_nodes = [n for n in state.nodes() if isinstance(n, nd.AccessNode) and n.data == "out"]
@@ -77,9 +78,10 @@ end subroutine kernel
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="kernel").build()
 
     from dace.sdfg import nodes as nd
+
     bad = []
     for s in sdfg.all_states():
         st_nodes = [n for n in s.nodes() if isinstance(n, nd.AccessNode) and n.data == "state"]

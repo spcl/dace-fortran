@@ -5,7 +5,6 @@ error) is the contract; numerical correctness is covered by rank_promotion_view_
 Locks down the pipeline: asAssumedShapeAlias returns null on rank mismatch, extract_vars mints a
 view_alias VarInfo, descriptors.py synthesises column-major strides, access.py wires the source ->
 view edge -- none of these steps may crash on the patterns below."""
-from pathlib import Path
 
 import pytest
 
@@ -96,13 +95,15 @@ end module m
 """
     sdfg = _builds(tmp_path, src, name="outer", entry="m::outer")
     # same-rank pass-through: only arr_2d should appear, no separately-classified buf view alias.
-    assert 'arr_2d' in sdfg.arrays
+    assert "arr_2d" in sdfg.arrays
     # buf may or may not appear depending on the bridge's collapse logic, but if present must NOT be a View.
-    if 'buf' in sdfg.arrays:
+    if "buf" in sdfg.arrays:
         import dace.data as dt
-        assert not isinstance(sdfg.arrays['buf'],
-                              dt.View), ("Same-rank pass-through misclassified as a View; the bridge "
-                                         "should resolve accesses through traceToDecl instead.")
+
+        assert not isinstance(sdfg.arrays["buf"], dt.View), (
+            "Same-rank pass-through misclassified as a View; the bridge "
+            "should resolve accesses through traceToDecl instead."
+        )
 
 
 # ---------------------------------------------------------------------------

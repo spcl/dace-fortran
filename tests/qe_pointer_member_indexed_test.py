@@ -19,6 +19,7 @@ Pins the fix: walking expandDesignateChain/buildExpr through the pointer-box fir
 between designate{component} and designate(indices), and section-aliasing an inlined
 FUNCTION-RESULT section dummy.
 """
+
 import numpy as np
 import pytest
 

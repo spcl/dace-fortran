@@ -9,6 +9,7 @@ per-element subscripts and couldn't handle runtime extents.
 
 Tests anchor both the structure (Reduce + View, no inline reduction) and e2e correctness.
 """
+
 import sys
 from pathlib import Path
 
@@ -30,11 +31,13 @@ def _build(src_text: str, tmp_path, name: str):
 
 def _reduce_nodes(sdfg):
     from dace.libraries.standard.nodes import Reduce
+
     return [n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, Reduce)]
 
 
 def _has_view(sdfg):
     from dace.data import View
+
     return any(isinstance(d, View) for d in sdfg.arrays.values())
 
 
@@ -52,8 +55,9 @@ def _assert_materialised(sdfg, inline_fragment):
     assert _reduce_nodes(sdfg), "section reduction did not become a Reduce lib-node"
     assert _has_view(sdfg), "section operand did not become a View"
     conds = _all_conditions(sdfg)
-    assert any("__reduce_cond" in c for c in conds), \
+    assert any("__reduce_cond" in c for c in conds), (
         f"condition does not read the materialised reduction scalar; got {conds}"
+    )
     for c in conds:
         assert inline_fragment not in c, f"reduction inline-unrolled into condition: {c!r}"
 
@@ -87,7 +91,7 @@ def test_minval_const_extent_section_in_if_condition(tmp_path):
     _assert_materialised(sdfg, "min(")
     # kmin is all ke+1 -> MINVAL = ke+1; k in 1..ke never reaches ke+1 -> no hits.
     n, ke = 3, 4
-    kmin = np.zeros((n, 4), dtype=np.int32, order='F')  # set to ke+1 inside the kernel
+    kmin = np.zeros((n, 4), dtype=np.int32, order="F")  # set to ke+1 inside the kernel
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), ke=np.int32(ke), kmin=kmin, out=out)
     assert out.tolist() == [0.0, 0.0, 0.0]
@@ -120,7 +124,7 @@ def test_maxval_const_extent_section_in_if_condition(tmp_path):
     _assert_materialised(sdfg, "max(")
     # kmax all = ke -> MAXVAL = ke; k in 1..ke always <= ke -> ke hits per row.
     n, ke = 3, 4
-    kmax = np.zeros((n, 4), dtype=np.int32, order='F')  # set to ke inside the kernel
+    kmax = np.zeros((n, 4), dtype=np.int32, order="F")  # set to ke inside the kernel
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), ke=np.int32(ke), kmax=kmax, out=out)
     assert out.tolist() == [float(ke)] * n
@@ -154,9 +158,11 @@ def test_sum_const_extent_section_in_if_condition(tmp_path):
             [
                 [1, 2, 3],  # sum 6 > 5 -> hit
                 [1, 1, 1],  # sum 3 -> no
-                [2, 2, 2]
+                [2, 2, 2],
             ],
-            dtype=np.int32))  # sum 6 -> hit
+            dtype=np.int32,
+        )
+    )  # sum 6 -> hit
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), weights=weights, out=out)
     assert out.tolist() == [1.0, 0.0, 1.0]
@@ -190,9 +196,11 @@ def test_product_const_extent_section_in_if_condition(tmp_path):
             [
                 [2, 2, 3],  # prod 12 > 8 -> hit
                 [1, 2, 2],  # prod 4 -> no
-                [3, 3, 1]
+                [3, 3, 1],
             ],
-            dtype=np.int32))  # prod 9 -> hit
+            dtype=np.int32,
+        )
+    )  # prod 9 -> hit
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), factors=factors, out=out)
     assert out.tolist() == [1.0, 0.0, 1.0]
@@ -230,9 +238,11 @@ def test_runtime_extent_section_materialises(tmp_path):
             [
                 [1, 5, 5, 5],  # min 1 -> 1>=1 hit
                 [2, 3, 4, 5],  # min 2 -> 1>=2 no
-                [0, 9, 9, 9]
+                [0, 9, 9, 9],
             ],
-            dtype=np.int32))  # min 0 -> 1>=0 hit
+            dtype=np.int32,
+        )
+    )  # min 0 -> 1>=0 hit
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), mm=np.int32(mm), arr=arr, out=out)
     assert out.tolist() == [1.0, 0.0, 1.0]

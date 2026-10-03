@@ -41,6 +41,7 @@ class UnsupportedProgram(Exception):
 class ConcreteArm:
     """One concrete subtype registered to an abstract base -- one arm of the
     generated static-dispatch ladder."""
+
     type_name: str
     #: deferred binding name -> the concrete procedure this subtype binds it to
     bindings: Dict[str, str]
@@ -50,6 +51,7 @@ class ConcreteArm:
 class MonomorphizationPlan:
     """The closed set of concrete arms for one abstract base.  The rewrite emits
     every arm (emit-all-always: no collapse), one static call each."""
+
     abstract_base: str
     deferred: List[str]
     arms: List[ConcreteArm]
@@ -90,7 +92,7 @@ def read_type_info(dtd: f03.Derived_Type_Def) -> TypeInfo:
         btext = str(binding)
         attrs, _, after = btext.partition("::")
         bname = find_name_of_stmt(binding)
-        bname = (str(bname).lower() if bname is not None else after.split("=>")[0].strip().lower())
+        bname = str(bname).lower() if bname is not None else after.split("=>")[0].strip().lower()
         if "DEFERRED" in attrs.upper():
             iface = walk(binding, f03.Name)
             deferred[bname] = str(iface[0]).lower() if iface else None
@@ -109,8 +111,10 @@ def reject_unlimited_polymorphic(ast: f03.Program, scopes: Optional[List[f03.Bas
     for root in roots:
         for spec in walk(root, f03.Declaration_Type_Spec):
             if str(spec).replace(" ", "").upper() == "CLASS(*)":
-                raise UnsupportedProgram("unlimited polymorphic `CLASS(*)` has no closed set of concrete "
-                                         "subtypes to enumerate into dispatch arms")
+                raise UnsupportedProgram(
+                    "unlimited polymorphic `CLASS(*)` has no closed set of concrete "
+                    "subtypes to enumerate into dispatch arms"
+                )
 
 
 def analyze(ast: f03.Program, only_bases: Optional[Iterable[str]] = None) -> List[MonomorphizationPlan]:
@@ -142,29 +146,38 @@ def analyze(ast: f03.Program, only_bases: Optional[Iterable[str]] = None) -> Lis
 
         # single-level guard: the abstract base must be a root.
         if base.parent is not None:
-            raise UnsupportedProgram(f"abstract base `{name}` itself extends `{base.parent}`: inheritance "
-                                     f"depth > 1 is not supported (single-level hierarchies only)")
+            raise UnsupportedProgram(
+                f"abstract base `{name}` itself extends `{base.parent}`: inheritance "
+                f"depth > 1 is not supported (single-level hierarchies only)"
+            )
 
         kids = children.get(name, [])
         for kid in kids:
             if children.get(kid.name):
                 grand = sorted(g.name for g in children[kid.name])
-                raise UnsupportedProgram(f"subtype `{kid.name}` of `{name}` is itself extended by {grand}: "
-                                         f"inheritance depth > 1 is not supported (single-level only)")
+                raise UnsupportedProgram(
+                    f"subtype `{kid.name}` of `{name}` is itself extended by {grand}: "
+                    f"inheritance depth > 1 is not supported (single-level only)"
+                )
             if kid.abstract:
-                raise UnsupportedProgram(f"subtype `{kid.name}` of `{name}` is itself abstract: only "
-                                         f"concrete leaf subtypes can become dispatch arms")
+                raise UnsupportedProgram(
+                    f"subtype `{kid.name}` of `{name}` is itself abstract: only "
+                    f"concrete leaf subtypes can become dispatch arms"
+                )
 
         if not kids:
-            raise UnsupportedProgram(f"abstract base `{name}` has no concrete subtype in the translation "
-                                     f"unit: there is nothing to dispatch to")
+            raise UnsupportedProgram(
+                f"abstract base `{name}` has no concrete subtype in the translation "
+                f"unit: there is nothing to dispatch to"
+            )
 
         arms: List[ConcreteArm] = []
         for kid in kids:
             missing = sorted(d for d in base.deferred if d not in kid.overrides)
             if missing:
-                raise UnsupportedProgram(f"concrete subtype `{kid.name}` does not override deferred "
-                                         f"binding(s) {missing} of `{name}`")
+                raise UnsupportedProgram(
+                    f"concrete subtype `{kid.name}` does not override deferred binding(s) {missing} of `{name}`"
+                )
             arms.append(ConcreteArm(kid.name, {d: kid.overrides[d] for d in base.deferred}))
 
         if only is not None:

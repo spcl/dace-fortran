@@ -48,8 +48,10 @@ def test_module_global_array_passthrough(tmp_path: Path):
     sdfg.validate()
 
     # without the fix gtable is a transient (no arglist entry); with the fix it's a non-transient input kwarg.
-    assert 'gtable' in sdfg.arglist(), (f"expected `gtable` in SDFG arglist (module-level global must surface "
-                                        f"as a non-transient kwarg); arglist keys: {sorted(sdfg.arglist().keys())}")
+    assert "gtable" in sdfg.arglist(), (
+        f"expected `gtable` in SDFG arglist (module-level global must surface "
+        f"as a non-transient kwarg); arglist keys: {sorted(sdfg.arglist().keys())}"
+    )
 
     ref = f2py_compile(_SRC, tmp_path / "ref", "module_global_ref")
 
@@ -58,7 +60,7 @@ def test_module_global_array_passthrough(tmp_path: Path):
     gtable_vals = np.asfortranarray(rng.integers(0, 1000, size=8, dtype=np.int32))
     idx = np.asfortranarray(rng.integers(1, 9, size=n, dtype=np.int32))
 
-    out_sdfg = np.zeros(n, dtype=np.int32, order='F')
+    out_sdfg = np.zeros(n, dtype=np.int32, order="F")
 
     # f2py exposes module data on the module object (assign in place); out is INTENT(OUT) so f2py returns it.
     ref.mo_module_data.gtable[:] = gtable_vals

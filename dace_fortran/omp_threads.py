@@ -11,6 +11,7 @@ which would put the OpenMP configuration into the kernel's call signature.
 effects that reads ``omp_get_max_threads()`` into a transient scalar, and the interstate edge leaving that
 state assigns the scalar to the symbol.
 """
+
 from typing import Any, Dict, Optional, cast
 
 import dace
@@ -19,7 +20,7 @@ from dace.transformation import pass_pipeline as ppl
 from dace_fortran.dace_types import explicit_cf_compatible
 
 #: The name the code generator already gives the team size inside a ``CPU_Persistent`` scope.
-OMP_NUM_THREADS_SYMBOL = '__omp_num_threads'
+OMP_NUM_THREADS_SYMBOL = "__omp_num_threads"
 
 
 @explicit_cf_compatible
@@ -46,18 +47,24 @@ class BindOmpThreadCount(ppl.Pass):
         if self.symbol not in {str(s) for s in sdfg.free_symbols}:
             return None
 
-        scalar, _ = sdfg.add_scalar('__omp_max_threads_value', dace.int32, transient=True, find_new_name=True)
+        scalar, _ = sdfg.add_scalar("__omp_max_threads_value", dace.int32, transient=True, find_new_name=True)
         # dace annotates ``add_state_before``'s anchor as an SDFGState; any control-flow block works.
-        first = sdfg.add_state_before(cast(dace.SDFGState, sdfg.start_block),
-                                      label='bind_omp_thread_count',
-                                      is_start_block=True,
-                                      assignments={self.symbol: scalar})
-        tasklet = first.add_tasklet('omp_max_threads', {}, {'__out'},
-                                    '__out = omp_get_max_threads();',
-                                    language=dtypes.Language.CPP,
-                                    code_global='#include <omp.h>',
-                                    side_effects=True)
-        first.add_edge(tasklet, '__out', first.add_write(scalar), None, dace.Memlet(f'{scalar}[0]'))
+        first = sdfg.add_state_before(
+            cast(dace.SDFGState, sdfg.start_block),
+            label="bind_omp_thread_count",
+            is_start_block=True,
+            assignments={self.symbol: scalar},
+        )
+        tasklet = first.add_tasklet(
+            "omp_max_threads",
+            {},
+            {"__out"},
+            "__out = omp_get_max_threads();",
+            language=dtypes.Language.CPP,
+            code_global="#include <omp.h>",
+            side_effects=True,
+        )
+        first.add_edge(tasklet, "__out", first.add_write(scalar), None, dace.Memlet(f"{scalar}[0]"))
 
         sdfg.symbols[self.symbol] = dace.int32
         return scalar

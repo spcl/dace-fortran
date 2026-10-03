@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -46,11 +45,13 @@ _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 #     driver of function-size blowup here.
 #   * ``max-gcse-memory=524288`` (KB, so 512 MB; gcc default 131072 = 128 MB) is a hard budget for
 #     global CSE -- past it the pass bails out instead of growing without bound.
-BITEXACT_CPU_ARGS = ('-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno '
-                     '-fno-trapping-math -Wno-unused-parameter -Wno-unused-label '
-                     '--param ggc-min-expand=100 --param ggc-min-heapsize=6291456 '
-                     '--param max-inline-recursive-depth=4 --param max-inline-recursive-depth-auto=4 '
-                     '--param max-gcse-memory=524288')
+BITEXACT_CPU_ARGS = (
+    "-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno "
+    "-fno-trapping-math -Wno-unused-parameter -Wno-unused-label "
+    "--param ggc-min-expand=100 --param ggc-min-heapsize=6291456 "
+    "--param max-inline-recursive-depth=4 --param max-inline-recursive-depth-auto=4 "
+    "--param max-gcse-memory=524288"
+)
 
 # when set, build_sdfg(...).build() dumps its SDFG here; "1"/"true"/"yes" means _DEFAULT_DUMP_DIR.
 _DUMP_ENV = "__DACE_HLFIR_GEN_TEST_SDFGS"
@@ -78,8 +79,9 @@ def _resolve_flang() -> str | None:
         fc_path = shutil.which(fc) or (fc if os.path.isfile(fc) else None)
         if fc_path:
             try:
-                out = subprocess.check_output([fc_path, "--version"], stderr=subprocess.STDOUT,
-                                              timeout=5).decode(errors="replace")
+                out = subprocess.check_output([fc_path, "--version"], stderr=subprocess.STDOUT, timeout=5).decode(
+                    errors="replace"
+                )
                 if "flang version" in out:
                     return fc_path
             except (OSError, subprocess.SubprocessError):
@@ -157,20 +159,15 @@ def f2py_compile(
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
     # retries on transient ENOMEM; rebuilds under a fresh name if `only` routine is missing (crackfortran flake under -n auto)
     from _helpers import f2py_build_and_import
-    return f2py_build_and_import(src_file,
-                                 out_dir=out_dir,
-                                 mod_name=mod_name,
-                                 only=only,
-                                 extra_args=extra_args,
-                                 env=env)
+
+    return f2py_build_and_import(
+        src_file, out_dir=out_dir, mod_name=mod_name, only=only, extra_args=extra_args, env=env
+    )
 
 
-def compile_to_hlfir(source: str,
-                     out_dir: Path,
-                     name: str = "src",
-                     *,
-                     preprocess: bool = False,
-                     merge: bool = True) -> Path:
+def compile_to_hlfir(
+    source: str, out_dir: Path, name: str = "src", *, preprocess: bool = False, merge: bool = True
+) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.f90``, compile to HLFIR, return the path.
 
     ``merge`` (default on): inline USE-d modules into one TU; no-op for self-contained input.
@@ -181,6 +178,7 @@ def compile_to_hlfir(source: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{name}.f90"
     from dace_fortran.preprocess import preprocess_fortran_source
+
     source = preprocess_fortran_source(source, search_dirs=[out_dir], merge=merge, if_intvar=preprocess)
     src.write_text(source)
     hlfir = out_dir / f"{name}.hlfir"
@@ -200,9 +198,9 @@ def _per_test_suffix() -> str:
     file_part, _, test_part = nodeid.partition("::")
     stem = Path(file_part).stem
     if stem.endswith("_test"):
-        stem = stem[:-len("_test")]
+        stem = stem[: -len("_test")]
     if test_part.startswith("test_"):
-        test_part = test_part[len("test_"):]
+        test_part = test_part[len("test_") :]
     sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", f"{stem}_{test_part}").strip("_")
     return f"_{sanitized}" if sanitized else ""
 
@@ -232,22 +230,21 @@ class _TestBuilder:
         return sdfg
 
 
-def build_sdfg(source: str,
-               out_dir: Path,
-               name: str = "src",
-               pipeline=None,
-               entry: str | None = None,
-               defines=(),
-               merge_engine: str = "regex"):
+def build_sdfg(
+    source: str,
+    out_dir: Path,
+    name: str = "src",
+    pipeline=None,
+    entry: str | None = None,
+    defines=(),
+    merge_engine: str = "regex",
+):
     """Test funnel over :func:`dace_fortran.build.make_builder`: adds the per-test xdist-safe SDFG naming / dump-dir wrapper on top of the real builder.  ``entry=None`` auto-resolves from the single procedure in ``source``."""
     from dace_fortran.build import make_builder
-    builder = make_builder(source,
-                           entry=entry,
-                           name=name,
-                           pipeline=pipeline,
-                           out_dir=out_dir,
-                           defines=defines,
-                           merge_engine=merge_engine)
+
+    builder = make_builder(
+        source, entry=entry, name=name, pipeline=pipeline, out_dir=out_dir, defines=defines, merge_engine=merge_engine
+    )
     suffix = _per_test_suffix()
     dump = _dump_dir()
     if suffix or dump is not None:
@@ -261,6 +258,7 @@ def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
     ``broadcast=False``: return value (e.g. a non-picklable SDFG) stays root-only, for callers that follow with their own collective (:func:`dace.sdfg.utils.distributed_compile`).
     """
     import traceback
+
     rank = comm.Get_rank()
     error = None
     result = None
@@ -274,14 +272,17 @@ def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
     else:
         error = comm.bcast(error, root=root)
     if error is not None:
-        raise RuntimeError(f"MPI build on rank {root} failed; all ranks abort to avoid a "
-                           f"collective deadlock. Rank {root} traceback:\n{error}")
+        raise RuntimeError(
+            f"MPI build on rank {root} failed; all ranks abort to avoid a "
+            f"collective deadlock. Rank {root} traceback:\n{error}"
+        )
     return result
 
 
 def run_passes_dump(source: str, out_dir: Path, name: str = "src", pipeline: str = "builtin.module()") -> str:
     """Compile Fortran to HLFIR, run ``pipeline``, return the IR dump -- for tests inspecting post-pass MLIR directly rather than through SDFG extraction."""
     from dace_fortran.build_bridge import hb
+
     hlfir = compile_to_hlfir(source, out_dir, name)
     mod = hb.HLFIRModule()
     if not mod.parse_file(str(hlfir)):

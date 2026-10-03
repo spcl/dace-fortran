@@ -20,7 +20,7 @@ def _build(src: str, tmp_path: Path, entry: str):
     """Compile ``src`` to an SDFG."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name=entry.split('P')[-1], entry=entry).build()
+    sdfg = build_sdfg(src, sdfg_dir, name=entry.split("P")[-1], entry=entry).build()
     sdfg.validate()
     return sdfg
 
@@ -43,9 +43,10 @@ end subroutine arith_idx
 """
     sdfg = _build(src, tmp_path, "arith_idx")
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
-    assert consts.get('offset_arr_d0') == -6, (f"expected offset_arr_d0 == -6 (from ALLOCATE shape_shift); "
-                                               f"got {consts.get('offset_arr_d0')}")
-    out = np.zeros(1, dtype=np.int32, order='F')
+    assert consts.get("offset_arr_d0") == -6, (
+        f"expected offset_arr_d0 == -6 (from ALLOCATE shape_shift); got {consts.get('offset_arr_d0')}"
+    )
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(out=out)
     assert out[0] == 1234
 
@@ -74,13 +75,14 @@ end subroutine multi_alloc
     sdfg = _build(src, tmp_path, "multi_alloc")
     # Each ALLOCATE produces a separate SDFG alias -- verify offsets directly.
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
-    assert consts.get('offset_arr_d0') == -5, (f"first alias offset should be -5; got {consts.get('offset_arr_d0')}")
+    assert consts.get("offset_arr_d0") == -5, f"first alias offset should be -5; got {consts.get('offset_arr_d0')}"
     # REAL gap: second-allocate alias defaults to offset=1 instead of the actual
     # bound 0 -- lowerBoundsFromAllocSite isn't called for the alias entry.
-    assert consts.get('offset_arr_alloc1_d0') == 0, (
+    assert consts.get("offset_arr_alloc1_d0") == 0, (
         f"second alias offset should be 0 (matching ``allocate(arr(0:10))``); "
-        f"got {consts.get('offset_arr_alloc1_d0')}.  Bridge gap.")
-    out = np.zeros(1, dtype=np.int32, order='F')
+        f"got {consts.get('offset_arr_alloc1_d0')}.  Bridge gap."
+    )
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(out=out)
     # Correct semantics: arr(3) in the second allocation = 1003.
     assert out[0] == 1003
@@ -109,9 +111,10 @@ end subroutine loop_iv_local
 """
     sdfg = _build(src, tmp_path, "loop_iv_local")
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
-    assert consts.get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 from local ALLOCATE shape_shift; "
-                                               f"got {consts.get('offset_arr_d0')}")
-    out = np.zeros(1, dtype=np.int32, order='F')
+    assert consts.get("offset_arr_d0") == -3, (
+        f"expected offset_arr_d0 == -3 from local ALLOCATE shape_shift; got {consts.get('offset_arr_d0')}"
+    )
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(out=out)
     # Sum of (i + 100) for i in -3..3 = 0 + 7*100 = 700
     assert out[0] == 700
@@ -136,11 +139,13 @@ end subroutine loop_iv_dummy
 """
     sdfg = _build(src, tmp_path, "loop_iv_dummy")
     # Bridge leaves the offset as a free symbol -- caller binds.
-    assert 'offset_arr_d0' in sdfg.arglist(), (f"expected free offset symbol for dummy-arg + no-literal pattern; "
-                                               f"arglist: {[k for k in sdfg.arglist() if 'offset' in k]}")
+    assert "offset_arr_d0" in sdfg.arglist(), (
+        f"expected free offset symbol for dummy-arg + no-literal pattern; "
+        f"arglist: {[k for k in sdfg.arglist() if 'offset' in k]}"
+    )
     # arr_buf[0..6] holds Fortran arr(-3..3).
     arr_buf = np.asfortranarray(np.array([i + 100 for i in range(-3, 4)], dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr_buf, out=out, arr_d0=np.int64(7), offset_arr_d0=np.int64(-3))
     # Sum of (i + 100) for i in -3..3 = 0 + 7*100 = 700.
     assert out[0] == 700
@@ -164,12 +169,13 @@ end subroutine indirect_neg
 """
     sdfg = _build(src, tmp_path, "indirect_neg")
     # Bridge can't infer the bound -- expect the offset stays free.
-    assert 'offset_arr_d0' in sdfg.arglist(), (f"expected free symbol for unresolvable indirect access; "
-                                               f"arglist: {list(sdfg.arglist().keys())}")
+    assert "offset_arr_d0" in sdfg.arglist(), (
+        f"expected free symbol for unresolvable indirect access; arglist: {list(sdfg.arglist().keys())}"
+    )
 
     # Caller fills the buffer so arr_buf[0] corresponds to Fortran arr(-3) (offset_arr_d0 = -3).
     arr_buf = np.asfortranarray(np.array([-30, -20, -10, 0, 10, 20, 30], dtype=np.int32))  # arr(-3..3) values
     idx_table = np.asfortranarray(np.array([-3, 0, 3], dtype=np.int32))
-    out = np.zeros(3, dtype=np.int32, order='F')
+    out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(arr=arr_buf, idx_table=idx_table, n_idx=np.int32(3), out=out, arr_d0=np.int64(7), offset_arr_d0=np.int64(-3))
     np.testing.assert_array_equal(out, [-30, 0, 30])

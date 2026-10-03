@@ -37,17 +37,20 @@ COMPUTE_CLOSURE = (
 )
 
 # Timer stubs noop'd: f2py can't wrap a derived-type-dummy module proc (segfaults on import).
-TIMER_NOOPS = tuple(("timer_mod", name) for name in (
-    "performance_timer_start",
-    "performance_timer_end",
-    "performance_timer_thread_start",
-    "performance_timer_thread_end",
-    "performance_timer_thread_log",
-    "performance_timer_print_performance",
-))
+TIMER_NOOPS = tuple(
+    ("timer_mod", name)
+    for name in (
+        "performance_timer_start",
+        "performance_timer_end",
+        "performance_timer_thread_start",
+        "performance_timer_thread_end",
+        "performance_timer_thread_log",
+        "performance_timer_print_performance",
+    )
+)
 
 # get_thread_num is a FUNCTION (result used, can't noop); no derived-type dummy, f2py-safe.
-TIMER_STUBS = ("get_thread_num", )
+TIMER_STUBS = ("get_thread_num",)
 
 # YOECLDP species-index PARAMETERs; must bake to compile-time literals, never runtime args.
 BAKED_PARAMETERS = frozenset({"nclv", "ncldql", "ncldqi", "ncldqr", "ncldqs", "ncldqv"})
@@ -97,18 +100,22 @@ def extract_variant_tu(wrapper: Path, out_dir: Path, name: str, extra_sources: t
 def assert_species_parameters_baked(sdfg):
     """YOECLDP species PARAMETERs must be compile-time literals: no free symbols, no arguments."""
     leaked = ({str(s).lower() for s in sdfg.free_symbols} | {k.lower() for k in sdfg.arglist()}) & BAKED_PARAMETERS
-    assert not leaked, (f"YOECLDP PARAMETER constants leaked into the SDFG interface instead of "
-                        f"config-propagating to literals: {sorted(leaked)}")
+    assert not leaked, (
+        f"YOECLDP PARAMETER constants leaked into the SDFG interface instead of "
+        f"config-propagating to literals: {sorted(leaked)}"
+    )
 
 
-def run_cloudsc_gpu(tu_text: str,
-                    name: str,
-                    f2py_ref,
-                    sdfg_dir: Path,
-                    *,
-                    seed: int = 42,
-                    state_arrays: tuple = (),
-                    simplify: bool = False):
+def run_cloudsc_gpu(
+    tu_text: str,
+    name: str,
+    f2py_ref,
+    sdfg_dir: Path,
+    *,
+    seed: int = 42,
+    state_arrays: tuple = (),
+    simplify: bool = False,
+):
     """Build the SDFG from the TU and run both legs on identical seeded physical inputs.
 
     state_arrays get per-leg copies (both start identical) and are returned alongside outputs.
@@ -161,6 +168,5 @@ def mismatch_report(outputs_sdfg: dict, outputs_ref: dict, names, *, rtol: float
         bad = ~np.isclose(a, b, rtol=rtol, atol=atol, equal_nan=True)
         nbad = int(bad.sum())
         if nbad:
-            report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} "
-                          f"(max |delta|={np.abs(a - b)[bad].max():.3e})")
+            report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} (max |delta|={np.abs(a - b)[bad].max():.3e})")
     return report

@@ -8,6 +8,7 @@ communicator; the Fortran caller typically hands the SDFG a sub-communicator
 the parent communicator from an SDFG symbol (populated by the bindings layer
 via ``MPI_Comm_f2c``).  ``exit_code()`` is inherited unchanged.
 """
+
 from typing import Any, Sequence
 
 from dace.data.distributed import ProcessGrid
@@ -32,20 +33,18 @@ class FortranProcessGrid(ProcessGrid):
         "(MPI_COMM_WORLD).",
     )
 
-    def __init__(self,
-                 name: str,
-                 shape: Sequence[Any],
-                 parent_comm_symbol: str | None = None,
-                 exact_grid: int | None = None,
-                 root: int = 0) -> None:
+    def __init__(
+        self,
+        name: str,
+        shape: Sequence[Any],
+        parent_comm_symbol: str | None = None,
+        exact_grid: int | None = None,
+        root: int = 0,
+    ) -> None:
         # dace annotates ``parent_grid``/``color`` as required and ``RankType`` omits ``int``; ``None`` means the world grid.
-        grid_args: dict[str, Any] = dict(name=name,
-                                         is_subgrid=False,
-                                         shape=shape,
-                                         parent_grid=None,
-                                         color=None,
-                                         exact_grid=exact_grid,
-                                         root=root)
+        grid_args: dict[str, Any] = dict(
+            name=name, is_subgrid=False, shape=shape, parent_grid=None, color=None, exact_grid=exact_grid, root=root
+        )
         super().__init__(**grid_args)
         self.parent_comm_symbol = parent_comm_symbol
 

@@ -26,14 +26,15 @@ end subroutine kernel
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
-    assert "data_allocated" not in sdfg.arrays, \
+    sdfg = build_sdfg(src, sdfg_dir, name="kernel").build()
+    assert "data_allocated" not in sdfg.arrays, (
         "tracker scalar should not be emitted when no kernel ALLOCATED reader exists"
-    assert "data_allocated" not in sdfg.symbols, \
+    )
+    assert "data_allocated" not in sdfg.symbols, (
         "tracker symbol should not be emitted when no kernel ALLOCATED reader exists"
+    )
     orphan_states = [s.label for s in sdfg.all_states() if s.label.startswith("post_data_allocated")]
-    assert not orphan_states, \
-        f"orphan post_data_allocated_* init state(s) survived: {orphan_states}"
+    assert not orphan_states, f"orphan post_data_allocated_* init state(s) survived: {orphan_states}"
 
 
 def test_queried_allocatable_keeps_tracker(tmp_path: Path):
@@ -49,8 +50,7 @@ end subroutine kernel
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="kernel").build()
     # tracker registers as a symbol (role=symbol in extract_vars), not an array -- both paths kept for safety.
-    has_tracker = ("data_allocated" in sdfg.symbols or "data_allocated" in sdfg.arrays)
-    assert has_tracker, \
-        "tracker MUST be emitted when ALLOCATED(...) reader exists"
+    has_tracker = "data_allocated" in sdfg.symbols or "data_allocated" in sdfg.arrays
+    assert has_tracker, "tracker MUST be emitted when ALLOCATED(...) reader exists"

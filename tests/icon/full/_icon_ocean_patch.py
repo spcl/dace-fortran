@@ -10,6 +10,7 @@ so the reference state needs a fresh prog array on top of per-field deep copies.
 ``p_phys_param%a_veloc_v`` is mutated in place through a module-level pointer inside
 ``mo_ocean_pp_scheme`` that the driver can't re-point -- snapshot/restore around both
 runs so they see the same pre-call viscosity, then reinstate the DUT's version."""
+
 import re
 from pathlib import Path
 
@@ -147,23 +148,31 @@ def apply_ocean_solve_patch(pristine_source: str) -> str:
             last_intent = i
 
     # (1) driver: header + USE helpers + decl block + clone/run-both/compare/free.
-    driver = (lines[subr_start:header_end + 1] + _DIFF_USE + lines[header_end + 1:last_intent + 1] +
-              _DIFF_BLOCK.splitlines())
+    driver = (
+        lines[subr_start : header_end + 1]
+        + _DIFF_USE
+        + lines[header_end + 1 : last_intent + 1]
+        + _DIFF_BLOCK.splitlines()
+    )
 
     # (2) the original subroutine, verbatim, renamed to solve_free_sfc_ref.
-    ref = list(lines[subr_start:end_subr + 1])
-    ref[0] = re.sub(r"(SUBROUTINE\s+)solve_free_sfc_ab_mimetic(\s*\()",
-                    r"\1solve_free_sfc_ref\2",
-                    ref[0],
-                    count=1,
-                    flags=re.IGNORECASE)
-    ref[-1] = re.sub(r"(END\s+SUBROUTINE\s+)solve_free_sfc_ab_mimetic\b",
-                     r"\1solve_free_sfc_ref",
-                     ref[-1],
-                     count=1,
-                     flags=re.IGNORECASE)
+    ref = list(lines[subr_start : end_subr + 1])
+    ref[0] = re.sub(
+        r"(SUBROUTINE\s+)solve_free_sfc_ab_mimetic(\s*\()",
+        r"\1solve_free_sfc_ref\2",
+        ref[0],
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    ref[-1] = re.sub(
+        r"(END\s+SUBROUTINE\s+)solve_free_sfc_ab_mimetic\b",
+        r"\1solve_free_sfc_ref",
+        ref[-1],
+        count=1,
+        flags=re.IGNORECASE,
+    )
 
-    out = lines[:subr_start] + driver + [""] + ref + lines[end_subr + 1:]
+    out = lines[:subr_start] + driver + [""] + ref + lines[end_subr + 1 :]
     return "\n".join(out) + "\n"
 
 

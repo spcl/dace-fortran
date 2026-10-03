@@ -8,6 +8,7 @@ keep defaults in sync with it.
 
 Exit codes: 0 success, 2 argument error, 3 pass refusal.
 """
+
 import argparse
 import json
 import sys
@@ -30,82 +31,102 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m dace_fortran.preprocess_cli",
         description="Apply DaCe-Fortran source-text preprocess passes.",
     )
-    p.add_argument("--in",
-                   dest="in_path",
-                   required=True,
-                   help="Input .f90 / .F90 source.  Use '-' for stdin.  "
-                   "Repeatable when paired with --inplace -- the easiest "
-                   "build-system-free way to apply the rewrites: each "
-                   "file is rewritten in place, the user's existing "
-                   "compiler builds the result with no further glue.",
-                   action="append")
-    p.add_argument("--out",
-                   dest="out_path",
-                   help="Output path.  Default: stdout.  When set + "
-                   "--rewrite-string-enum is on, an additional "
-                   "<out>.enum_maps.json sidecar is written.  Mutually "
-                   "exclusive with --inplace.")
-    p.add_argument("--inplace",
-                   action="store_true",
-                   help="Rewrite each --in path in place (atomic write "
-                   "via a sibling tempfile + rename).  Skip the cmake / "
-                   "automake glue entirely  --  run this once over your "
-                   "source tree, then let your existing build system "
-                   "compile the rewritten files.")
-    p.add_argument("--backup-suffix",
-                   default=None,
-                   help="When --inplace is on, keep a backup of each "
-                   "original next to it with this suffix (e.g. .orig).  "
-                   "Default: no backup kept.")
-    p.add_argument("--search-dir",
-                   dest="search_dirs",
-                   action="append",
-                   default=[],
-                   help="Directory (recursive) of sibling sources scanned by "
-                   "module-resolving passes (merge / external).  Repeat.")
+    p.add_argument(
+        "--in",
+        dest="in_path",
+        required=True,
+        help="Input .f90 / .F90 source.  Use '-' for stdin.  "
+        "Repeatable when paired with --inplace -- the easiest "
+        "build-system-free way to apply the rewrites: each "
+        "file is rewritten in place, the user's existing "
+        "compiler builds the result with no further glue.",
+        action="append",
+    )
+    p.add_argument(
+        "--out",
+        dest="out_path",
+        help="Output path.  Default: stdout.  When set + "
+        "--rewrite-string-enum is on, an additional "
+        "<out>.enum_maps.json sidecar is written.  Mutually "
+        "exclusive with --inplace.",
+    )
+    p.add_argument(
+        "--inplace",
+        action="store_true",
+        help="Rewrite each --in path in place (atomic write "
+        "via a sibling tempfile + rename).  Skip the cmake / "
+        "automake glue entirely  --  run this once over your "
+        "source tree, then let your existing build system "
+        "compile the rewritten files.",
+    )
+    p.add_argument(
+        "--backup-suffix",
+        default=None,
+        help="When --inplace is on, keep a backup of each "
+        "original next to it with this suffix (e.g. .orig).  "
+        "Default: no backup kept.",
+    )
+    p.add_argument(
+        "--search-dir",
+        dest="search_dirs",
+        action="append",
+        default=[],
+        help="Directory (recursive) of sibling sources scanned by module-resolving passes (merge / external).  Repeat.",
+    )
 
     # Pass switches (all default off).
     p.add_argument("--merge-modules", action="store_true", help="Inline every ``USE``-d module's source.")
-    p.add_argument("--merge-engine",
-                   choices=("regex", "fparser"),
-                   default="regex",
-                   help="Which --merge-modules engine to use: 'regex' "
-                   "(default, the fparser-free text-splicer) or 'fparser' "
-                   "(the AST inliner -- also desugars + prunes).")
-    p.add_argument("--merge-entry",
-                   default=None,
-                   help="Entry procedure (plain name / module::proc / "
-                   "mangled symbol) for the fparser engine's pruning; "
-                   "ignored by the regex engine.")
+    p.add_argument(
+        "--merge-engine",
+        choices=("regex", "fparser"),
+        default="regex",
+        help="Which --merge-modules engine to use: 'regex' "
+        "(default, the fparser-free text-splicer) or 'fparser' "
+        "(the AST inliner -- also desugars + prunes).",
+    )
+    p.add_argument(
+        "--merge-entry",
+        default=None,
+        help="Entry procedure (plain name / module::proc / "
+        "mangled symbol) for the fparser engine's pruning; "
+        "ignored by the regex engine.",
+    )
     p.add_argument("--strip-openmp", action="store_true", help="Drop OpenMP / OpenACC sentinel directives.")
     p.add_argument("--rewrite-integer-powers", action="store_true", help="Expand ``x**2.0`` to ``x*x``.")
-    p.add_argument("--normalize-kind",
-                   action="store_true",
-                   help="Substitute precision aliases (wp, sp, dp, qp) "
-                   "with literal kind integers.")
-    p.add_argument("--kind-passthrough",
-                   action="store_true",
-                   help="Force-skip the kind rewrite (e.g. when "
-                   "upstream already resolved every alias).")
-    p.add_argument("--kind-map",
-                   action="append",
-                   default=[],
-                   help="Override one kind alias.  Format: NAME=N (e.g. "
-                   "wp=4 for fp32).  NAME=NONE leaves the alias alone.")
-    p.add_argument("--rewrite-external",
-                   action="store_true",
-                   help="Resolve ``EXTERNAL`` to ``USE`` imports against "
-                   "modules under --search-dir.")
-    p.add_argument("--rewrite-string-enum",
-                   action="store_true",
-                   help="Convert CHARACTER enum-style dummies to INTEGER "
-                   "+ emit <out>.enum_maps.json sidecar for bindings.")
+    p.add_argument(
+        "--normalize-kind",
+        action="store_true",
+        help="Substitute precision aliases (wp, sp, dp, qp) with literal kind integers.",
+    )
+    p.add_argument(
+        "--kind-passthrough",
+        action="store_true",
+        help="Force-skip the kind rewrite (e.g. when upstream already resolved every alias).",
+    )
+    p.add_argument(
+        "--kind-map",
+        action="append",
+        default=[],
+        help="Override one kind alias.  Format: NAME=N (e.g. wp=4 for fp32).  NAME=NONE leaves the alias alone.",
+    )
+    p.add_argument(
+        "--rewrite-external",
+        action="store_true",
+        help="Resolve ``EXTERNAL`` to ``USE`` imports against modules under --search-dir.",
+    )
+    p.add_argument(
+        "--rewrite-string-enum",
+        action="store_true",
+        help="Convert CHARACTER enum-style dummies to INTEGER + emit <out>.enum_maps.json sidecar for bindings.",
+    )
     p.add_argument("--rewrite-if-intvar", action="store_true", help="Rewrite ``IF (intvar)`` to ``IF (intvar /= 0)``.")
-    p.add_argument("--all-defaults",
-                   action="store_true",
-                   help="Apply the same default mix as ``preprocess_"
-                   "fortran_source``: merge + strip-OpenMP + "
-                   "normalize-kind + rewrite-integer-powers.")
+    p.add_argument(
+        "--all-defaults",
+        action="store_true",
+        help="Apply the same default mix as ``preprocess_"
+        "fortran_source``: merge + strip-OpenMP + "
+        "normalize-kind + rewrite-integer-powers.",
+    )
     return p
 
 
@@ -131,6 +152,7 @@ def _apply_passes(source: str, args: argparse.Namespace) -> tuple[str, dict]:
     if args.merge_modules:
         if args.merge_engine == "fparser":
             from dace_fortran.preprocess import fparser_merge
+
             source = fparser_merge(source, search_dirs=args.search_dirs, entry=args.merge_entry)
         else:
             source = merge_used_modules(source, search_dirs=args.search_dirs)
@@ -156,6 +178,7 @@ def _rewrite_inplace(in_path: Path, args: argparse.Namespace) -> dict:
     when --rewrite-string-enum is off)."""
     import os
     import tempfile
+
     src_text = in_path.read_text()
     rewritten, emaps = _apply_passes(src_text, args)
     if rewritten == src_text:

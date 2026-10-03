@@ -70,8 +70,15 @@ def _f2py(out_dir: Path, mod: str, *src_files: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
     subprocess.check_call(
         [
-            sys.executable, "-m", "numpy.f2py", "-c", *[str(s) for s in src_files], "-m", mod, "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off"
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            *[str(s) for s in src_files],
+            "-m",
+            mod,
+            "--quiet",
+            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
         ],
         cwd=out_dir,
     )
@@ -102,8 +109,9 @@ def test_merge_then_single_file_matches_all_files_together(tmp_path: Path):
     merged = merge_used_modules(_DRV, search_dirs=[proj])
     assert merged != _DRV, "multi-module entry must actually be merged"
     lo = merged.lower()
-    assert lo.index("module physmod") < lo.index("module drivermod") < lo.index("subroutine drv"), \
+    assert lo.index("module physmod") < lo.index("module drivermod") < lo.index("subroutine drv"), (
         "merged TU must place dependencies before dependents"
+    )
     md = tmp_path / "b"
     md.mkdir(parents=True, exist_ok=True)
     (md / "merged.f90").write_text(merged)
@@ -121,6 +129,7 @@ def test_merge_then_single_file_matches_all_files_together(tmp_path: Path):
     ref_merged.drv(bb, bb.size)
     cc = base.copy(order="F")
     from dace.data import Scalar
+
     al = sdfg.arglist()
     nkw = {"n": 7 if isinstance(al.get("n"), Scalar) else np.array([7], np.int32)}
     sdfg(a=cc, **nkw)
@@ -143,12 +152,14 @@ def test_merge_noop_on_self_contained_and_idempotent(tmp_path: Path):
 
 def test_merge_leaves_intrinsic_use_untouched(tmp_path: Path):
     """An ``intrinsic`` / compiler-provided module is never merged."""
-    src = ("subroutine k(x)\n"
-           "  use iso_c_binding, only: c_double\n"
-           "  use iso_fortran_env, only: real64\n"
-           "  implicit none\n"
-           "  real(c_double), intent(inout) :: x\n"
-           "  x = x + 1.0_real64\n"
-           "end subroutine k\n")
+    src = (
+        "subroutine k(x)\n"
+        "  use iso_c_binding, only: c_double\n"
+        "  use iso_fortran_env, only: real64\n"
+        "  implicit none\n"
+        "  real(c_double), intent(inout) :: x\n"
+        "  x = x + 1.0_real64\n"
+        "end subroutine k\n"
+    )
     d = _proj(tmp_path / "intr", k_f90=src)
     assert merge_used_modules(src, search_dirs=[d]) == src

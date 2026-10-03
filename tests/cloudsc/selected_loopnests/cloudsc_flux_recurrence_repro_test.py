@@ -118,14 +118,16 @@ def test_cloudsc_flux_recurrence(tmp_path: Path):
 
     lf_sdfg = np.zeros((klon, klev + 1, nblocks), dtype=np.float64, order="F")
     rf_sdfg = np.zeros_like(lf_sdfg)
-    sdfg(klon=klon,
-         klev=klev,
-         nblocks=nblocks,
-         paph=paph.copy(order="F"),
-         za=za.copy(order="F"),
-         zb=zb.copy(order="F"),
-         pfsqlf=lf_sdfg,
-         pfsqrf=rf_sdfg)
+    sdfg(
+        klon=klon,
+        klev=klev,
+        nblocks=nblocks,
+        paph=paph.copy(order="F"),
+        za=za.copy(order="F"),
+        zb=zb.copy(order="F"),
+        pfsqlf=lf_sdfg,
+        pfsqrf=rf_sdfg,
+    )
 
     np.testing.assert_allclose(lf_sdfg, lf_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(rf_sdfg, rf_ref, rtol=1e-12, atol=1e-12)

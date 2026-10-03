@@ -4,6 +4,7 @@ with a DYNAMIC ``offset_<ptr>_d0`` bound per loop iteration via interstate edges
 Pattern documented at ``MarkBoundsRemapViews.cpp`` for QE's ``addusxx_g``
 ``prhoc_d`` rebinds.
 """
+
 import numpy as np
 import pytest
 
@@ -36,9 +37,9 @@ end module m
     N, K = 4, 3
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="m::fill").build()
     # arr2d laid out in Fortran column-major
-    arr = np.full((N, K), -1.0, dtype=np.float64, order='F')
+    arr = np.full((N, K), -1.0, dtype=np.float64, order="F")
     sdfg(arr2d=arr)
-    expected = np.empty((N, K), dtype=np.float64, order='F')
+    expected = np.empty((N, K), dtype=np.float64, order="F")
     for j in range(1, K + 1):
         for i in range(1, N + 1):
             expected[i - 1, j - 1] = i + 10 * j

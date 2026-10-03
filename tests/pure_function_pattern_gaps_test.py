@@ -12,7 +12,6 @@ regression fails loudly rather than passing a build-only check.
 Deliberately out of scope: RECURSIVE PURE FUNCTION -- ``hlfir-inline-all`` can't inline a
 self-recursive callee and the bridge has no call fallback; a future pre-pass rejecting
 recursion cleanly is better than silently emitting ``?``."""
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -63,11 +62,11 @@ def test_array_fn_return_in_arithmetic(tmp_path):
     n = 5
     rng = np.random.default_rng(3)
     src_arr = np.asfortranarray(rng.standard_normal(n))
-    out = np.zeros((3, n), order='F', dtype=np.float64)
+    out = np.zeros((3, n), order="F", dtype=np.float64)
     sdfg(out_arr=out, src=src_arr, n=np.int32(n))
 
-    ref = f2py_compile(_PAT_A, tmp_path / "ref", "pat_a_ref", only=("kern", ))
-    out_ref = np.asfortranarray(ref.m_pat_a.kern(src_arr.copy(order='F')))
+    ref = f2py_compile(_PAT_A, tmp_path / "ref", "pat_a_ref", only=("kern",))
+    out_ref = np.asfortranarray(ref.m_pat_a.kern(src_arr.copy(order="F")))
     np.testing.assert_array_equal(out, out_ref)
 
 
@@ -115,11 +114,11 @@ def test_dummy_shaped_fn_return(tmp_path):
     n, k = 5, 4
     rng = np.random.default_rng(7)
     src_arr = np.asfortranarray(rng.standard_normal(n))
-    out = np.zeros((k, n), order='F', dtype=np.float64)
+    out = np.zeros((k, n), order="F", dtype=np.float64)
     sdfg(out_arr=out, src=src_arr, n=np.int32(n), k=np.int32(k))
 
-    ref = f2py_compile(_PAT_C, tmp_path / "ref", "pat_c_ref", only=("kern", ))
-    out_ref = np.asfortranarray(ref.m_pat_c.kern(src_arr.copy(order='F'), np.int32(k)))
+    ref = f2py_compile(_PAT_C, tmp_path / "ref", "pat_c_ref", only=("kern",))
+    out_ref = np.asfortranarray(ref.m_pat_c.kern(src_arr.copy(order="F"), np.int32(k)))
     np.testing.assert_array_equal(out, out_ref)
 
 
@@ -173,11 +172,11 @@ def test_fn_returns_derived_type(tmp_path):
     a = np.asfortranarray(rng.standard_normal(n))
     b = np.asfortranarray(rng.standard_normal(n))
     c = np.asfortranarray(rng.standard_normal(n))
-    out = np.zeros(n, order='F', dtype=np.float64)
+    out = np.zeros(n, order="F", dtype=np.float64)
     sdfg(out_x=out, src_a=a, src_b=b, src_c=c, n=np.int32(n))
 
-    ref = f2py_compile(_PAT_F, tmp_path / "ref", "pat_f_ref", only=("kern", ))
-    out_ref = np.asfortranarray(ref.m_pat_f.kern(a.copy(order='F'), b.copy(order='F'), c.copy(order='F')))
+    ref = f2py_compile(_PAT_F, tmp_path / "ref", "pat_f_ref", only=("kern",))
+    out_ref = np.asfortranarray(ref.m_pat_f.kern(a.copy(order="F"), b.copy(order="F"), c.copy(order="F")))
     np.testing.assert_array_equal(out, out_ref)
 
 
@@ -219,9 +218,9 @@ def test_slice_lhs_array_fn_return(tmp_path):
     n = 5
     rng = np.random.default_rng(13)
     src_arr = np.asfortranarray(rng.standard_normal(n))
-    out = np.zeros((3, n), order='F', dtype=np.float64)
+    out = np.zeros((3, n), order="F", dtype=np.float64)
     sdfg(b=out, src=src_arr, n=np.int32(n))
 
-    ref = f2py_compile(_PAT_I, tmp_path / "ref", "pat_i_ref", only=("kern", ))
-    out_ref = np.asfortranarray(ref.m_pat_i.kern(src_arr.copy(order='F')))
+    ref = f2py_compile(_PAT_I, tmp_path / "ref", "pat_i_ref", only=("kern",))
+    out_ref = np.asfortranarray(ref.m_pat_i.kern(src_arr.copy(order="F")))
     np.testing.assert_array_equal(out, out_ref)

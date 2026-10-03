@@ -10,6 +10,7 @@ ICON's own call site's flattened SoA leaves land at the right addresses.
 Composes a TU from the icon-model submodule, registers externals, drives
 ``build_sdfg_from_hlfir``.  Skipped if the submodule/flang/OpenMPI is absent.
 """
+
 import os
 import subprocess
 from pathlib import Path
@@ -241,9 +242,10 @@ pytestmark = [
 ]
 
 
-@pytest.mark.skipif(not _have_icon(),
-                    reason="icon-model submodule not checked out; run "
-                    "`git submodule update --init --recursive` to pull it")
+@pytest.mark.skipif(
+    not _have_icon(),
+    reason="icon-model submodule not checked out; run `git submodule update --init --recursive` to pull it",
+)
 def test_emit_hlfir_for_icon_solve_nh(tmp_path: Path):
     """``emit_hlfir_from_codebase`` produces non-trivial HLFIR for ICON's real
     ``mo_solve_nonhydro.f90``."""
@@ -291,8 +293,9 @@ def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
     assert sdfg is not None
     assert sdfg.name
     name_lc = sdfg.name.lower()
-    assert "solve_nh" in name_lc or "solve_nonhydro" in name_lc, \
+    assert "solve_nh" in name_lc or "solve_nonhydro" in name_lc, (
         f"SDFG name doesn't carry the expected entry: {sdfg.name!r}"
+    )
     # API-level structural validation: dangling memlets/orphan connectors/missing
     # access nodes.
     sdfg.validate()
@@ -375,10 +378,9 @@ END MODULE mo_sync
     else:  # gfortran
         mod_out_flag = ["-J", str(tmp_path)]
     subprocess.check_call(
-        [fc_path, *syntax_argv, *fortran_compiler_flags(fc_name), *mod_out_flag,
-         str(stubs),
-         str(_SYNC_WRAPPER_SRC)],
-        cwd=str(tmp_path))
+        [fc_path, *syntax_argv, *fortran_compiler_flags(fc_name), *mod_out_flag, str(stubs), str(_SYNC_WRAPPER_SRC)],
+        cwd=str(tmp_path),
+    )
 
 
 @pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
@@ -408,45 +410,60 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
     pic = _fc_pic_flag(fc_name)
 
     # Compile stubs -> stubs.o + per-compiler .mod files.
-    subprocess.check_call([
-        fc_path, "-c", pic, *fortran_compiler_flags(fc_name), *_fc_mod_flag(fc_name, mod_dir),
-        str(stubs), "-o",
-        str(tmp_path / "stubs.o")
-    ],
-                          cwd=str(tmp_path),
-                          env=env_with_flang_runtime(fc_name))
+    subprocess.check_call(
+        [
+            fc_path,
+            "-c",
+            pic,
+            *fortran_compiler_flags(fc_name),
+            *_fc_mod_flag(fc_name, mod_dir),
+            str(stubs),
+            "-o",
+            str(tmp_path / "stubs.o"),
+        ],
+        cwd=str(tmp_path),
+        env=env_with_flang_runtime(fc_name),
+    )
 
     # Compile wrapper against those .mods.
     wrapper_obj = tmp_path / "icon_sync_iso_c.o"
-    subprocess.check_call([
-        fc_path, "-c", pic, *fortran_compiler_flags(fc_name), f"-I{mod_dir}", *_fc_mod_flag(fc_name, mod_dir),
-        str(_SYNC_WRAPPER_SRC), "-o",
-        str(wrapper_obj)
-    ],
-                          cwd=str(tmp_path),
-                          env=env_with_flang_runtime(fc_name))
+    subprocess.check_call(
+        [
+            fc_path,
+            "-c",
+            pic,
+            *fortran_compiler_flags(fc_name),
+            f"-I{mod_dir}",
+            *_fc_mod_flag(fc_name, mod_dir),
+            str(_SYNC_WRAPPER_SRC),
+            "-o",
+            str(wrapper_obj),
+        ],
+        cwd=str(tmp_path),
+        env=env_with_flang_runtime(fc_name),
+    )
 
     # Link wrapper + stubs into a .so (no main entry needed).
     so_path = tmp_path / "libicon_sync_iso_c_test.so"
     subprocess.check_call(
-        [fc_path, "-shared", pic,
-         str(wrapper_obj), str(tmp_path / "stubs.o"), "-o",
-         str(so_path)],
+        [fc_path, "-shared", pic, str(wrapper_obj), str(tmp_path / "stubs.o"), "-o", str(so_path)],
         cwd=str(tmp_path),
-        env=env_with_flang_runtime(fc_name))
+        env=env_with_flang_runtime(fc_name),
+    )
 
     # The four bind-C names must appear in the .so's dynamic symbol table (``nm -D``
     # gives a portable export list, works for nvfortran too).
     sym_out = subprocess.check_output(["nm", "-D", str(so_path)], text=True)
     for sym in (
-            "sync_patch_array_3d_dp_c",
-            "sync_patch_array_mult_2_dp_c",
-            "sync_patch_array_mult_3_dp_c",
-            "sync_patch_array_mult_mixprec_1sp_1dp_c",
+        "sync_patch_array_3d_dp_c",
+        "sync_patch_array_mult_2_dp_c",
+        "sync_patch_array_mult_3_dp_c",
+        "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
         # Strict "T" (text, defined) marker so an UNDEFINED symbol fails the test.
-        assert f" T {sym}" in sym_out, (f"{fc_name} produced a .so MISSING the bind-C symbol "
-                                        f"{sym!r}; nm -D output:\n{sym_out}")
+        assert f" T {sym}" in sym_out, (
+            f"{fc_name} produced a .so MISSING the bind-C symbol {sym!r}; nm -D output:\n{sym_out}"
+        )
 
 
 @pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
@@ -459,13 +476,12 @@ def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path, icon_build)
     # Sanity: ELF, has our bind(c) symbols
     output = subprocess.check_output(["nm", "-D", str(so_path)], text=True)
     for sym in (
-            "sync_patch_array_3d_dp_c",
-            "sync_patch_array_mult_2_dp_c",
-            "sync_patch_array_mult_3_dp_c",
-            "sync_patch_array_mult_mixprec_1sp_1dp_c",
+        "sync_patch_array_3d_dp_c",
+        "sync_patch_array_mult_2_dp_c",
+        "sync_patch_array_mult_3_dp_c",
+        "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
-        assert f" T {sym}" in output, \
-            f"wrapper .so missing bind-C symbol {sym!r}; got:\n{output}"
+        assert f" T {sym}" in output, f"wrapper .so missing bind-C symbol {sym!r}; got:\n{output}"
 
 
 def test_sync_iso_c_wrapper_pins_bind_c_signatures():
@@ -473,13 +489,12 @@ def test_sync_iso_c_wrapper_pins_bind_c_signatures():
     in any bind-C name, independent of whether the SDFG build path runs."""
     src = _SYNC_WRAPPER_SRC.read_text()
     for sym in (
-            "sync_patch_array_3d_dp_c",
-            "sync_patch_array_mult_2_dp_c",
-            "sync_patch_array_mult_3_dp_c",
-            "sync_patch_array_mult_mixprec_1sp_1dp_c",
+        "sync_patch_array_3d_dp_c",
+        "sync_patch_array_mult_2_dp_c",
+        "sync_patch_array_mult_3_dp_c",
+        "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
-        assert f"name='{sym}'" in src, \
-            f"wrapper missing bind-C entry {sym!r}"
+        assert f"name='{sym}'" in src, f"wrapper missing bind-C entry {sym!r}"
     # ICON-side imports the wrapper depends on.
     for use in ("USE mo_sync", "USE mo_model_domain", "USE mo_kind"):
         assert use in src, f"wrapper missing {use!r}"

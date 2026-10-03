@@ -8,6 +8,7 @@ three pure-fparser helpers the desugaring/pruning/cleanup passes call
 helpers there aren't needed here.  Kept import-compatible so the copied
 ``ast_desugaring`` modules need no source edits.
 """
+
 from typing import Iterator, Optional, Tuple, Type, TypeVar, Union, overload
 
 from fparser.two.utils import Base
@@ -36,18 +37,15 @@ def atmost_one(items: Iterator[T]) -> Optional[T]:
 
 
 @overload
-def children_of_type(node: Base, typ: str) -> Iterator[Base]:
-    ...
+def children_of_type(node: Base, typ: str) -> Iterator[Base]: ...
 
 
 @overload
-def children_of_type(node: Base, typ: Type[T]) -> Iterator[T]:
-    ...
+def children_of_type(node: Base, typ: Type[T]) -> Iterator[T]: ...
 
 
 @overload
-def children_of_type(node: Base, typ: Tuple[Type[T], ...]) -> Iterator[T]:
-    ...
+def children_of_type(node: Base, typ: Tuple[Type[T], ...]) -> Iterator[T]: ...
 
 
 def children_of_type(node: Base, typ: Union[str, Type[T], Tuple[Type[T], ...]]) -> Iterator[Base] | Iterator[T]:

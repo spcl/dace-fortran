@@ -4,6 +4,7 @@ the DaCe wrapper (velocity_tendencies_dace_icon).  Extracted verbatim from
 run_icon_e2e.sh's apply_dace_patch heredoc so the e2e script and the sbatch
 jobs share one implementation.  Usage: apply_velocity_dace_patch.py <f90-path>
 (the caller restores the pristine source from <f90-path>.bak first)."""
+
 import sys
 from pathlib import Path
 
@@ -13,10 +14,13 @@ subr_start = next(i for i, ln in enumerate(lines) if "SUBROUTINE velocity_tenden
 header_end = subr_start
 while lines[header_end].rstrip().endswith("&"):
     header_end += 1
-end_subr = next(i for i, ln in enumerate(lines[header_end + 1:], start=header_end + 1)
-                if "END SUBROUTINE velocity_tendencies" in ln)
+end_subr = next(
+    i
+    for i, ln in enumerate(lines[header_end + 1 :], start=header_end + 1)
+    if "END SUBROUTINE velocity_tendencies" in ln
+)
 last_intent = header_end
-for i, ln in enumerate(lines[header_end + 1:end_subr], start=header_end + 1):
+for i, ln in enumerate(lines[header_end + 1 : end_subr], start=header_end + 1):
     if "INTENT" in ln.upper() and "::" in ln:
         last_intent = i
 
@@ -61,5 +65,5 @@ iface_block = [
     "",
 ]
 extra_top_use = ["    USE iso_c_binding, ONLY: c_bool"]
-new = (lines[:header_end + 1] + extra_top_use + lines[header_end + 1:last_intent + 1] + iface_block + lines[end_subr:])
+new = lines[: header_end + 1] + extra_top_use + lines[header_end + 1 : last_intent + 1] + iface_block + lines[end_subr:]
 p.write_text("\n".join(new) + "\n")

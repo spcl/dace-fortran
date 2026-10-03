@@ -6,6 +6,7 @@
 on an unresolved free symbol. Covers ``MOD`` -> ``FtnMod`` and width-cast
 index pass-through. NOT yet supported: bitwise IAND/IOR/IEOR/ISHFT in a subscript.
 """
+
 import numpy as np
 import pytest
 

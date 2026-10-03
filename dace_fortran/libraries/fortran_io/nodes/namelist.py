@@ -26,36 +26,38 @@ from dace_fortran.dace_types import library_node
 
 @dace.library.expansion
 class ExpandNamelistReadFortranIO(ExpandTransformation):
-
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any,
-                  **kwargs: Any) -> nodes.Tasklet:
+    def expansion(
+        node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any, **kwargs: Any
+    ) -> nodes.Tasklet:
         assert isinstance(node, NamelistRead)
         items = node.ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False, num_items=node.num_items)
         if len(node.members) != len(items):
-            raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
-                             f"for {len(items)} connected outputs")
+            raise ValueError(
+                f"NamelistRead '{node.name}': {len(node.members)} member names for {len(items)} connected outputs"
+            )
         path, group = c_string(node.filename), c_string(node.group)
         lines = [
-            f'int _h = dace_nml_open("{path}", {len(node.filename.encode())}, '
-            f'"{group}", {len(node.group.encode())});'
+            f'int _h = dace_nml_open("{path}", {len(node.filename.encode())}, "{group}", {len(node.group.encode())});'
         ]
         for (conn, desc, count, is_value), member in zip(items, node.members):
             suffix, ctype = fio_type(desc.dtype)
             name_arg = f'"{c_string(member)}", {len(member.encode())}'
             if is_value:
-                lines.append(f'dace_nml_get_{suffix}(_h, {name_arg}, ({ctype} *)&{conn});')
+                lines.append(f"dace_nml_get_{suffix}(_h, {name_arg}, ({ctype} *)&{conn});")
             else:
-                lines.append(f'dace_nml_get_{suffix}_arr(_h, {name_arg}, ({ctype} *){conn}, {count});')
+                lines.append(f"dace_nml_get_{suffix}_arr(_h, {name_arg}, ({ctype} *){conn}, {count});")
         lines.append("dace_nml_close(_h);")
-        return nodes.Tasklet(node.name,
-                             node.in_connectors,
-                             node.out_connectors,
-                             "\n".join(lines),
-                             language=dtypes.Language.CPP,
-                             side_effects=True)
+        return nodes.Tasklet(
+            node.name,
+            node.in_connectors,
+            node.out_connectors,
+            "\n".join(lines),
+            language=dtypes.Language.CPP,
+            side_effects=True,
+        )
 
 
 @library_node
@@ -70,14 +72,12 @@ class NamelistRead(FortranIONode):
     # dace types ``ListProperty(element_type=str)`` as ``list[type[str]]``.
     members = cast(
         list[str],
-        dace.properties.ListProperty(element_type=str, default=[], desc="Member names, in output-connector order"))
+        dace.properties.ListProperty(element_type=str, default=[], desc="Member names, in output-connector order"),
+    )
 
-    def __init__(self,
-                 name: str,
-                 filename: str = "",
-                 group: str = "",
-                 members: Sequence[str] | None = None,
-                 **kwargs: Any) -> None:
+    def __init__(
+        self, name: str, filename: str = "", group: str = "", members: Sequence[str] | None = None, **kwargs: Any
+    ) -> None:
         members = list(members or [])
         super().__init__(name, inputs=set(), outputs={f"_out_{i}" for i in range(len(members))}, **kwargs)
         self.filename = filename

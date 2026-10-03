@@ -17,8 +17,8 @@ from dace_fortran.bindings.loop_copy import (
 
 def _alias_recipe() -> FlattenRecipe:
     return FlattenRecipe(
-        flat_names=("fld_a", ),
-        read_exprs=("fld%a($i1, $i2)", ),
+        flat_names=("fld_a",),
+        read_exprs=("fld%a($i1, $i2)",),
         rank=2,
         shape_exprs=("size(fld%a, dim=1)", "size(fld%a, dim=2)"),
         aliasable=True,
@@ -68,8 +68,8 @@ def test_render_alias_calls_raises_on_non_aliasable():
 
 def test_render_alias_calls_nested_struct_path():
     recipe = FlattenRecipe(
-        flat_names=("st_a_v", ),
-        read_exprs=("st%a%v($i1, $i2)", ),
+        flat_names=("st_a_v",),
+        read_exprs=("st%a%v($i1, $i2)",),
         rank=2,
         shape_exprs=("size(st%a%v, dim=1)", "size(st%a%v, dim=2)"),
         aliasable=True,
@@ -131,10 +131,10 @@ def test_render_copy_out_loop_inverse_for_single_flat_empty_write_expr():
     """Single-flat member with no ``write_expr`` copies out as the exact
     inverse of copy-in: ``<read_expr> = <flat>(idx)``, then deallocates."""
     r = FlattenRecipe(
-        flat_names=("pts_x", ),
-        read_exprs=("pts($i1)%x", ),
+        flat_names=("pts_x",),
+        read_exprs=("pts($i1)%x",),
         rank=1,
-        shape_exprs=("size(pts, dim=1)", ),
+        shape_exprs=("size(pts, dim=1)",),
         aliasable=False,
     )
     body = "\n".join(render_copy_out_loop(r, outer_expr="pts%x"))
@@ -149,7 +149,7 @@ def test_render_copy_out_loop_raises_on_multi_flat_empty_write_expr():
         flat_names=("st_z_re", "st_z_im"),
         read_exprs=("real(st%z($i1))", "aimag(st%z($i1))"),
         rank=1,
-        shape_exprs=("size(st%z, dim=1)", ),
+        shape_exprs=("size(st%z, dim=1)",),
         aliasable=False,
     )
     with pytest.raises(ValueError, match="empty write_expr"):
@@ -163,8 +163,8 @@ def test_render_copy_out_loop_raises_on_multi_flat_empty_write_expr():
 
 def _aos_alloc_recipe() -> FlattenRecipe:
     return FlattenRecipe(
-        flat_names=("a_w", ),
-        read_exprs=("a($i1)%w($i2)", ),
+        flat_names=("a_w",),
+        read_exprs=("a($i1)%w($i2)",),
         rank=2,
         shape_exprs=("size(a, dim=1)", "cap_a_w"),
         aliasable=False,
@@ -199,8 +199,8 @@ def test_render_aos_alloc_pack_out_copies_back_live_region():
 
 def test_render_aos_alloc_pack_in_raises_on_non_aos_alloc():
     plain = FlattenRecipe(
-        flat_names=("a_w", ),
-        read_exprs=("a($i1)%w($i2)", ),
+        flat_names=("a_w",),
+        read_exprs=("a($i1)%w($i2)",),
         rank=2,
         shape_exprs=("size(a, dim=1)", "cap_a_w"),
         aliasable=False,
@@ -215,11 +215,11 @@ def test_kind_convert_recipe_rendering():
     """Kind-convert shape: ``real(kind=4)`` outer -> ``real(kind=8)`` SDFG flat,
     via the same machinery -- no dedicated strategy needed."""
     recipe = FlattenRecipe(
-        flat_names=("st_x_d", ),
-        read_exprs=("real(st%x($i1), kind=c_double)", ),
+        flat_names=("st_x_d",),
+        read_exprs=("real(st%x($i1), kind=c_double)",),
         write_expr="real(st_x_d($i1), kind=c_float)",
         rank=1,
-        shape_exprs=("size(st%x, dim=1)", ),
+        shape_exprs=("size(st%x, dim=1)",),
         aliasable=False,
         scratch_dtype="float64",
     )

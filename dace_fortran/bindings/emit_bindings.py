@@ -70,18 +70,14 @@ def emit_bindings(
         acc_residency = plan_frozen_transfers(frozen)
 
     blocks = {
-        'c_interface':
-        build_c_interface(frozen, iface, dace_arglist, init_symbols),
-        'handle_state':
-        build_handle_state(iface),
-        'wrapper_head':
-        build_wrapper_head(frozen, iface, plan, enum_maps=enum_maps),
-        'wrapper_body':
-        build_wrapper_body(frozen, iface, plan, enum_maps=enum_maps),
-        'wrapper_tail':
-        build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps, init_symbols=init_symbols),
-        'finalize':
-        build_finalize(iface),
+        "c_interface": build_c_interface(frozen, iface, dace_arglist, init_symbols),
+        "handle_state": build_handle_state(iface),
+        "wrapper_head": build_wrapper_head(frozen, iface, plan, enum_maps=enum_maps),
+        "wrapper_body": build_wrapper_body(frozen, iface, plan, enum_maps=enum_maps),
+        "wrapper_tail": build_wrapper_tail(
+            frozen, iface, plan, dace_arglist, enum_maps=enum_maps, init_symbols=init_symbols
+        ),
+        "finalize": build_finalize(iface),
     }
     blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
     out_file.write_text(assemble_module(iface, frozen, blocks, plan))

@@ -47,7 +47,7 @@ def _f2py_ref(tmp_path_factory):
         ref_dir,
         "cloudsc_ref",
         extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter", ),
+        only=("cloudscouter",),
     )
 
 
@@ -73,6 +73,5 @@ def test_cloudsc_full_numerical(tmp_path, _f2py_ref, _strict_fp_cpu_args):
         nbad = int(bad.sum())
         if nbad == 0:
             continue
-        report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} "
-                      f"(max |Δ|={np.abs(a - b)[bad].max():.3e})")
+        report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} (max |Δ|={np.abs(a - b)[bad].max():.3e})")
     assert not report, "cloudsc_full numerical mismatch:\n" + "\n".join(report)

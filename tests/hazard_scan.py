@@ -10,6 +10,7 @@ scheduler tie-break. Source line numbers from debuginfo say which way the Fortra
 
 Run standalone against a built SDFG, or import ``scan``/``report`` from a driver.
 """
+
 import sys
 from collections import defaultdict
 
@@ -48,11 +49,11 @@ def classify(first, second):
     the missing edge failed to record, and debuginfo here is per-construct boilerplate, not
     per-statement. Report the ambiguous pair as RW; only the emitter knows which way it meant.
     """
-    if first['writes'] and second['writes']:
-        return 'WAW'
-    if not first['writes'] and not second['writes']:
+    if first["writes"] and second["writes"]:
+        return "WAW"
+    if not first["writes"] and not second["writes"]:
         return None
-    return 'RW'
+    return "RW"
 
 
 def scan(sdfg):
@@ -67,35 +68,38 @@ def scan(sdfg):
             if len(access_nodes) < 2:
                 continue
             descendants = {id(n): reachable_from(state, n) for n in access_nodes}
-            described = [{
-                'node': n,
-                'writes': state.in_degree(n) > 0,
-                'reads': state.out_degree(n) > 0,
-                'line': access_line(n, state),
-            } for n in access_nodes]
+            described = [
+                {
+                    "node": n,
+                    "writes": state.in_degree(n) > 0,
+                    "reads": state.out_degree(n) > 0,
+                    "line": access_line(n, state),
+                }
+                for n in access_nodes
+            ]
 
             for i, first in enumerate(described):
-                for second in described[i + 1:]:
-                    if second['node'] in descendants[id(first['node'])]:
+                for second in described[i + 1 :]:
+                    if second["node"] in descendants[id(first["node"])]:
                         continue
-                    if first['node'] in descendants[id(second['node'])]:
+                    if first["node"] in descendants[id(second["node"])]:
                         continue
                     kind = classify(first, second)
                     if kind is None:
                         continue
-                    hazards.append({
-                        'sdfg':
-                        sdfg.label,
-                        'state':
-                        state.label,
-                        'container':
-                        container,
-                        'kind':
-                        kind,
-                        'lines': (first['line'], second['line']),
-                        'roles': (('w' if first['writes'] else '') + ('r' if first['reads'] else ''),
-                                  ('w' if second['writes'] else '') + ('r' if second['reads'] else '')),
-                    })
+                    hazards.append(
+                        {
+                            "sdfg": sdfg.label,
+                            "state": state.label,
+                            "container": container,
+                            "kind": kind,
+                            "lines": (first["line"], second["line"]),
+                            "roles": (
+                                ("w" if first["writes"] else "") + ("r" if first["reads"] else ""),
+                                ("w" if second["writes"] else "") + ("r" if second["reads"] else ""),
+                            ),
+                        }
+                    )
 
     for nested, _ in sdfg.all_nodes_recursive():
         if isinstance(nested, nodes.NestedSDFG):
@@ -103,17 +107,17 @@ def scan(sdfg):
     return hazards
 
 
-def report(hazards, title=''):
+def report(hazards, title=""):
     counts = defaultdict(int)
     for hazard in hazards:
-        counts[hazard['kind']] += 1
-    print(f'=== {title} ===')
-    print('total:', len(hazards), dict(counts))
-    for hazard in sorted(hazards, key=lambda h: (h['kind'], h['container'], h['state'])):
-        print('  {kind:8s} {container:32s} {state:28s} lines={lines} roles={roles}'.format(**hazard))
+        counts[hazard["kind"]] += 1
+    print(f"=== {title} ===")
+    print("total:", len(hazards), dict(counts))
+    for hazard in sorted(hazards, key=lambda h: (h["kind"], h["container"], h["state"])):
+        print("  {kind:8s} {container:32s} {state:28s} lines={lines} roles={roles}".format(**hazard))
     return counts
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     for path in sys.argv[1:]:
         report(scan(SDFG.from_file(path)), path)

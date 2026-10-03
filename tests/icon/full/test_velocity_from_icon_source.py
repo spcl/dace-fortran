@@ -7,6 +7,8 @@ emitted to HLFIR and lowered to an SDFG.
 
 Skipped without the icon-model submodule or an LLVM flang/OpenMPI.
 """
+
+import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,6 @@ _HERE = Path(__file__).resolve().parent
 _STUB_SOURCE = _HERE / "velocity_full.f90"
 
 #: ICON checkout pinned by the ``icon-model`` submodule; override via ``ICON_SRC``.
-import os
 
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 
@@ -160,11 +161,13 @@ _PATHS = [
     pytest.param(
         "real_icon",
         marks=[
-            pytest.mark.skipif(not _have_icon(),
-                               reason="icon-model submodule not checked out + built; "
-                               "run `git submodule update --init --recursive "
-                               "tests/icon/full/icon-model` and configure a "
-                               "stock CPU build before re-running"),
+            pytest.mark.skipif(
+                not _have_icon(),
+                reason="icon-model submodule not checked out + built; "
+                "run `git submodule update --init --recursive "
+                "tests/icon/full/icon-model` and configure a "
+                "stock CPU build before re-running",
+            ),
         ],
         id="icon_real_source",
     ),
@@ -185,8 +188,7 @@ def test_build_velocity_sdfg(tmp_path: Path, source: str):
     assert sdfg is not None
     assert sdfg.name
     name_lc = sdfg.name.lower()
-    assert "velocity" in name_lc, \
-        f"SDFG name doesn't carry the expected entry: {sdfg.name!r}"
+    assert "velocity" in name_lc, f"SDFG name doesn't carry the expected entry: {sdfg.name!r}"
     # Structural validation: dangling memlets, orphan connectors, missing access nodes, schedule mismatches.
     sdfg.validate()
     # Load-bearing: an orphaned view_alias passes validate() but raises KeyError in

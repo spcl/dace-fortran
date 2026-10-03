@@ -9,6 +9,7 @@ axes), the depth guard hit via an abstract base that itself ``EXTENDS`` another
 type, and the :class:`UnsupportedProgram` ``reason`` contract.  Rejections are
 asserted with ``pytest.raises`` (not xfail) so detection is itself under test.
 """
+
 import pytest
 
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze_source, UnsupportedProgram

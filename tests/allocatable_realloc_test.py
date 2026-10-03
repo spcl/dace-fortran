@@ -31,15 +31,15 @@ subroutine main(n1, n2, src1, src2, out)
   deallocate(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
-    assert 'x_alloc1' in sdfg.arrays, f"expected x_alloc1 transient, got {list(sdfg.arrays)}"
-    assert sdfg.arrays['x_alloc1'].transient
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
+    assert "x_alloc1" in sdfg.arrays, f"expected x_alloc1 transient, got {list(sdfg.arrays)}"
+    assert sdfg.arrays["x_alloc1"].transient
     n1, n2 = 4, 6
-    src1 = np.empty(n1, dtype=np.float64, order='F')
+    src1 = np.empty(n1, dtype=np.float64, order="F")
     src1[:] = np.arange(1, n1 + 1)
-    src2 = np.empty(n2, dtype=np.float64, order='F')
+    src2 = np.empty(n2, dtype=np.float64, order="F")
     src2[:] = np.arange(100, 100 + n2)
-    out = np.zeros(n2, dtype=np.float64, order='F')
+    out = np.zeros(n2, dtype=np.float64, order="F")
     sdfg(n1=n1, n2=n2, src1=src1, src2=src2, out=out)
     np.testing.assert_array_equal(out, src2)
 
@@ -62,13 +62,13 @@ subroutine main(n, src1, src2, out)
   deallocate(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
-    assert 'x_alloc1' in sdfg.arrays
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
+    assert "x_alloc1" in sdfg.arrays
     n = 5
-    src1 = np.empty(n, dtype=np.float64, order='F')
+    src1 = np.empty(n, dtype=np.float64, order="F")
     src1[:] = -1.0
-    src2 = np.empty(n, dtype=np.float64, order='F')
+    src2 = np.empty(n, dtype=np.float64, order="F")
     src2[:] = np.arange(1, n + 1)
-    out = np.zeros(n, dtype=np.float64, order='F')
+    out = np.zeros(n, dtype=np.float64, order="F")
     sdfg(n=n, src1=src1, src2=src2, out=out)
     np.testing.assert_array_equal(out, src2)

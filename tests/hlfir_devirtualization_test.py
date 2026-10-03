@@ -49,7 +49,9 @@ contains
   end subroutine
 """
 
-_POLY_SOURCE = _POLY_PREAMBLE + """
+_POLY_SOURCE = (
+    _POLY_PREAMBLE
+    + """
   subroutine run_poly(b, x)        ! dispatch on abstract CLASS dummy
     class(base), intent(in) :: b
     real, intent(inout) :: x
@@ -63,10 +65,13 @@ _POLY_SOURCE = _POLY_PREAMBLE + """
   end subroutine
 end module
 """
+)
 
 # The monomorphised shape we would have to synthesise to avoid dispatch: a call
 # on a concrete ``TYPE`` entity, kept in its own TU.
-_CONCRETE_SOURCE = _POLY_PREAMBLE + """
+_CONCRETE_SOURCE = (
+    _POLY_PREAMBLE
+    + """
   subroutine run_concrete(c, x)    ! call on concrete TYPE -> static bind
     type(impl), intent(in) :: c
     real, intent(inout) :: x
@@ -74,6 +79,7 @@ _CONCRETE_SOURCE = _POLY_PREAMBLE + """
   end subroutine
 end module
 """
+)
 
 #: mangled name of the concrete override; a *direct* fir.call to it is the unambiguous
 #: signature of devirtualisation (fir.address_of / func.func def / fir.dt_entry do NOT count).
@@ -117,8 +123,10 @@ def test_polymorphic_dispatch_lowers_to_fir_dispatch(tmp_path: Path):
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False)
     # one fir.dispatch per polymorphic call site, none devirtualised.
     assert fir.count("fir.dispatch") == 2, "expected both polymorphic calls to lower to fir.dispatch"
-    assert _DIRECT_CALL not in fir, ("a polymorphic call was devirtualised to a direct override call -- flang "
-                                     "behaviour changed; revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in fir, (
+        "a polymorphic call was devirtualised to a direct override call -- flang "
+        "behaviour changed; revisit the ocean solver externalisation policy"
+    )
 
 
 def test_concrete_type_call_is_a_direct_bind(tmp_path: Path):
@@ -134,8 +142,10 @@ def test_optimised_pipeline_keeps_dispatch(tmp_path: Path):
     """flang's default ``-O2`` pipeline (incl. ``--fir-polymorphic-op`` + inlining) does not
     turn either polymorphic shape into a direct call -- dispatch survives as a vtable indirect."""
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=True)
-    assert _DIRECT_CALL not in fir, ("an -O2 pass devirtualised the polymorphic call -- flang behaviour "
-                                     "changed; revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in fir, (
+        "an -O2 pass devirtualised the polymorphic call -- flang behaviour "
+        "changed; revisit the ocean solver externalisation policy"
+    )
 
 
 def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Path):
@@ -148,9 +158,12 @@ def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Pat
     raw = tmp_path / "poly.fir"
     raw.write_text(_emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False))
     lowered = subprocess.check_output(
-        [fir_opt, "--inline-all", "--fir-polymorphic-op", str(raw)], cwd=str(tmp_path)).decode()
+        [fir_opt, "--inline-all", "--fir-polymorphic-op", str(raw)], cwd=str(tmp_path)
+    ).decode()
     # The high-level dispatch op is gone ...
     assert "fir.dispatch" not in lowered
     # ... but it was replaced by a runtime vtable indirect, NOT a direct call.
-    assert _DIRECT_CALL not in lowered, ("--fir-polymorphic-op produced a direct call -- it now devirtualises; "
-                                         "revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in lowered, (
+        "--fir-polymorphic-op produced a direct call -- it now devirtualises; "
+        "revisit the ocean solver externalisation policy"
+    )

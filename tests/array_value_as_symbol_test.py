@@ -2,6 +2,7 @@
 (``__sym_<array>_<index>``) distinct from the array itself; the backing array must
 stay constant in the symbol's scope or the build is refused.  Reproduces ICON's
 ``z_raylfac(nrdmax(jg))`` pattern (``mo_solve_nonhydro``)."""
+
 import shutil
 from pathlib import Path
 
@@ -44,8 +45,7 @@ def test_array_value_as_dimension_symbol(tmp_path: Path):
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="avd", entry="array_value_as_dim_mod::array_value_as_dim").build()
     assert "sizes" in sdfg.arrays  # the array stays a data descriptor
     assert "sizes" not in sdfg.symbols, "array name leaked in as a symbol"
-    assert "__sym_sizes_sel" in sdfg.symbols, \
-        f"expected the value-symbol; got {sorted(sdfg.symbols)}"
+    assert "__sym_sizes_sel" in sdfg.symbols, f"expected the value-symbol; got {sorted(sdfg.symbols)}"
 
     sizes = np.array([3, 5, 2, 7], dtype=np.int32)
     sel = 2  # 1-based -> sizes(2) = 5
@@ -91,8 +91,9 @@ def test_value_symbol_automatic_extent_source_write_allowed(tmp_path: Path):
     ``sizes(1) = 99`` cannot change ``work``'s extent -- the entry snapshot is exact.
     Formerly refused as over-conservative; now builds and matches the reference,
     while the source write still takes effect on the ``sizes`` array itself."""
-    sdfg = build_sdfg(_SRC_WRITTEN, tmp_path / "sdfg", name="avw",
-                      entry="array_value_written_mod::array_value_written").build()
+    sdfg = build_sdfg(
+        _SRC_WRITTEN, tmp_path / "sdfg", name="avw", entry="array_value_written_mod::array_value_written"
+    ).build()
     assert "__sym_sizes_sel" in sdfg.symbols
 
     sizes = np.array([3, 5, 2, 7], dtype=np.int32)
@@ -137,8 +138,9 @@ def test_value_symbol_reaching_def_resnapshot(tmp_path: Path):
     reaching-def value-projection SSA for the data-access case.  Oracle'd against f2py."""
     sdfg = build_sdfg(_SRC_RESNAP, tmp_path / "sdfg", name="rsnp", entry="resnap_mod::resnap").build()
     # One value symbol per read site: tab_at0 (pre-write), tab_at1 (post-write).
-    assert sum(s.startswith("tab_at")
-               for s in sdfg.symbols) >= 2, f"expected per-site symbols; got {sorted(sdfg.symbols)}"
+    assert sum(s.startswith("tab_at") for s in sdfg.symbols) >= 2, (
+        f"expected per-site symbols; got {sorted(sdfg.symbols)}"
+    )
     assert "tab" in sdfg.arrays
 
     sel = 1  # 1-based -> tab(1)

@@ -37,6 +37,7 @@ _DTYPE_TO_FORTRAN_C = {
 @dataclass(frozen=True, slots=True)
 class Member:
     """One field of a Fortran derived type."""
+
     name: str  # 'u'
     fortran_type: str  # 'real(c_double)' | 'complex(c_double)' | 'integer(c_int)'
     rank: int
@@ -52,12 +53,13 @@ class Member:
     # gfortran's internal_pack at an unguarded site reads the garbage
     # descriptor and smashes the stack (ICON Held-Suarez: disassociated
     # t_nh_diag%ddt_ua_* pointers).
-    alloc: str = ''
+    alloc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class DerivedType:
     """Layout of one Fortran derived type referenced by the entry."""
+
     name: str  # 't_state'
     module: Optional[str]  # 'mo_state' if defined in a module
     members: Tuple[Member, ...] = field(default_factory=tuple)
@@ -66,11 +68,12 @@ class DerivedType:
 @dataclass(frozen=True, slots=True)
 class OriginalArg:
     """One dummy argument of the entry subroutine, outer view."""
+
     name: str  # 'st'  --  Fortran-source name
     fortran_type: str  # 'real(c_double)' / 'type(t_state)' / 'logical' / ...
     rank: int
     shape: Tuple[str, ...] = field(default_factory=tuple)
-    intent: str = ''  # 'in' | 'out' | 'inout' | ''
+    intent: str = ""  # 'in' | 'out' | 'inout' | ''
     # OPTIONAL dummy: wrapper forwards present(<name>) into the kernel's
     # <name>_present symbol, rather than defaulting it absent.
     optional: bool = False
@@ -82,6 +85,7 @@ class OriginalArg:
 class OriginalInterface:
     """Caller-facing surface of the entry subroutine plus every
     derived type referenced by its dummies (transitively)."""
+
     entry: str  # 'compute_tendencies'
     args: Tuple[OriginalArg, ...]
     struct_types: Dict[str, DerivedType] = field(default_factory=dict)
@@ -118,8 +122,7 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
         else:
             mapped_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
             if mapped_type is None:
-                raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
-                                 f"for argument {a['name']!r}")
+                raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} for argument {a['name']!r}")
             fortran_type = mapped_type
             struct_type = None
         rank = int(a["rank"])
@@ -128,15 +131,18 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
         # rank-length ':' tuple (matches the hand-authored interface shape
         # used by the velocity_full e2e).
         if rank > 0 and not shape:
-            shape = (":", ) * rank
+            shape = (":",) * rank
         args.append(
-            OriginalArg(name=a["name"],
-                        fortran_type=fortran_type,
-                        rank=rank,
-                        shape=shape,
-                        intent=a["intent"],
-                        optional=bool(a.get("optional", False)),
-                        struct_type=struct_type))
+            OriginalArg(
+                name=a["name"],
+                fortran_type=fortran_type,
+                rank=rank,
+                shape=shape,
+                intent=a["intent"],
+                optional=bool(a.get("optional", False)),
+                struct_type=struct_type,
+            )
+        )
     used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
     struct_types = {}
     for sname, st in raw.get("struct_types", {}).items():
@@ -159,6 +165,7 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                     struct_name=nested_name or None,
                     # .get: pre-alloc-field bridge snapshots deserialise with no guard.
                     alloc=m.get("alloc", ""),
-                ))
+                )
+            )
         struct_types[sname] = DerivedType(name=st["name"], module=st["module"] or None, members=tuple(members))
     return OriginalInterface(entry=entry, args=tuple(args), struct_types=struct_types, used_modules=used_modules)

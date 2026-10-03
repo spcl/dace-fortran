@@ -8,6 +8,7 @@ Two rules that must hold globally (the binding/codegen depend on them):
 * ``INTEGER(1/2/4/8)`` -> ``int8/16/32/64`` (width preserved, never
   widened or conflated with ``bool``).
 """
+
 from pathlib import Path
 
 import pytest

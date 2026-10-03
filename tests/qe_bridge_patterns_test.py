@@ -5,6 +5,7 @@ kernel, each isolating one pattern as a fast regression guard independent of the
 2. PRESENT() on an inlined OPTIONAL dummy (``bridge/ast/expressions.cpp`` lowerIsPresent)
 3. derived-type INTEGER member used as array size (``bridge/extract_vars.cpp`` shape-symbol snapshot)
 """
+
 import numpy as np
 import pytest
 

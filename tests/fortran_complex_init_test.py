@@ -33,9 +33,9 @@ subroutine main(c, z)
   z(2) = (-7.0_dp, 8.0_dp)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='complex_init').build()
-    assert sdfg.arrays['c'].dtype == dace.complex64
-    assert sdfg.arrays['z'].dtype == dace.complex128
+    sdfg = build_sdfg(src, tmp_path, name="complex_init").build()
+    assert sdfg.arrays["c"].dtype == dace.complex64
+    assert sdfg.arrays["z"].dtype == dace.complex128
 
 
 def test_fortran_frontend_complex_arith(tmp_path):
@@ -54,9 +54,9 @@ subroutine main(cin, cout, zin, zout)
   zout(2) = zin(1) * zin(2)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='complex_arith').build()
-    assert sdfg.arrays['cin'].dtype == dace.complex64
-    assert sdfg.arrays['zin'].dtype == dace.complex128
+    sdfg = build_sdfg(src, tmp_path, name="complex_arith").build()
+    assert sdfg.arrays["cin"].dtype == dace.complex64
+    assert sdfg.arrays["zin"].dtype == dace.complex128
 
     cin = np.array([1 + 2j, 3 - 4j], order="F", dtype=np.complex64)
     zin = np.array([5 + 6j, -7 + 8j], order="F", dtype=np.complex128)
@@ -81,8 +81,8 @@ subroutine main(z)
   z(2) = (-7.0_dp, 8.0_dp)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='dcomplex_lit').build()
-    assert sdfg.arrays['z'].dtype == dace.complex128
+    sdfg = build_sdfg(src, tmp_path, name="dcomplex_lit").build()
+    assert sdfg.arrays["z"].dtype == dace.complex128
     z = np.zeros(2, order="F", dtype=np.complex128)
     sdfg(z=z)
     assert z[0] == np.complex128(5.0 + 6.0j)
@@ -102,8 +102,8 @@ subroutine main(c)
   c(2) = (3.0_sp, -4.0_sp)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='scomplex_lit').build()
-    assert sdfg.arrays['c'].dtype == dace.complex64
+    sdfg = build_sdfg(src, tmp_path, name="scomplex_lit").build()
+    assert sdfg.arrays["c"].dtype == dace.complex64
     c = np.zeros(2, order="F", dtype=np.complex64)
     with pytest.raises(CompilationError):
         sdfg(c=c)

@@ -2,6 +2,7 @@
 
 Tags a bounds-remapping pointer assign's (``ptr(1:N*K) => target(:, slice)``) LHS ``hlfir.declare`` with ``hlfir_bridge.bounds_remap_view`` so the SDFG builder emits a View node instead of routing through index-rewriting.  Runs against the four pinned probes from ``test_view_vs_copy_distinguishable.py`` and checks the tag fires on exactly the view probe.
 """
+
 import subprocess
 import tempfile
 from pathlib import Path
@@ -24,13 +25,19 @@ def _emit_hlfir_and_mark(src_path: Path) -> str:
 
     with tempfile.TemporaryDirectory(prefix="brv_mark_") as td:
         h = Path(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(src_path), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(src_path),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.run_passes("hlfir-mark-bounds-remap-views")
@@ -45,36 +52,31 @@ def _count_tagged(ir: str) -> int:
 def test_pointer_view_bounds_remap_is_tagged():
     """The view probe -- the only bounds-remap pointer assignment -- has its LHS pointer declare tagged."""
     ir = _emit_hlfir_and_mark(_HERE / "pointer_view_bounds_remap_probe.f90")
-    assert _count_tagged(ir) >= 1, \
-        "view probe should have exactly one bounds-remap-view tag"
+    assert _count_tagged(ir) >= 1, "view probe should have exactly one bounds-remap-view tag"
 
 
 def test_pointer_view_bounds_remap_allocatable_is_tagged():
     """Bounds-remap view whose TARGET is ALLOCATABLE (QE's ``prhoc_d => rhoc_d(:, slice)`` shape) is still tagged -- detection is independent of the parent being allocatable."""
     ir = _emit_hlfir_and_mark(_HERE / "pointer_view_bounds_remap_allocatable_probe.f90")
-    assert _count_tagged(ir) >= 1, \
-        "allocatable-target view probe should have a bounds-remap-view tag"
+    assert _count_tagged(ir) >= 1, "allocatable-target view probe should have a bounds-remap-view tag"
 
 
 def test_reshape_intrinsic_copy_is_not_tagged():
     """RESHAPE copy must NOT be tagged -- it lowers through hlfir.reshape, a different op the detector doesn't match."""
     ir = _emit_hlfir_and_mark(_HERE / "reshape_intrinsic_copy_probe.f90")
-    assert _count_tagged(ir) == 0, \
-        "RESHAPE copy must not be tagged as a view"
+    assert _count_tagged(ir) == 0, "RESHAPE copy must not be tagged as a view"
 
 
 def test_pointer_plain_no_remap_is_not_tagged():
     """Plain pointer assign (no bounds remap, no rank change) must not be tagged -- hlfir-rewrite-pointer-assigns handles that case."""
     ir = _emit_hlfir_and_mark(_HERE / "pointer_plain_no_remap_probe.f90")
-    assert _count_tagged(ir) == 0, \
-        "plain pointer assign must not be tagged"
+    assert _count_tagged(ir) == 0, "plain pointer assign must not be tagged"
 
 
 def test_plain_slice_copy_is_not_tagged():
     """Plain ``dst = src(:, 1:k)`` slice assignment must not be tagged -- no pointer involved, so the rebox-into-pointer detector can't fire."""
     ir = _emit_hlfir_and_mark(_HERE / "plain_slice_copy_probe.f90")
-    assert _count_tagged(ir) == 0, \
-        "plain slice copy must not be tagged"
+    assert _count_tagged(ir) == 0, "plain slice copy must not be tagged"
 
 
 def test_idempotent():
@@ -83,13 +85,19 @@ def test_idempotent():
 
     with tempfile.TemporaryDirectory(prefix="brv_idem_") as td:
         h = Path(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(_HERE / "pointer_view_bounds_remap_probe.f90"), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(_HERE / "pointer_view_bounds_remap_probe.f90"),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.run_passes("hlfir-mark-bounds-remap-views")

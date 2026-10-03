@@ -44,8 +44,12 @@ def test_scalar_reductions_numerical(tmp_path):
     a = rng.uniform(0.1, 2.0, size=n)
 
     # Reference.
-    t_ref, p_ref, lo_ref, hi_ref = (np.zeros(1, order="F"), np.zeros(1, order="F"), np.zeros(1, order="F"),
-                                    np.zeros(1, order="F"))
+    t_ref, p_ref, lo_ref, hi_ref = (
+        np.zeros(1, order="F"),
+        np.zeros(1, order="F"),
+        np.zeros(1, order="F"),
+        np.zeros(1, order="F"),
+    )
     mod.reduce_scalar(np.asfortranarray(a), t_ref, p_ref, lo_ref, hi_ref)
 
     # SDFG: intent(inout) scalars land as size-1 Array descriptors (DaCe can't put
@@ -80,10 +84,10 @@ def test_scalar_reductions_structure(tmp_path):
                 yield n
 
     reduces = [n for s in iter_states(sdfg) for n in s.nodes() if isinstance(n, Reduce)]
-    assert len(reduces) == 4, (f"expected 4 Reduce library nodes; got {len(reduces)}")
+    assert len(reduces) == 4, f"expected 4 Reduce library nodes; got {len(reduces)}"
 
     wcrs = sorted(r.wcr for r in reduces)
-    assert 'lambda a, b: a + b' in wcrs
-    assert 'lambda a, b: a * b' in wcrs
-    assert 'lambda a, b: min(a, b)' in wcrs
-    assert 'lambda a, b: max(a, b)' in wcrs
+    assert "lambda a, b: a + b" in wcrs
+    assert "lambda a, b: a * b" in wcrs
+    assert "lambda a, b: min(a, b)" in wcrs
+    assert "lambda a, b: max(a, b)" in wcrs

@@ -10,6 +10,7 @@ Asserts: regenerated source is byte-identical to the committed
 rewrite stats, synthesised ``act__tag`` + per-arm clones, zero surviving
 ``CLASS(t_transfer)``/``CLASS(t_lhs_agen)``).
 """
+
 import re
 
 import pytest
@@ -17,13 +18,15 @@ import pytest
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
-from icon.ocean._monomorphize_solver import (ARTIFACT, depolymorphize_solver, have_icon_solver, parse_program)
+from icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, have_icon_solver, parse_program
 
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not have_icon_solver(),
-                       reason="icon-model ocean source not checked out; run "
-                       "`git submodule update --init --recursive tests/icon/full/icon-model`"),
+    pytest.mark.skipif(
+        not have_icon_solver(),
+        reason="icon-model ocean source not checked out; run "
+        "`git submodule update --init --recursive tests/icon/full/icon-model`",
+    ),
 ]
 
 _BACKEND_ARMS = {
@@ -55,11 +58,13 @@ def test_committed_artifact_matches_regenerated():
     """Byte-for-byte drift guard: the committed de-polymorphised file must equal
     a fresh run of the monomorphisation engine on the upstream solver."""
     source, _stats = depolymorphize_solver()
-    assert ARTIFACT.is_file(), \
+    assert ARTIFACT.is_file(), (
         f"no committed artifact {ARTIFACT.name}; run `python {ARTIFACT.parent}/_monomorphize_solver.py`"
-    assert source == ARTIFACT.read_text(), \
-        (f"{ARTIFACT.name} drifted from the engine + upstream sources; regenerate it via "
-         f"`python {ARTIFACT.parent}/_monomorphize_solver.py`")
+    )
+    assert source == ARTIFACT.read_text(), (
+        f"{ARTIFACT.name} drifted from the engine + upstream sources; regenerate it via "
+        f"`python {ARTIFACT.parent}/_monomorphize_solver.py`"
+    )
 
 
 def test_artifact_is_fully_depolymorphised():

@@ -5,6 +5,7 @@ traceToDecl fix (25f8e83) flattens ``<parent>_<member>`` for
 ``traceToDecl`` directly, bypassing that branch. Each test probes one
 such site for a leaked bare struct base.
 """
+
 import numpy as np
 import pytest
 
@@ -138,9 +139,9 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_a" in sdfg.arrays
-    A = np.eye(3, dtype=np.float64, order='F')
-    B = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    out = np.zeros((3, 3), dtype=np.float64, order='F')
+    A = np.eye(3, dtype=np.float64, order="F")
+    B = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    out = np.zeros((3, 3), dtype=np.float64, order="F")
     sdfg(g_a=A, b=B, out=out)
     np.testing.assert_allclose(out, A @ B)
 

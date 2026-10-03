@@ -18,6 +18,7 @@ arguments and the checker falls back to ``git diff --cached`` to find them itsel
 Exit status: 0 when every checked file is within the limit, 1 when one or more
 exceed it (each offender and its size are printed).
 """
+
 import argparse
 import subprocess
 import sys
@@ -29,9 +30,9 @@ BYTES_PER_KB = 1024
 
 def staged_files() -> list[str]:
     """Return the repo's currently-staged file paths (added / copied / modified)."""
-    out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-                         capture_output=True,
-                         text=True)
+    out = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True
+    )
     if out.returncode != 0:
         return []
     return [ln for ln in out.stdout.splitlines() if ln.strip()]

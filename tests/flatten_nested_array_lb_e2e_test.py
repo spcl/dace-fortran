@@ -8,6 +8,7 @@ defaulted lb=1 and ``o%arr(1)%v(0)`` indexed element -1. ICON shape: nested
 member + negative block lower bound. f2py can't wrap the dummy, so the
 reference is the closed-form result; offset constants are the correctness signal.
 """
+
 from pathlib import Path
 
 import pytest
@@ -47,4 +48,4 @@ def test_flatten_nested_array_nondefault_lb(tmp_path: Path):
     offs = {k: int(v) for k, v in consts.items() if k.startswith("offset_") and "arr_v" in k}
     # Companion is (arr dim, v dim): arr lb 1, v lb 0.
     assert offs.get("offset_o_arr_v_d0") == 1, offs
-    assert offs.get("offset_o_arr_v_d1") == 0, (f"inner v(0:3) lower bound 0 lost in flattening; got {offs}")
+    assert offs.get("offset_o_arr_v_d1") == 0, f"inner v(0:3) lower bound 0 lost in flattening; got {offs}"

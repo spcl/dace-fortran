@@ -5,6 +5,7 @@ Each test drives one ``run_fft_interpolate_<dtype>`` entry of
 resulting SDFG contains a single
 :class:`dace.libraries.fft.nodes.FFTInterpolate` lib node.
 """
+
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,9 @@ def _build_and_assert(entry: str, expected_kind: str, tmp_path):
     sdfg.validate()
     matches = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "FFTInterpolate"]
     assert matches, "no FFTInterpolate lib node emitted"
-    assert matches[0].dtype_kind == expected_kind, \
+    assert matches[0].dtype_kind == expected_kind, (
         f"expected dtype_kind={expected_kind!r}, got {matches[0].dtype_kind!r}"
+    )
 
 
 def test_fft_interpolate_complex_recognised(tmp_path):

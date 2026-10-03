@@ -34,8 +34,7 @@ def _module_wrap_drivers(src: str) -> str:
     marker = "SUBROUTINE CLOUDSCOUTER"
     head, _, tail = src.partition(marker)
     assert tail, "CLOUDSCOUTER driver not found in cloudsc_top_half source"
-    return (f"{head}module cloudsc_top_half_mod\ncontains\n"
-            f"{marker}{tail.rstrip()}\nend module cloudsc_top_half_mod\n")
+    return f"{head}module cloudsc_top_half_mod\ncontains\n{marker}{tail.rstrip()}\nend module cloudsc_top_half_mod\n"
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +48,7 @@ def _f2py_top_half(tmp_path_factory):
         # -ffree-line-length-none: gfortran-only, non-semantic parser necessity for the
         # long-line source (flang has no line limit); rest is the flang-portable FP core
         extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter", ),
+        only=("cloudscouter",),
     )
 
 

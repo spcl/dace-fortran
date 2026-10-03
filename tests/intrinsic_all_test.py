@@ -18,7 +18,7 @@ res(1) = ALL(d)
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     size = 5
     d = np.full([size], False, order="F", dtype=np.bool_)
@@ -26,11 +26,11 @@ END SUBROUTINE intrinsic_all_test_function
 
     d[2] = True
     sdfg(d=d, res=res)
-    assert res[0] == False
+    assert not res[0]
 
     d = np.full([size], True, order="F", dtype=np.bool_)
     sdfg(d=d, res=res)
-    assert res[0] == True
+    assert res[0]
 
 
 def test_fortran_frontend_all_array_dim(tmp_path):
@@ -43,7 +43,7 @@ res(1) = ALL(d, 1)
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
 
 def test_fortran_frontend_all_array_comparison(tmp_path):
@@ -65,7 +65,7 @@ res(7) = ALL(first(1:2) .eq. second(4:5))
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
@@ -80,7 +80,7 @@ END SUBROUTINE intrinsic_all_test_function
     res = np.full([7], False, order="F", dtype=np.bool_)
     sdfg(first=first, second=second, res=res)
     for val in res:
-        assert val == False
+        assert not val
 
 
 def test_fortran_frontend_all_array_scalar_comparison(tmp_path):
@@ -100,7 +100,7 @@ res(6) = ALL(42 .ne. first)
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     size = 5
     first = np.full([size], 42, order="F", dtype=np.int32)
@@ -108,8 +108,8 @@ END SUBROUTINE intrinsic_all_test_function
 
     sdfg(first=first, res=res)
     for val in res[0:-1]:
-        assert val == True
-    assert res[-1] == False
+        assert val
+    assert not res[-1]
 
     first[1] = 5
     sdfg(first=first, res=res)
@@ -135,7 +135,7 @@ res(1) = ALL(d)
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     sizes = [5, 7]
     d = np.full(sizes, True, order="F", dtype=np.bool_)
@@ -143,11 +143,11 @@ END SUBROUTINE intrinsic_all_test_function
 
     d[2, 2] = False
     sdfg(d=d, res=res)
-    assert res[0] == False
+    assert not res[0]
 
     d[2, 2] = True
     sdfg(d=d, res=res)
-    assert res[0] == True
+    assert res[0]
 
 
 def test_fortran_frontend_all_array_comparison_2d(tmp_path):
@@ -168,7 +168,7 @@ res(7) = ALL(first(2:3, 3:4) .eq. second(2:3, 3:4))
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -178,13 +178,13 @@ END SUBROUTINE intrinsic_all_test_function
 
     sdfg(first=first, second=second, res=res)
     for val in res:
-        assert val == False
+        assert not val
 
     second = np.full(sizes, 1, order="F", dtype=np.int32)
     res = np.full([7], False, order="F", dtype=np.bool_)
     sdfg(first=first, second=second, res=res)
     for val in res:
-        assert val == True
+        assert val
 
 
 def test_fortran_frontend_all_array_comparison_2d_subset(tmp_path):
@@ -201,7 +201,7 @@ res(2) = ALL(first(1:2, 3:4) .eq. second(4:5, 2:3))
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -233,7 +233,7 @@ res(2) = ALL(first(20:21, 3:4) .eq. second(4:5, 8:9))
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_all_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)

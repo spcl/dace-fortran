@@ -4,6 +4,7 @@
 the engine plans the REAL hierarchy, not just the synthetic fixture; unrelated
 CLASS(*) containers the closure also pulls in are out of scope and don't block it.
 """
+
 import re
 from pathlib import Path
 
@@ -16,7 +17,8 @@ _COMM_DIR = _HERE / "full" / "icon-model" / "src" / "parallel_infrastructure"
 
 pytestmark = pytest.mark.skipif(
     not (_COMM_DIR / "mo_communication_types.f90").is_file(),
-    reason="icon-model submodule not checked out; run `git submodule update --init --recursive`")
+    reason="icon-model submodule not checked out; run `git submodule update --init --recursive`",
+)
 
 _CPP = re.compile(r"^\s*#")
 
@@ -24,7 +26,7 @@ _CPP = re.compile(r"^\s*#")
 def _type_blocks(fname: str) -> str:
     """Extract every ``TYPE ... END TYPE`` block from a real ICON module
     (cpp-stripped) -- enough for the engine to learn the arm set."""
-    text = "\n".join(l for l in (_COMM_DIR / fname).read_text().splitlines() if not _CPP.match(l))
+    text = "\n".join(ln for ln in (_COMM_DIR / fname).read_text().splitlines() if not _CPP.match(ln))
     out, depth, buf = [], 0, []
     for line in text.splitlines():
         s = line.strip().upper()
@@ -45,7 +47,8 @@ def test_real_icon_comm_pattern_is_monomorphisable():
     (orig/yaxt), every deferred binding overridden -- so the engine can devirtualize it."""
     typedefs = "\n".join(
         _type_blocks(f)
-        for f in ("mo_communication_types.f90", "mo_communication_orig.f90", "mo_communication_yaxt.f90"))
+        for f in ("mo_communication_types.f90", "mo_communication_orig.f90", "mo_communication_yaxt.f90")
+    )
     prog = parse_program(f"module zz_comm_types\n{typedefs}\nend module\n")
 
     plans = {p.abstract_base: p for p in analyze(prog, only_bases=["t_comm_pattern"])}

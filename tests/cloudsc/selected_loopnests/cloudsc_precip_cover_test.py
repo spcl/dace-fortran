@@ -6,6 +6,7 @@ Kind-mixed ``1.0 - 1.E-06`` constant (REAL(4) lowered to f32 then promoted to f6
 the IF/ELSE cumulative pattern.  Sweeps multiple JK values in a column-by-column driver
 so ``ZA(JL, JK-1)`` reads carry across JKs.  E2e against an f2py-compiled reference.
 """
+
 import numpy as np
 import pytest
 
@@ -72,10 +73,10 @@ ENDDO
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'cloudsc_pc_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "cloudsc_pc_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='cloudsc_pc', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_pc", entry="driver").build()
 
     klon, klev, nblocks = 1, 137, 4
     ncldqr, ncldqs, ncldtop = 3, 4, 15
@@ -95,19 +96,21 @@ END MODULE kernel_mod
         return [np.asfortranarray(x.copy()) for x in (zcovptot_in, zcovpclr_in, zcovpmax_in, zraincld_in, zsnowcld_in)]
 
     zcovptot_r, zcovpclr_r, zcovpmax_r, zraincld_r, zsnowcld_r = _run_ref()
-    ref.kernel_mod.driver(zcovptot=zcovptot_r,
-                          zcovpclr=zcovpclr_r,
-                          zcovpmax=zcovpmax_r,
-                          zraincld=zraincld_r,
-                          zsnowcld=zsnowcld_r,
-                          zqpretot=zqpretot,
-                          za=za,
-                          zqxfg=zqxfg,
-                          rcovpmin=rcovpmin,
-                          zepsec=zepsec,
-                          ncldqr=ncldqr,
-                          ncldqs=ncldqs,
-                          ncldtop=ncldtop)
+    ref.kernel_mod.driver(
+        zcovptot=zcovptot_r,
+        zcovpclr=zcovpclr_r,
+        zcovpmax=zcovpmax_r,
+        zraincld=zraincld_r,
+        zsnowcld=zsnowcld_r,
+        zqpretot=zqpretot,
+        za=za,
+        zqxfg=zqxfg,
+        rcovpmin=rcovpmin,
+        zepsec=zepsec,
+        ncldqr=ncldqr,
+        ncldqs=ncldqs,
+        ncldtop=ncldtop,
+    )
 
     zcovptot, zcovpclr, zcovpmax, zraincld, zsnowcld = _run_ref()
     from dace.data import Scalar
@@ -115,22 +118,24 @@ END MODULE kernel_mod
     def _route(name, val, dtype):
         return val if isinstance(sdfg.arglist().get(name), Scalar) else np.array([val], dtype=dtype)
 
-    sdfg(zcovptot=zcovptot,
-         zcovpclr=zcovpclr,
-         zcovpmax=zcovpmax,
-         zraincld=zraincld,
-         zsnowcld=zsnowcld,
-         zqpretot=zqpretot,
-         za=za,
-         zqxfg=zqxfg,
-         rcovpmin=_route('rcovpmin', rcovpmin, np.float64),
-         zepsec=_route('zepsec', zepsec, np.float64),
-         klon=klon,
-         klev=klev,
-         nblocks=nblocks,
-         ncldqr=ncldqr,
-         ncldqs=ncldqs,
-         ncldtop=ncldtop)
+    sdfg(
+        zcovptot=zcovptot,
+        zcovpclr=zcovpclr,
+        zcovpmax=zcovpmax,
+        zraincld=zraincld,
+        zsnowcld=zsnowcld,
+        zqpretot=zqpretot,
+        za=za,
+        zqxfg=zqxfg,
+        rcovpmin=_route("rcovpmin", rcovpmin, np.float64),
+        zepsec=_route("zepsec", zepsec, np.float64),
+        klon=klon,
+        klev=klev,
+        nblocks=nblocks,
+        ncldqr=ncldqr,
+        ncldqs=ncldqs,
+        ncldtop=ncldtop,
+    )
 
     np.testing.assert_allclose(zcovptot, zcovptot_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zcovpclr, zcovpclr_r, rtol=1e-12, atol=1e-12)

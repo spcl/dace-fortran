@@ -8,6 +8,7 @@ executable body emptied (halo/MPI/I/O internals never enter the TU). The depreca
 ``keep_external=`` (fparser only) is a thin shim -- these tests assert byte-identical output
 plus a warning.
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,10 +29,9 @@ def _gfortran_compiles(src_text: str) -> bool:
     with TemporaryDirectory() as td:
         f = Path(td) / "tu.f90"
         f.write_text(src_text)
-        r = subprocess.run(["gfortran", "-fsyntax-only", "-ffree-line-length-none",
-                            str(f)],
-                           cwd=td,
-                           capture_output=True)
+        r = subprocess.run(
+            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)], cwd=td, capture_output=True
+        )
         if r.returncode != 0:
             print(r.stderr.decode())
         return r.returncode == 0
@@ -172,12 +172,14 @@ contains
 end module mo_sync
 """
     (tmp_path / "mo_sync.f90").write_text(mod)
-    caller = ("module mo_c\n  use mo_sync, only: sync_patch_array_3d_dp\n"
-              "contains\n  subroutine r(a)\n    real, intent(inout) :: a(:)\n"
-              "    call sync_patch_array_3d_dp(a)\n  end subroutine r\nend module mo_c\n")
-    merged = merge_used_modules(caller,
-                                search_dirs=[tmp_path],
-                                external_functions=[ExternalFunction("sync_patch_array")])
+    caller = (
+        "module mo_c\n  use mo_sync, only: sync_patch_array_3d_dp\n"
+        "contains\n  subroutine r(a)\n    real, intent(inout) :: a(:)\n"
+        "    call sync_patch_array_3d_dp(a)\n  end subroutine r\nend module mo_c\n"
+    )
+    merged = merge_used_modules(
+        caller, search_dirs=[tmp_path], external_functions=[ExternalFunction("sync_patch_array")]
+    )
     flat = merged.replace(" ", "").lower()
     assert "subroutinesync_patch_array_3d_dp" in flat
     assert "a=a+1.0" not in flat, "the generic specific's body must be stubbed"
@@ -209,10 +211,12 @@ contains
 end module mo_wrap
 """
     (tmp_path / "mo_wrap.f90").write_text(mod)
-    caller = ("module mo_c\n  use mo_wrap, only: halo_via_c\n  use iso_c_binding\n"
-              "contains\n  subroutine r(tag, d0, p)\n    integer(c_int), value :: tag, d0\n"
-              "    type(c_ptr), value :: p\n    call halo_via_c(tag, d0, p)\n"
-              "  end subroutine r\nend module mo_c\n")
+    caller = (
+        "module mo_c\n  use mo_wrap, only: halo_via_c\n  use iso_c_binding\n"
+        "contains\n  subroutine r(tag, d0, p)\n    integer(c_int), value :: tag, d0\n"
+        "    type(c_ptr), value :: p\n    call halo_via_c(tag, d0, p)\n"
+        "  end subroutine r\nend module mo_c\n"
+    )
     merged = merge_used_modules(caller, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_via_c")])
     flat = merged.replace(" ", "").lower()
     assert "subroutinehalo_via_c" in flat, "the procedure stays declared"
@@ -239,10 +243,13 @@ def test_regex_merge_stubbed_tu_compiles(tmp_path):
 def test_preprocess_source_threads_external_names_regex(tmp_path):
     """``preprocess_fortran_source`` forwards ``external_names`` to the regex merge -- the spliced external body is stubbed."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER,
-                                    search_dirs=[tmp_path],
-                                    merge_engine="regex",
-                                    external_names=["halo_exchange"]).replace(" ", "").lower()
+    out = (
+        preprocess_fortran_source(
+            _CALLER, search_dirs=[tmp_path], merge_engine="regex", external_names=["halo_exchange"]
+        )
+        .replace(" ", "")
+        .lower()
+    )
     assert "subroutinehalo_exchange" in out
     assert "a(i)=a(i)+1.0" not in out, "regex merge must stub the external body"
 
@@ -250,11 +257,17 @@ def test_preprocess_source_threads_external_names_regex(tmp_path):
 def test_preprocess_source_threads_external_names_fparser(tmp_path):
     """Same through the fparser engine (``make_noop`` path)."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER,
-                                    search_dirs=[tmp_path],
-                                    merge_engine="fparser",
-                                    merge_entry="mo_user::run",
-                                    external_names=["halo_exchange"]).replace(" ", "").lower()
+    out = (
+        preprocess_fortran_source(
+            _CALLER,
+            search_dirs=[tmp_path],
+            merge_engine="fparser",
+            merge_entry="mo_user::run",
+            external_names=["halo_exchange"],
+        )
+        .replace(" ", "")
+        .lower()
+    )
     assert "callhalo_exchange" in out, "the external call must survive"
     assert "a(i)=a(i)+1.0" not in out, "fparser merge must stub the external body"
 

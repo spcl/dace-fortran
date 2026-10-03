@@ -8,7 +8,7 @@ MIN(nproma, min_nproma). Unmerged TU -> opaque fir.call -> `_out = ?`.
 Merging (build_sdfg_from_files / merge_used_modules + hlfir-inline-all)
 splices the body in so the call becomes `min` and lowers.
 """
-import shutil
+
 from pathlib import Path
 
 import numpy as np
@@ -64,11 +64,13 @@ def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
     helper = tmp_path / "mo_clamp.f90"
     helper.write_text(_HELPER)
 
-    sdfg = build_sdfg_from_files([caller, helper],
-                                 entry="mo_apply_clamp::apply_clamp",
-                                 name="apply_clamp",
-                                 out_dir=tmp_path / "build",
-                                 merge_engine=merge_engine)
+    sdfg = build_sdfg_from_files(
+        [caller, helper],
+        entry="mo_apply_clamp::apply_clamp",
+        name="apply_clamp",
+        out_dir=tmp_path / "build",
+        merge_engine=merge_engine,
+    )
 
     for nproma in (2, 6):  # below and above the clamp of 4
         x = np.arange(1, 9, dtype=np.float64)

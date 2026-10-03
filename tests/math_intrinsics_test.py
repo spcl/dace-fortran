@@ -27,7 +27,7 @@ subroutine probe(x, out)
   out(3) = tanh(x)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     out = np.zeros(3, dtype=np.float64)
     sdfg(x=0.7, out=out)
     np.testing.assert_allclose(out, [np.sinh(0.7), np.cosh(0.7), np.tanh(0.7)], rtol=1e-12)
@@ -45,7 +45,7 @@ subroutine probe(x, y, out)
   out(4) = atan2(y, x)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     out = np.zeros(4, dtype=np.float64)
     sdfg(x=0.5, y=0.3, out=out)
     np.testing.assert_allclose(out, [np.arcsin(0.5), np.arccos(0.5), np.arctan(0.5), np.arctan2(0.3, 0.5)], rtol=1e-12)
@@ -61,7 +61,7 @@ subroutine probe(x, out)
   out(2) = aint(x)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     for v in (3.7, -3.7, 0.5):
         out = np.zeros(2, dtype=np.float64)
         sdfg(x=v, out=out)
@@ -79,7 +79,7 @@ subroutine probe(x, out_int, out_nint)
   out_nint = nint(x)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     for v, expected_int, expected_nint in [(3.4, 3, 3), (3.6, 3, 4), (-3.4, -3, -3), (-3.6, -3, -4)]:
         out_int = np.zeros(1, dtype=np.int32)
         out_nint = np.zeros(1, dtype=np.int32)
@@ -98,7 +98,7 @@ subroutine probe(a, b, out)
   out(2) = modulo(a, b)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     # MOD truncated, MODULO floored: (-7,3) -> mod=-7-3*int(-7/3)=-1, modulo=-7-3*floor(-7/3)=2
     out = np.zeros(2, dtype=np.float64)
     sdfg(a=-7.0, b=3.0, out=out)

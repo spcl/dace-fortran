@@ -16,7 +16,7 @@ subroutine main(arg1, arg2, res1)
   res1 = exp(arg1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -40,7 +40,7 @@ subroutine main(arg1, arg2, res1)
   res1 = exp(arg1(:))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -64,7 +64,7 @@ subroutine main(arg1, arg2, res1)
   res1(2:4) = exp(arg1(2:4))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -112,7 +112,7 @@ MODULE test_elemental
 END MODULE
 
 """
-    sdfg = build_sdfg(src, tmp_path, name='test_func', entry='test_func').build()
+    sdfg = build_sdfg(src, tmp_path, name="test_func", entry="test_func").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -138,7 +138,7 @@ subroutine main(arg1, arg2, res1)
   res1(2:4) = 1.0 - exp(arg1(2:4))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -164,7 +164,7 @@ subroutine main(arg1, arg2, res1)
   res1(2:4) = arg1(2:4) - exp(arg1(2:4))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -195,7 +195,7 @@ subroutine main(ng_var_114, od_var_115, trans_dir_dir_var_119)
   trans_dir_dir_var_119 = MAX(- MAX(od_var_115 * (1.0D0 / mu0), 0.0D0), - 1000.0D0)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 5
 

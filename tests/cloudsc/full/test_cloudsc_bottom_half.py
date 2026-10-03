@@ -32,7 +32,7 @@ def _f2py_bottom_half(tmp_path_factory):
         # -ffree-line-length-none is the only gfortran-only flag (LLVM-flang has no line
         # limit); rest of the FP set is flang-portable.
         extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter", ),
+        only=("cloudscouter",),
     )
 
 

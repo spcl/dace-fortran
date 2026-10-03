@@ -12,6 +12,7 @@ bound rides emit_loop's bound-hoist machinery.
 
 Pinned: (1) build + validate, (2) numerics vs a numpy reference.
 """
+
 import numpy as np
 import pytest
 

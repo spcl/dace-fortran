@@ -14,6 +14,7 @@ the computation itself or the external-call routing (the bridge must not optimis
 Companion to ``test_dycore_velocity_external_e2e.py`` (full ICON-style sync prints + AoS
 marshalling) and ``test_dycore_struct_ext_e2e.py`` (small struct-external sibling).
 """
+
 import ctypes
 import shutil
 import subprocess
@@ -123,8 +124,8 @@ def _build_sync_lib(tmp_path: Path) -> tuple[Path, Path]:
     src.write_text(_SYNC_NOOP_SRC)
     so_path = build_dir / "libsync_noop.so"
     subprocess.check_call(
-        ["gfortran", "-shared", "-fPIC", "-O2", f"-J{build_dir}",
-         str(src), "-o", str(so_path)], cwd=build_dir)
+        ["gfortran", "-shared", "-fPIC", "-O2", f"-J{build_dir}", str(src), "-o", str(so_path)], cwd=build_dir
+    )
     return so_path, build_dir
 
 
@@ -145,7 +146,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
             Arg(kind="scalar", dtype="int32", intent="in"),  # tag
             Arg(kind="array", dtype="float64", intent="inout"),  # field
         ),
-        libraries=(str(sync_so), ),
+        libraries=(str(sync_so),),
         dynamic_extents_abi=True,
     )
     # 2b. pin DaCe's C++ codegen to O0/no-fast-math so arithmetic order matches gfortran;
@@ -201,8 +202,8 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     n0, n1, n2 = 11, 7, 5
     alpha = 2.5
     field_init = np.asfortranarray(rng.standard_normal((n0, n1, n2)))
-    field_sdfg = field_init.copy(order='F')
-    field_ref = field_init.copy(order='F')
+    field_sdfg = field_init.copy(order="F")
+    field_ref = field_init.copy(order="F")
 
     # bind_c_shim's flat-arg convention: dynamic extents ahead of the pointer, scalars
     # last -- the ref driver mirrors this so the same argtypes apply to both.

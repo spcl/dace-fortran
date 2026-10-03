@@ -13,6 +13,7 @@ What Arg(kind='aos', c_abi='per_member_soa') enables and this test pins:
 Outer driven from Fortran via build_fortran_library bindings; reference is a gfortran linkage
 of inner+outer+a bind(c) driver sharing the same C ABI.
 """
+
 import ctypes
 import shutil
 from pathlib import Path
@@ -124,15 +125,16 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
         entry="inner_state",
-        args=(OriginalArg(name="s", fortran_type="type(state_t)", rank=0, intent="inout", struct_type="state_t"), ),
+        args=(OriginalArg(name="s", fortran_type="type(state_t)", rank=0, intent="inout", struct_type="state_t"),),
         struct_types={
-            "state_t":
-            DerivedType(name="state_t",
-                        module="m_state",
-                        members=(
-                            Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N", )),
-                            Member(name="v", fortran_type="real(c_double)", rank=1, shape=("N", )),
-                        ))
+            "state_t": DerivedType(
+                name="state_t",
+                module="m_state",
+                members=(
+                    Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N",)),
+                    Member(name="v", fortran_type="real(c_double)", rank=1, shape=("N",)),
+                ),
+            )
         },
         used_modules={"m_state": ("state_t", "N")},
     )
@@ -154,8 +156,8 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     keep_external(
         "inner_state",
         c_name="inner_state_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"), ),
-        libraries=(str(inner_lib.so_path), ),
+        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        libraries=(str(inner_lib.so_path),),
     )
     try:
         # ---- 3. Outer SDFG (the dycore stand-in) ----
@@ -169,15 +171,16 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(
             entry="outer_state",
-            args=(OriginalArg(name="s", fortran_type="type(state_t)", rank=0, intent="inout", struct_type="state_t"), ),
+            args=(OriginalArg(name="s", fortran_type="type(state_t)", rank=0, intent="inout", struct_type="state_t"),),
             struct_types={
-                "state_t":
-                DerivedType(name="state_t",
-                            module="m_state",
-                            members=(
-                                Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N", )),
-                                Member(name="v", fortran_type="real(c_double)", rank=1, shape=("N", )),
-                            ))
+                "state_t": DerivedType(
+                    name="state_t",
+                    module="m_state",
+                    members=(
+                        Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N",)),
+                        Member(name="v", fortran_type="real(c_double)", rank=1, shape=("N",)),
+                    ),
+                )
             },
             used_modules={"m_state": ("state_t", "N")},
         )
@@ -328,18 +331,20 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
         entry="inner_state_dyn",
-        args=(OriginalArg(name="s", fortran_type="type(state_dyn_t)", rank=0, intent="inout",
-                          struct_type="state_dyn_t"), ),
+        args=(
+            OriginalArg(name="s", fortran_type="type(state_dyn_t)", rank=0, intent="inout", struct_type="state_dyn_t"),
+        ),
         struct_types={
-            "state_dyn_t":
-            DerivedType(name="state_dyn_t",
-                        module="m_state_dyn",
-                        members=(
-                            Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?", )),
-                            Member(name="v", fortran_type="real(c_double)", rank=1, shape=("?", )),
-                        ))
+            "state_dyn_t": DerivedType(
+                name="state_dyn_t",
+                module="m_state_dyn",
+                members=(
+                    Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?",)),
+                    Member(name="v", fortran_type="real(c_double)", rank=1, shape=("?",)),
+                ),
+            )
         },
-        used_modules={"m_state_dyn": ("state_dyn_t", )},
+        used_modules={"m_state_dyn": ("state_dyn_t",)},
     )
     inner_types_f90 = inner_dir / "lib_types.f90"
     inner_types_f90.write_text(_DYN_TYPES_SRC)
@@ -356,8 +361,8 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     keep_external(
         "inner_state_dyn",
         c_name="inner_state_dyn_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"), ),
-        libraries=(str(inner_lib.so_path), ),
+        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        libraries=(str(inner_lib.so_path),),
         dynamic_extents_abi=True,
     )
     try:
@@ -371,21 +376,22 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(
             entry="outer_state_dyn",
-            args=(OriginalArg(name="s",
-                              fortran_type="type(state_dyn_t)",
-                              rank=0,
-                              intent="inout",
-                              struct_type="state_dyn_t"), ),
+            args=(
+                OriginalArg(
+                    name="s", fortran_type="type(state_dyn_t)", rank=0, intent="inout", struct_type="state_dyn_t"
+                ),
+            ),
             struct_types={
-                "state_dyn_t":
-                DerivedType(name="state_dyn_t",
-                            module="m_state_dyn",
-                            members=(
-                                Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?", )),
-                                Member(name="v", fortran_type="real(c_double)", rank=1, shape=("?", )),
-                            ))
+                "state_dyn_t": DerivedType(
+                    name="state_dyn_t",
+                    module="m_state_dyn",
+                    members=(
+                        Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?",)),
+                        Member(name="v", fortran_type="real(c_double)", rank=1, shape=("?",)),
+                    ),
+                )
             },
-            used_modules={"m_state_dyn": ("state_dyn_t", )},
+            used_modules={"m_state_dyn": ("state_dyn_t",)},
         )
         outer_types_f90 = outer_dir / "lib_types.f90"
         outer_types_f90.write_text(_DYN_TYPES_SRC)
@@ -547,13 +553,14 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     type_mod = f"m_logstate_{s}"
 
     iface_struct = {
-        type_name:
-        DerivedType(name=type_name,
-                    module=type_mod,
-                    members=(
-                        Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N", )),
-                        Member(name="flag", fortran_type=member_fortran_type, rank=0, shape=()),
-                    ))
+        type_name: DerivedType(
+            name=type_name,
+            module=type_mod,
+            members=(
+                Member(name="u", fortran_type="real(c_double)", rank=1, shape=("N",)),
+                Member(name="flag", fortran_type=member_fortran_type, rank=0, shape=()),
+            ),
+        )
     }
 
     # ---- 1. Inner ----
@@ -567,26 +574,27 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
         entry=inner_name,
-        args=(OriginalArg(name="s", fortran_type=f"type({type_name})", rank=0, intent="inout",
-                          struct_type=type_name), ),
+        args=(OriginalArg(name="s", fortran_type=f"type({type_name})", rank=0, intent="inout", struct_type=type_name),),
         struct_types=iface_struct,
         used_modules={type_mod: (type_name, "N")},
     )
     types_f90 = inner_dir / "lib_types.f90"
     types_f90.write_text(srcs["types"])
-    inner_lib = build_fortran_library(inner_sdfg,
-                                      iface=inner_iface,
-                                      out_dir=str(inner_dir / "lib"),
-                                      name=f"inner_state_log_{s}_wrap",
-                                      bind_c_shim=True,
-                                      prelude_sources=[types_f90])
+    inner_lib = build_fortran_library(
+        inner_sdfg,
+        iface=inner_iface,
+        out_dir=str(inner_dir / "lib"),
+        name=f"inner_state_log_{s}_wrap",
+        bind_c_shim=True,
+        prelude_sources=[types_f90],
+    )
     assert inner_lib.bind_c_shim_f90 is not None
 
     keep_external(
         inner_name,
         c_name=f"{inner_name}_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"), ),
-        libraries=(str(inner_lib.so_path), ),
+        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        libraries=(str(inner_lib.so_path),),
     )
     try:
         outer_dir = tmp_path / "outer"
@@ -598,22 +606,22 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(
             entry=outer_name,
-            args=(OriginalArg(name="s",
-                              fortran_type=f"type({type_name})",
-                              rank=0,
-                              intent="inout",
-                              struct_type=type_name), ),
+            args=(
+                OriginalArg(name="s", fortran_type=f"type({type_name})", rank=0, intent="inout", struct_type=type_name),
+            ),
             struct_types=iface_struct,
             used_modules={type_mod: (type_name, "N")},
         )
         outer_types_f90 = outer_dir / "lib_types.f90"
         outer_types_f90.write_text(srcs["types"])
-        outer_lib = build_fortran_library(outer_sdfg,
-                                          iface=outer_iface,
-                                          out_dir=str(outer_dir / "lib"),
-                                          name=f"outer_state_log_{s}_wrap",
-                                          bind_c_shim=True,
-                                          prelude_sources=[outer_types_f90])
+        outer_lib = build_fortran_library(
+            outer_sdfg,
+            iface=outer_iface,
+            out_dir=str(outer_dir / "lib"),
+            name=f"outer_state_log_{s}_wrap",
+            bind_c_shim=True,
+            prelude_sources=[outer_types_f90],
+        )
     finally:
         clear_external_registry()
 
@@ -626,12 +634,14 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     (ref_dir / f"{outer_name}.f90").write_text(srcs["outer"])
     (ref_dir / "ref_driver.f90").write_text(srcs["ref_driver"])
     ref_so = ref_dir / f"libouter_log_{s}_ref.so"
-    gfortran_compile_so(ref_so,
-                        ref_dir / f"{type_mod}.f90",
-                        ref_dir / f"{inner_name}.f90",
-                        ref_dir / f"{outer_name}.f90",
-                        ref_dir / "ref_driver.f90",
-                        mod_dir=ref_dir)
+    gfortran_compile_so(
+        ref_so,
+        ref_dir / f"{type_mod}.f90",
+        ref_dir / f"{inner_name}.f90",
+        ref_dir / f"{outer_name}.f90",
+        ref_dir / "ref_driver.f90",
+        mod_dir=ref_dir,
+    )
     ref_lib = ctypes.CDLL(str(ref_so))
 
     n = 8
@@ -667,7 +677,6 @@ def test_dycore_struct_ext_logical_default_kind_e2e(tmp_path: Path):
 def test_dycore_struct_ext_logical_cbool_e2e(tmp_path: Path):
     """Variant b) LOGICAL(c_bool) :: flag (1-byte kind). Wrapper stays on the zero-copy aliasable
     path (source_logical_kind == 1 short-circuits the bridge); SDFG bool* aliases the source directly."""
-    _run_logical_kind_variant(tmp_path,
-                              suffix="cbool",
-                              logical_decl="logical(c_bool)",
-                              member_fortran_type="logical(c_bool)")
+    _run_logical_kind_variant(
+        tmp_path, suffix="cbool", logical_decl="logical(c_bool)", member_fortran_type="logical(c_bool)"
+    )

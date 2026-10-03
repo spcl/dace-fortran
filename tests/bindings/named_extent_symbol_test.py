@@ -1,5 +1,6 @@
 """Named free symbol that's also an array extent (ICON-O ``n_zlev``) must be sourced from
 ``size(vn, dim=2)``, not the module global (unset=0 in extracted kernels -> OOB writes)."""
+
 from dace_fortran.bindings.block_builders import _sym_from_array_extent
 from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
@@ -18,7 +19,7 @@ def _sig():
     return FrozenSignature(
         entry="nonlinear_coriolis_3d_fast_scalar",
         mangled="_QPnonlinear_coriolis_3d_fast_scalar",
-        args=(vn, ),
+        args=(vn,),
         free_symbols=("n_zlev", "nproma"),
         module_symbol_origins={"n_zlev": ("mo_ocean_nml", "n_zlev")},
     )
@@ -42,5 +43,5 @@ def test_non_extent_symbol_returns_none():
 def test_scalar_arg_shape_is_not_matched():
     """Only ARRAY args contribute extents; a scalar arg with a matching name is not picked up."""
     scal = FrozenArg(fortran_name="n_zlev", sdfg_name="n_zlev", kind="scalar", dtype="int32", rank=0)
-    sig = FrozenSignature(entry="k", mangled="_QPk", args=(scal, ), free_symbols=("n_zlev", ))
+    sig = FrozenSignature(entry="k", mangled="_QPk", args=(scal,), free_symbols=("n_zlev",))
     assert _sym_from_array_extent("n_zlev", sig) is None

@@ -8,7 +8,9 @@ def test_constant_resolving_expressions():
     Tests that constant expressions, including those involving `PARAMETER`
     variables, are evaluated and folded at compile time.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   integer, parameter :: k = 8
@@ -28,7 +30,10 @@ subroutine main
     p = a*p + k*pk
   end if
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -62,7 +67,9 @@ def test_constant_expression_replacement():
     Tests that constant expressions are replaced with their literal values
     throughout the code, including in exponentiation.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module main
   implicit none
   private
@@ -81,7 +88,10 @@ contains
     res3 = unk ** z
   end subroutine foo
 end module main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -113,14 +123,19 @@ def test_constant_resolving_named_kind_int_literal():
     its string form before the kind-resolution comparisons, or evaluation
     crashes on an unhashable Name.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   integer, parameter :: i8 = 4
   integer :: a = -1
   a = 5_i8 + 3_i8
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -142,7 +157,9 @@ def test_constant_resolving_non_expressions():
     Tests that constants are resolved in non-expression contexts, such as
     loop bounds and function arguments.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   integer, parameter :: k = 8
@@ -164,7 +181,10 @@ subroutine main
     y = x * k
   end subroutine not_fun
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -201,7 +221,9 @@ def test_config_injection_type():
     Tests that constant values can be injected into the AST based on derived
     type, affecting all instances of that type.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type config
@@ -228,13 +250,16 @@ subroutine main(cfg)
   real :: a = 1
   a = cfg%big%b + a * globalo%a
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.inject_const_evals(
         ast,
         [
-            types.ConstTypeInjection(None, ("lib", "config"), ("a", ), "42"),
-            types.ConstTypeInjection(None, ("lib", "config"), ("b", ), "10000.0"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("a",), "42"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("b",), "10000.0"),
         ],
     )
 
@@ -275,7 +300,9 @@ def test_config_injection_instance():
     Tests that constant values can be injected into specific instances of
     variables or derived types.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type config
@@ -302,12 +329,15 @@ subroutine main(cfg)
   real :: a = 1
   a = cfg%big%b + a * globalo%a
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.inject_const_evals(
         ast,
         [
-            types.ConstInstanceInjection(None, ("lib", "globalo"), ("a", ), "42"),
+            types.ConstInstanceInjection(None, ("lib", "globalo"), ("a",), "42"),
             types.ConstInstanceInjection(None, ("main", "cfg"), ("big", "b"), "10000.0"),
         ],
     )
@@ -349,7 +379,9 @@ def test_config_injection_array():
     Tests that constant values can be injected for array properties, such as
     the allocation status of an allocatable array.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type config
@@ -374,12 +406,15 @@ subroutine main(cfg)
   real :: a = 1
   if (allocated(cfg%a)) a = 7.2
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.inject_const_evals(
         ast,
         [
-            types.ConstTypeInjection(None, ("lib", "config"), ("a_a", ), "true"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("a_a",), "true"),
         ],
     )
 
@@ -418,7 +453,9 @@ def test_config_injection_allocatable_fixing():
     Tests that an allocatable array can be converted to a static array by
     injecting its dimensions.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type config
@@ -439,16 +476,19 @@ subroutine main(cfg, b, c, d)
   if (allocated(c)) c = 7.2
   if (allocated(d)) d = 7.2
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.inject_const_evals(
         ast,
         [
-            types.ConstTypeInjection(None, ("lib", "config"), ("a_a", ), "true"),
-            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SA_a_d_0_s", ), "3"),
-            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SOA_a_d_0_s", ), "1"),
-            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SA_a_d_1_s", ), "3"),
-            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SOA_a_d_1_s", ), "2"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("a_a",), "true"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SA_a_d_0_s",), "3"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SOA_a_d_0_s",), "1"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SA_a_d_1_s",), "3"),
+            types.ConstTypeInjection(None, ("lib", "config"), ("__f2dace_SOA_a_d_1_s",), "2"),
             types.ConstInstanceInjection(None, ("main", "b_a"), tuple(), "true"),
             types.ConstInstanceInjection(None, ("main", "__f2dace_SA_b_d_0_s"), tuple(), "4"),
             types.ConstInstanceInjection(None, ("main", "__f2dace_SOA_b_d_0_s"), tuple(), "1"),
@@ -492,7 +532,9 @@ def test_practically_constant_arguments():
     Tests that arguments to functions that are always called with the same
     constant value are replaced by that value within the function body.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
 contains
@@ -545,9 +587,12 @@ subroutine main()
   call user_1()
   call user_2()
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = optimizations.make_practically_constant_arguments_constants(ast, [("main", )])
+    ast = optimizations.make_practically_constant_arguments_constants(ast, [("main",)])
 
     got = ast.tofortran()
     want = """
@@ -609,7 +654,9 @@ def test_practically_constant_global_vars_constants():
     Tests that global variables that are initialized but never modified are
     converted to `PARAMETER`s.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   logical :: fixed_cond = .false.
@@ -630,7 +677,10 @@ subroutine main
   movable_cond = .not. movable_cond
   if (fixed_cond .and. movable_cond) a = 7.1
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.make_practically_constant_global_vars_constants(ast)
 
@@ -665,7 +715,9 @@ def test_exploit_locally_constant_variables():
     Tests that locally constant variables are propagated and folded into
     expressions within their scope.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main()
   implicit none
   logical :: cond = .true.
@@ -741,7 +793,10 @@ contains
     arrfun = arr(1)
   end function arrfun
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.exploit_locally_constant_variables(ast)
 
@@ -813,7 +868,9 @@ def test_exploit_locally_constant_struct_members():
     """
     Tests that locally constant struct members are exploited.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main()
   implicit none
   type config
@@ -850,7 +907,10 @@ contains
     fun = out + 1.0
   end function fun
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.exploit_locally_constant_variables(ast)
 
@@ -896,7 +956,9 @@ def test_exploit_locally_constant_pointers():
     """
     Tests that locally constant pointers are exploited.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main()
   implicit none
   type cfg
@@ -924,7 +986,10 @@ subroutine main()
     end if
   end do
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.exploit_locally_constant_variables(ast)
 
@@ -968,7 +1033,9 @@ def test_local_pointer_not_substituted_as_call_argument():
     pointer's target expression is not itself a pointer (invalid Fortran). Its
     uses in plain expressions are still folded.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main()
   implicit none
   real, target :: data = 0.
@@ -982,7 +1049,10 @@ contains
     q = 1.0
   end subroutine use_ptr
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.exploit_locally_constant_variables(ast)
 
@@ -1000,7 +1070,9 @@ def test_replace_case_selector_consts():
     """
     Tests that constants in CASE selectors are replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   integer, parameter :: a = 1
@@ -1022,7 +1094,10 @@ subroutine main()
   integer :: b
   call foo(b)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -1056,14 +1131,19 @@ def test_constant_function_evaluation():
     Tests that intrinsic functions with constant arguments are evaluated at
     compile time.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   double precision :: a = sqrt(4.)
   double precision :: b = cos(0.)
   double precision :: c = abs(-3.)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
 
@@ -1108,7 +1188,9 @@ def test_const_eval_keyword_value_matching_keyword_name():
     value reference was wrongly treated as "a keyword" and left unresolved -- which
     later let pruning drop the parameter and leave a dangling reference (the ICON
     halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module m
   implicit none
   logical, parameter :: use_g2g = .false.
@@ -1122,7 +1204,10 @@ contains
     logical, intent(in) :: use_g2g
   end subroutine recv
 end module m
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = optimizations.const_eval_nodes(ast)
     got = ast.tofortran()
@@ -1142,7 +1227,9 @@ def test_forwarded_caller_optional_presence_not_folded():
     and the vertical loop ran from level 0 -- an out-of-bounds read with
     silently wrong ocean numerics in the extracted single TU.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
 contains
@@ -1178,9 +1265,12 @@ subroutine main(field, nlev)
   integer, intent(in) :: nlev
   call outer(field, nlev)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = optimizations.make_practically_constant_arguments_constants(ast, [("main", )])
+    ast = optimizations.make_practically_constant_arguments_constants(ast, [("main",)])
 
     got = ast.tofortran()
     # inner's guard survives verbatim: runtime PRESENT test + the ELSE default.

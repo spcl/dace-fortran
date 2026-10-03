@@ -68,8 +68,8 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
     # bridge auto-detected every module global with the same (module, entity) the hand-authored map used to specify
     for sym, origin in _EXPECTED_AUTO_ORIGINS.items():
         assert frozen.module_symbol_origins.get(sym) == origin, (
-            f"{sym!r}: auto-detected "
-            f"{frozen.module_symbol_origins.get(sym)!r}, expected {origin!r}")
+            f"{sym!r}: auto-detected {frozen.module_symbol_origins.get(sym)!r}, expected {origin!r}"
+        )
 
     # empty override -> emitter relies purely on auto-detection; iface.entry
     # must equal the SDFG name (both feed the C-bind __program_<entry> symbol).
@@ -102,13 +102,9 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
     shim_path = sdfg_build / "velocity_sdfg_shim.f90"
     shim_path.write_text(sdfg_shim)
     sdfg_so = sdfg_build / "libvelocity_sdfg.so"
-    vf._gfortran(sdfg_so,
-                 vf._DRIVER_PATH,
-                 vf._CALLER_PATH,
-                 bindings_path,
-                 shim_path,
-                 mod_dir=sdfg_build,
-                 link_so=so_path)
+    vf._gfortran(
+        sdfg_so, vf._DRIVER_PATH, vf._CALLER_PATH, bindings_path, shim_path, mod_dir=sdfg_build, link_so=so_path
+    )
     sdfg_lib = ctypes.CDLL(str(sdfg_so))
 
     ref_build = tmp_path / "ref_build"
@@ -126,18 +122,18 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
     init.restype = None
     init.argtypes = [ctypes.c_int] * 7 + [ctypes.c_void_p] * len(vf._INIT_ARRAY_ORDER)
     init(42, nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, *[bufs_ref[k].ctypes.data for k in vf._INIT_ARRAY_ORDER])
-    bufs_sdfg = {k: v.copy(order='F') for k, v in bufs_ref.items()}
+    bufs_sdfg = {k: v.copy(order="F") for k, v in bufs_ref.items()}
 
     zshape = ((nproma, nlev, nblks_e), (nproma, nlev, nblks_e), (nproma, nlevp1, nblks_e))
-    z_ref = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
-    z_sdfg = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
+    z_ref = [np.zeros(s, dtype=np.float64, order="F") for s in zshape]
+    z_sdfg = [np.zeros(s, dtype=np.float64, order="F") for s in zshape]
 
     pre = {nm: bufs_ref[nm].copy() for nm in vf._OUTPUT_NAMES if nm in bufs_ref}
 
     vf._run(ref_lib, "run_velocity_flat_c", dims, bufs_ref, z_ref)
     vf._run(sdfg_lib, "run_velocity_flat_sdfg", dims, bufs_sdfg, z_sdfg)
 
-    extras = dict(zip(('z_w_concorr_me', 'z_kin_hor_e', 'z_vt_ie'), zip(z_sdfg, z_ref)))
+    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref)))
     mismatches = []
     mutated = False
     for nm in vf._OUTPUT_NAMES:
@@ -146,7 +142,6 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
             mutated = True
         if not np.allclose(sd, rf, rtol=1e-10, atol=1e-10, equal_nan=True):
             d = np.abs(sd - rf)
-            mismatches.append(f"{nm}: max_abs_diff={d.max():.3e} "
-                              f"(n_diff={np.count_nonzero(d > 1e-10)})")
+            mismatches.append(f"{nm}: max_abs_diff={d.max():.3e} (n_diff={np.count_nonzero(d > 1e-10)})")
     assert mutated, "reference left every output untouched -- kernel did not run"
     assert not mismatches, "\n".join(mismatches)

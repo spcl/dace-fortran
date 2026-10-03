@@ -12,12 +12,36 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dace_fortran.build import build_sdfg, build_sdfg_from_files, build_sdfg_from_hlfir, build_sdfg_from_project
-    from dace_fortran.external import register_external, keep_external, apply_external_functions, ExternalSignature, Arg, clear_external_registry
+    from dace_fortran.external import (
+        register_external,
+        keep_external,
+        apply_external_functions,
+        ExternalSignature,
+        Arg,
+        clear_external_registry,
+    )
     from dace_fortran.external_functions import ExternalFunction
     from dace_fortran.hlfir_to_sdfg import SDFGBuilder, generate_sdfg, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
-    from dace_fortran.preprocess import preprocess_fortran_source, merge_used_modules, preprocess_fortran, rewrite_integer_powers, normalize_kind_parameters, replace_external_with_modules, rewrite_string_enum_to_integer
+    from dace_fortran.preprocess import (
+        preprocess_fortran_source,
+        merge_used_modules,
+        preprocess_fortran,
+        rewrite_integer_powers,
+        normalize_kind_parameters,
+        replace_external_with_modules,
+        rewrite_string_enum_to_integer,
+    )
     from dace_fortran.fparser_inliner import inline_to_single_tu, inline_to_ast
-    from dace_fortran.flang_codebase import prepare_flang_translation_unit, emit_hlfir_from_codebase, extract_make_compile_args, vendor_netcdf_fortran, mpi_stub_source, find_openmpi_include, LIBRARY_STUBS, FLANG_BUG_PATCHES
+    from dace_fortran.flang_codebase import (
+        prepare_flang_translation_unit,
+        emit_hlfir_from_codebase,
+        extract_make_compile_args,
+        vendor_netcdf_fortran,
+        mpi_stub_source,
+        find_openmpi_include,
+        LIBRARY_STUBS,
+        FLANG_BUG_PATCHES,
+    )
     from dace_fortran.acc_residency import extract_acc_residency, write_acc_residency_sidecar
 
 _LAZY = {

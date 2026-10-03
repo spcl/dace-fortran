@@ -24,7 +24,7 @@ res2(2) = MAX(arg1(2), arg2(2))
 
 END SUBROUTINE intrinsic_math_test_min_max_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_min_max_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_min_max_function").build()
 
     size = 2
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -56,7 +56,7 @@ res(2) = SQRT(d(2))
 
 END SUBROUTINE intrinsic_math_test_sqrt_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_sqrt_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_sqrt_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -81,7 +81,7 @@ res(2) = ABS(d(2))
 
 END SUBROUTINE intrinsic_math_test_abs_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_abs_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_abs_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -105,7 +105,7 @@ res(2) = EXP(d(2))
 
 END SUBROUTINE intrinsic_math_test_exp_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_exp_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_exp_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -130,7 +130,7 @@ res(2) = LOG(d(2))
 
 END SUBROUTINE intrinsic_math_test_exp_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_exp_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_exp_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -159,18 +159,18 @@ res(6) = MOD(d(11), d(12))
 
 END SUBROUTINE intrinsic_math_test_mod_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_mod_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_mod_function").build()
 
     size = 12
     d = np.full([size], 42, order="F", dtype=np.float64)
-    d[0] = 17.
-    d[1] = 3.
-    d[2] = -17.
-    d[3] = 3.
-    d[4] = 17.
-    d[5] = -3.
-    d[6] = -17.
-    d[7] = -3.
+    d[0] = 17.0
+    d[1] = 3.0
+    d[2] = -17.0
+    d[3] = 3.0
+    d[4] = 17.0
+    d[5] = -3.0
+    d[6] = -17.0
+    d[7] = -3.0
     d[8] = 17.5
     d[9] = 5.5
     d[10] = -17.5
@@ -199,7 +199,7 @@ res(4) = MOD(d(7), d(8))
 
 END SUBROUTINE intrinsic_math_test_modulo_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_modulo_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_modulo_function").build()
 
     size = 12
     d = np.full([size], 42, order="F", dtype=np.int32)
@@ -234,18 +234,18 @@ res(6) = MODULO(d(11), d(12))
 
 END SUBROUTINE intrinsic_math_test_modulo_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_modulo_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_modulo_function").build()
 
     size = 12
     d = np.full([size], 42, order="F", dtype=np.float64)
-    d[0] = 17.
-    d[1] = 3.
-    d[2] = -17.
-    d[3] = 3.
-    d[4] = 17.
-    d[5] = -3.
-    d[6] = -17.
-    d[7] = -3.
+    d[0] = 17.0
+    d[1] = 3.0
+    d[2] = -17.0
+    d[3] = 3.0
+    d[4] = 17.0
+    d[5] = -3.0
+    d[6] = -17.0
+    d[7] = -3.0
     d[8] = 17.5
     d[9] = 5.5
     d[10] = -17.5
@@ -274,7 +274,7 @@ res(4) = MODULO(d(7), d(8))
 
 END SUBROUTINE intrinsic_math_test_modulo_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_modulo_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_modulo_function").build()
 
     size = 12
     d = np.full([size], 42, order="F", dtype=np.int32)
@@ -308,7 +308,7 @@ res(4) = FLOOR(d(4))
 
 END SUBROUTINE intrinsic_math_test_modulo_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_modulo_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_modulo_function").build()
 
     size = 4
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -341,7 +341,7 @@ res(5) = (SCALE(SCALE(d(4), d2(4)), d2(4)))
 
 END SUBROUTINE intrinsic_math_test_scale_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_scale_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_scale_function").build()
 
     size = 4
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -358,10 +358,10 @@ END SUBROUTINE intrinsic_math_test_scale_function
     sdfg(d=d, d2=d2, res=res)
 
     assert abs(res[0] - 0.570043862) < 10**-7
-    assert res[1] == 176.
-    assert res[2] == 704.
-    assert res[3] == 65280.
-    assert res[4] == 11141120.
+    assert res[1] == 176.0
+    assert res[2] == 704.0
+    assert res[3] == 65280.0
+    assert res[4] == 11141120.0
 
 
 def test_fortran_frontend_exponent(tmp_path):
@@ -377,7 +377,7 @@ res(4) = EXPONENT(d(4))
 
 END SUBROUTINE intrinsic_math_test_exponent_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_exponent_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_exponent_function").build()
 
     size = 4
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -428,7 +428,7 @@ END DO
 
 END SUBROUTINE intrinsic_math_test_int_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_int_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_int_function").build()
 
     size = 4
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -452,9 +452,9 @@ END SUBROUTINE intrinsic_math_test_int_function
     sdfg(d=d, d2=d2, res=res, res2=res2, res3=res3, res4=res4, n=0)
 
     assert np.array_equal(res, [1, 1, 42, -42])
-    assert np.array_equal(res2, [1., 1., 42., -42.])
+    assert np.array_equal(res2, [1.0, 1.0, 42.0, -42.0])
     assert np.array_equal(res3, [3, 4, 4, 4, -3, -4, -4, -4])
-    assert np.array_equal(res4, [3., 4., 4., 4., -3., -4., -4., -4.])
+    assert np.array_equal(res4, [3.0, 4.0, 4.0, 4.0, -3.0, -4.0, -4.0, -4.0])
 
 
 def test_fortran_frontend_real(tmp_path):
@@ -483,7 +483,7 @@ res2(6) = REAL(d3(2))
 
 END SUBROUTINE intrinsic_math_test_real_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_real_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_real_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -500,8 +500,8 @@ END SUBROUTINE intrinsic_math_test_real_function
     res2 = np.full([size * 3], 42, order="F", dtype=np.float32)
     sdfg(d=d, d2=d2, d3=d3, res=res, res2=res2, n=0)
 
-    assert np.allclose(res, [7.0, 13.11, 7.0, 13.11, 7., 13.])
-    assert np.allclose(res2, [7.0, 13.11, 7.0, 13.11, 7., 13.])
+    assert np.allclose(res, [7.0, 13.11, 7.0, 13.11, 7.0, 13.0])
+    assert np.allclose(res2, [7.0, 13.11, 7.0, 13.11, 7.0, 13.0])
 
 
 def test_fortran_frontend_real_kind(tmp_path):
@@ -522,7 +522,7 @@ res(6) = REAL(d3(2), 8)
 
 END SUBROUTINE intrinsic_math_test_real_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_real_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_real_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -558,7 +558,7 @@ END DO
 
 END SUBROUTINE intrinsic_math_test_trig_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_trig_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_trig_function").build()
 
     size = 3
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -569,7 +569,7 @@ END SUBROUTINE intrinsic_math_test_trig_function
     res = np.full([size * 2], 42, order="F", dtype=np.float32)
     sdfg(d=d, res=res, n=0)
 
-    assert np.allclose(res, [0.0, 0.999999702, 1.59254798E-03, 1.0, 7.96274282E-04, -0.999998748])
+    assert np.allclose(res, [0.0, 0.999999702, 1.59254798e-03, 1.0, 7.96274282e-04, -0.999998748])
 
 
 def test_fortran_frontend_hyperbolic(tmp_path):
@@ -593,7 +593,7 @@ END DO
 
 END SUBROUTINE intrinsic_math_test_hyperbolic_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_hyperbolic_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_hyperbolic_function").build()
 
     size = 3
     d = np.full([size], 42, order="F", dtype=np.float32)
@@ -606,7 +606,8 @@ END SUBROUTINE intrinsic_math_test_hyperbolic_function
 
     assert np.allclose(
         res,
-        [0.00000000, 1.17520118, 11.5302935, 1.00000000, 1.54308057, 11.5735760, 0.00000000, 0.761594176, 0.996260226])
+        [0.00000000, 1.17520118, 11.5302935, 1.00000000, 1.54308057, 11.5735760, 0.00000000, 0.761594176, 0.996260226],
+    )
 
 
 def test_fortran_frontend_trig_inverse(tmp_path):
@@ -631,7 +632,7 @@ subroutine main(sincos_args, tan_args, tan2_args, res)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 3
     sincos_args = np.full([size], 42, order="F", dtype=np.float32)
@@ -655,10 +656,23 @@ end subroutine main
     res = np.full([size * 4], 42, order="F", dtype=np.float32)
     sdfg(sincos_args=sincos_args, tan_args=atan_args, tan2_args=atan2_args, res=res, n=0)
 
-    assert np.allclose(res, [
-        -0.523598790, 0.00000000, 1.57079637, 2.09439516, 1.57079637, 0.00000000, 0.00000000, 0.785398185, 1.26248074,
-        0.00000000, 0.785398185, 1.57079637
-    ])
+    assert np.allclose(
+        res,
+        [
+            -0.523598790,
+            0.00000000,
+            1.57079637,
+            2.09439516,
+            1.57079637,
+            0.00000000,
+            0.00000000,
+            0.785398185,
+            1.26248074,
+            0.00000000,
+            0.785398185,
+            1.57079637,
+        ],
+    )
 
 
 def test_fortran_frontend_exp2(tmp_path):
@@ -674,7 +688,7 @@ end do
 
 END SUBROUTINE intrinsic_math_test_exp2_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_exp2_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_exp2_function").build()
 
     size = 2
     d = np.full([size], 42, order="F", dtype=np.float64)

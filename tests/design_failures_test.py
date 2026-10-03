@@ -3,6 +3,7 @@
 Pins behaviour for design failures D1-D5 + latent bugs #1, #2, #8 in the
 scope-qualification / collision-detection pipeline.
 """
+
 import numpy as np
 import pytest
 
@@ -45,13 +46,13 @@ END SUBROUTINE
 END MODULE beta_mod
 """
     sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha", entry="alpha_mod::alpha").build()
-    xa = np.ones(3, dtype=np.float64, order='F')
+    xa = np.ones(3, dtype=np.float64, order="F")
     sdfg_a(x=xa, n=np.int32(3))
     np.testing.assert_array_equal(xa, 2.0)
     # B must not inherit A's entryScope/collisions -- signature should have bare y/m.
     sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta", entry="beta_mod::beta").build()
-    assert 'y' in sdfg_b.arrays, (f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}")
-    yb = np.ones(3, dtype=np.float64, order='F')
+    assert "y" in sdfg_b.arrays, f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}"
+    yb = np.ones(3, dtype=np.float64, order="F")
     sdfg_b(y=yb, m=np.int32(3))
     np.testing.assert_array_equal(yb, 2.0)
 
@@ -84,7 +85,7 @@ END SUBROUTINE
 END MODULE main_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main_mod::main").build()
-    a = np.ones(3, dtype=np.float64, order='F')
+    a = np.ones(3, dtype=np.float64, order="F")
     sdfg(a=a, n=np.int32(3))
     np.testing.assert_array_equal(a, 2.0)
 
@@ -117,8 +118,8 @@ END MODULE kern_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     # SDFG signature must have bare ``out``, not ``set_one_out``.
-    assert 'out' in sdfg.arrays, (f"expected bare 'out' on signature, got: {sorted(sdfg.arrays.keys())}")
-    out = np.zeros(3, dtype=np.float64, order='F')
+    assert "out" in sdfg.arrays, f"expected bare 'out' on signature, got: {sorted(sdfg.arrays.keys())}"
+    out = np.zeros(3, dtype=np.float64, order="F")
     sdfg(out=out, n=np.int32(3))
     np.testing.assert_array_equal(out, 1.0)
 
@@ -154,8 +155,8 @@ END MODULE main_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main_mod::main").build()
     # No tf_x in the signature -- the inlined OPTIONAL is folded.
-    bad_keys = [k for k in sdfg.arrays.keys() if k.startswith('tf_') or k.endswith('_x')]
-    assert not bad_keys, (f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}")
+    bad_keys = [k for k in sdfg.arrays.keys() if k.startswith("tf_") or k.endswith("_x")]
+    assert not bad_keys, f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}"
 
 
 # ===========================================================================
@@ -353,6 +354,7 @@ CONTAINS
 END MODULE m_iter
 """
     from dace_fortran import build_sdfg_from_files
+
     srcfile = tmp_path / "m_iter.f90"
     srcfile.write_text(src)
     sdfg = build_sdfg_from_files([srcfile], entry="m_iter::kern", name="kern", out_dir=tmp_path / "build")

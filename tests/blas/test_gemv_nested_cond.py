@@ -10,6 +10,7 @@ ControlFlowRegion, not the top-level SDFG graph --
 ``KeyError: SDFGState (s_NNNN)`` (the QE h_psi build's third fatal error).
 Pinned: build + validate + numerics.
 """
+
 import numpy as np
 import pytest
 

@@ -20,7 +20,7 @@ res(3) = SUM(d(2:6))
 
 END SUBROUTINE intrinsic_sum_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_sum_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_sum_function").build()
 
     size = 7
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -45,7 +45,7 @@ res(3) = SUM(d(3:5))
 
 END SUBROUTINE intrinsic_sum_offset_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_sum_offset_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_sum_offset_function").build()
 
     size = 5
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -71,7 +71,7 @@ res(4) = SUM(d(2:4, 2:3))
 
 END SUBROUTINE intrinsic_sum2d_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_sum2d_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_sum2d_function").build()
 
     sizes = [5, 3]
     d = np.full(sizes, 42, order="F", dtype=np.float64)
@@ -100,7 +100,7 @@ res(3) = SUM(d(3:5, 8:9))
 
 END SUBROUTINE intrinsic_sum2d_offset_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_sum2d_offset_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_sum2d_offset_function").build()
 
     sizes = [5, 4]
     d = np.full(sizes, 42, order="F", dtype=np.float64)

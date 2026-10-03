@@ -18,6 +18,7 @@ covered in ``design_failures_test.py`` (Latent #8): reduction names, the
 symbol-context path, rename scope-locality, dead-shadow/genuine coexistence,
 and the dummy diagnostic.
 """
+
 import numpy as np
 import pytest
 

@@ -18,21 +18,21 @@ from dace_fortran.bindings.flatten_plan import (
 )
 
 _DTYPE_TO_F = {
-    'float64': 'real(c_double)',
-    'float32': 'real(c_float)',
-    'int8': 'integer(c_int8_t)',
-    'int16': 'integer(c_int16_t)',
-    'int32': 'integer(c_int)',
-    'int64': 'integer(c_long)',
-    'bool': 'logical(c_bool)',
-    'complex64': 'complex(c_float)',
-    'complex128': 'complex(c_double)',
+    "float64": "real(c_double)",
+    "float32": "real(c_float)",
+    "int8": "integer(c_int8_t)",
+    "int16": "integer(c_int16_t)",
+    "int32": "integer(c_int)",
+    "int64": "integer(c_long)",
+    "bool": "logical(c_bool)",
+    "complex64": "complex(c_float)",
+    "complex128": "complex(c_double)",
 }
 
 
 def fortran_scalar_type(dtype: str) -> str:
     """Map a DaCe dtype string to its Fortran iso_c_binding form."""
-    return _DTYPE_TO_F.get(dtype, 'real(c_double)')
+    return _DTYPE_TO_F.get(dtype, "real(c_double)")
 
 
 def _loop_index_names(rank: int) -> Tuple[str, ...]:
@@ -90,10 +90,10 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
     summary = substitute_indices(recipe.read_exprs[0], idx_names)
     out.append(f"    ! Copy-in: {', '.join(recipe.flat_names)} <- {summary}")
     for d in reversed(range(recipe.rank)):
-        indent = ' ' * ((recipe.rank - 1 - d) * 2)
+        indent = " " * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}do {idx_names[d]} = 1, {recipe.shape_exprs[d]}")
 
-    body_indent = ' ' * (recipe.rank * 2)
+    body_indent = " " * (recipe.rank * 2)
     idx_tuple = ", ".join(idx_names)
     for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs):
         rhs = substitute_indices(read_expr, idx_names)
@@ -101,7 +101,7 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
 
     # Closing markers, innermost-first.
     for d in range(recipe.rank):
-        indent = ' ' * ((recipe.rank - 1 - d) * 2)
+        indent = " " * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}end do")
     return out
 
@@ -124,10 +124,10 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
     idx_names = _loop_index_names(recipe.rank)
     idx_tuple = ", ".join(idx_names)
     for d in reversed(range(recipe.rank)):
-        indent = ' ' * ((recipe.rank - 1 - d) * 2)
+        indent = " " * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}do {idx_names[d]} = 1, {recipe.shape_exprs[d]}")
 
-    body_indent = ' ' * (recipe.rank * 2)
+    body_indent = " " * (recipe.rank * 2)
     # write_expr set: reconstruction recipe, outer_expr(idx) = write_expr.
     # write_expr empty: plain single-flat member, exact inverse of its
     # copy-in -- scatter into read_exprs[0] (encodes index placement,
@@ -143,7 +143,7 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
     out.append(f"    {body_indent}{lhs} = {rhs}")
 
     for d in range(recipe.rank):
-        indent = ' ' * ((recipe.rank - 1 - d) * 2)
+        indent = " " * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}end do")
 
     for flat in recipe.flat_names:
@@ -171,9 +171,8 @@ def _aos_alloc_member_at_i(recipe: FlattenRecipe) -> str:
     aos_alloc recipe's ``read_exprs[0]``, for allocated()/size() queries
     in the pack-in/pack-out emitters."""
     template = recipe.read_exprs[0]  # "A($i1)%w($i2)"
-    base = template.split('($i2)')[0] if '($i2)' in template \
-        else template.rsplit('(', 1)[0]
-    return base.replace('$i1', 'i1')
+    base = template.split("($i2)")[0] if "($i2)" in template else template.rsplit("(", 1)[0]
+    return base.replace("$i1", "i1")
 
 
 def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
@@ -191,8 +190,8 @@ def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str
         f"    do i1 = 1, {n_extent}",
         f"      if (allocated({member_at_i})) then",
         f"        if (size({member_at_i}) > {cap}) {cap} = size({member_at_i})",
-        f"      end if",
-        f"    end do",
+        "      end if",
+        "    end do",
         # Empty-batch sentinel: keep cap >= 1 so the buffer is non-degenerate.
         f"    if ({cap} == 0) {cap} = 1",
         f"    allocate({flat}({n_extent}, {cap}))",
@@ -200,8 +199,8 @@ def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str
         f"    do i1 = 1, {n_extent}",
         f"      if (allocated({member_at_i})) then",
         f"        {flat}(i1, 1:size({member_at_i})) = {member_at_i}",
-        f"      end if",
-        f"    end do",
+        "      end if",
+        "    end do",
     ]
 
 
@@ -219,7 +218,7 @@ def render_aos_alloc_pack_out(recipe: FlattenRecipe, outer_expr: str) -> List[st
         f"    do i1 = 1, {n_extent}",
         f"      if (allocated({member_at_i})) then",
         f"        {member_at_i} = {flat}(i1, 1:size({member_at_i}))",
-        f"      end if",
-        f"    end do",
+        "      end if",
+        "    end do",
         f"    deallocate({flat})",
     ]

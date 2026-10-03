@@ -5,6 +5,7 @@ on the rank-erased box to constants; canonicalize then collapses the
 ``SELECT RANK`` dispatch to the single branch matching the actual's static
 rank.  Pins that rank-2 writes land at the right offsets.
 """
+
 import numpy as np
 import pytest
 
@@ -51,10 +52,10 @@ def test_assumed_rank_dispatches_to_rank2_branch(tmp_path):
     N, M = 4, 3
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="outer", entry="m::outer").build()
 
-    arr_sdfg = np.full((N, M), -1.0, dtype=np.float64, order='F')
+    arr_sdfg = np.full((N, M), -1.0, dtype=np.float64, order="F")
     sdfg(arr2d=arr_sdfg)
 
-    expected = np.empty((N, M), dtype=np.float64, order='F')
+    expected = np.empty((N, M), dtype=np.float64, order="F")
     for j in range(1, M + 1):
         for i in range(1, N + 1):
             expected[i - 1, j - 1] = i + 10 * j

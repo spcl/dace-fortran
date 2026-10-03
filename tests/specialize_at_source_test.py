@@ -4,10 +4,11 @@ interleaved rebind), but every call site passes a compile-time ``typ`` -- so inl
 wrapper at the source level lets ``const_eval`` + ``prune_branches`` fold the ladder to a
 single ordinary rebind.
 """
+
 import pytest
 
 from dace_fortran.inliner.ast_desugaring import optimizations, pruning
-from dace_fortran.inliner.ast_desugaring.specialize_at_source import (inline_named_functions, inline_named_subprograms)
+from dace_fortran.inliner.ast_desugaring.specialize_at_source import inline_named_functions, inline_named_subprograms
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 
 from _util import build_sdfg, have_flang
@@ -421,6 +422,7 @@ def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
     so every element is written. A ``.TRUE.`` misfold at the ``outer->inner`` boundary would
     instead read the absent scalar as 0 -> loop starts at level 0 (the ICON ocean level-0 bug)."""
     import numpy as np
+
     prog = parse_program(_FORWARDED_OPTIONAL_SRC)
     # inline inner into outer (guard preserved), then outer into root (optional statically absent -> folds to ELSE default)
     inline_named_subprograms(prog, ["inner", "outer"])

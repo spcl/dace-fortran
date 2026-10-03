@@ -125,7 +125,7 @@ def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
         reach = {id(n): descendants(state, n) for n in ordered}
 
         for index, earlier in enumerate(ordered):
-            for later in ordered[index + 1:]:
+            for later in ordered[index + 1 :]:
                 if later in reach[id(earlier)] or earlier in reach[id(later)]:
                     continue
                 earlier_writes = state.in_degree(earlier) > 0

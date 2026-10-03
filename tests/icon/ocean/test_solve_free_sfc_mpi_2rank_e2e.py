@@ -20,6 +20,7 @@ The exchange pairs rank r with rank 1-r, so this runs at exactly 2 ranks.
 
 ``@pytest.mark.long``: builds the full dycore to an SDFG (minutes).
 """
+
 import ctypes
 import shutil
 from pathlib import Path
@@ -205,7 +206,8 @@ def _build_artifacts(tmp_path: Path) -> dict:
     reason="The halo sync-buffer transpose is FIXED (bridge lowers <section> = <whole allocatable> element-wise, "
     "commit 24b39da) and FoldCopyInOut is exonerated -- the isolated pack/unpack repro is now bit-exact. But the "
     "full 2-rank solve_free_sfc still diverges on prog_h: a residual defect elsewhere in the dycore path, not yet "
-    "isolated. Verify against the runtime divergence count (rerun without this marker) before removing it.")
+    "isolated. Verify against the runtime divergence count (rerun without this marker) before removing it.",
+)
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
     """solve_free_sfc on 2 ranks with a real MPI halo: SDFG vs stock gfortran, bit-exact per rank."""
@@ -254,13 +256,9 @@ def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
     # size<=1 no-op path.  A changed result is only possible if the 2-rank swap ran.
     self_bufs = {k: v.copy() for k, v in inputs.items()}
     ctypes.CDLL(art["dut_so"], mode=ctypes.RTLD_GLOBAL)
-    _invoke(art["dut_so"],
-            call_plan,
-            self_bufs,
-            f"{dace_name}_c",
-            sdfg_so=art["sdfg_so"],
-            module_seeds=art["seed_specs"])
-    assert any(
-        not np.array_equal(dut[k], self_bufs[k])
-        for k in ptr_args), (f"rank {rank}: the 2-rank run is identical to the single-rank one -- the halo exchange "
-                             "moved no neighbour data")
+    _invoke(
+        art["dut_so"], call_plan, self_bufs, f"{dace_name}_c", sdfg_so=art["sdfg_so"], module_seeds=art["seed_specs"]
+    )
+    assert any(not np.array_equal(dut[k], self_bufs[k]) for k in ptr_args), (
+        f"rank {rank}: the 2-rank run is identical to the single-rank one -- the halo exchange moved no neighbour data"
+    )

@@ -26,8 +26,15 @@ def _f2py(src_text: str, out_dir: Path, mod: str):
     (out_dir / f"{mod}.f90").write_text(src_text)
     subprocess.check_call(
         [
-            sys.executable, "-m", "numpy.f2py", "-c", f"{mod}.f90", "-m", mod, "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off"
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            f"{mod}.f90",
+            "-m",
+            mod,
+            "--quiet",
+            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
         ],
         cwd=out_dir,
     )
@@ -39,6 +46,7 @@ def _f2py(src_text: str, out_dir: Path, mod: str):
 
 def _sdfg_kw(sdfg, ints: dict) -> dict:
     from dace.data import Scalar
+
     al = sdfg.arglist()
     out = {}
     for k, v in ints.items():
@@ -125,14 +133,16 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
     q0s = np.zeros((klon, klev, nb), order="F")
     qns = np.zeros((klon, klev, nb), order="F")
     fs = np.zeros((klon, klev + 1, nb), order="F")
-    sdfg(paph=paph.copy(order="F"),
-         pclv=pclv.copy(order="F"),
-         ptend=ptend.copy(order="F"),
-         pwork_in=pwin.copy(order="F"),
-         q0=q0s,
-         qn=qns,
-         flux=fs,
-         **_sdfg_kw(sdfg, dict(klon=klon, klev=klev, nb=nb)))
+    sdfg(
+        paph=paph.copy(order="F"),
+        pclv=pclv.copy(order="F"),
+        ptend=ptend.copy(order="F"),
+        pwork_in=pwin.copy(order="F"),
+        q0=q0s,
+        qn=qns,
+        flux=fs,
+        **_sdfg_kw(sdfg, dict(klon=klon, klev=klev, nb=nb)),
+    )
 
     np.testing.assert_allclose(fs, fr, rtol=1e-12, atol=1e-12)
 
@@ -198,18 +208,20 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
     s0s = np.zeros((n, klev), order="F")
     sns = np.zeros((n, klev), order="F")
     accs = np.zeros((n, klev + 1), order="F")
-    sdfg(a=arrs[0].copy(order="F"),
-         b=arrs[1].copy(order="F"),
-         c=arrs[2].copy(order="F"),
-         d=arrs[3].copy(order="F"),
-         e=arrs[4].copy(order="F"),
-         f=arrs[5].copy(order="F"),
-         g=arrs[6].copy(order="F"),
-         h=arrs[7].copy(order="F"),
-         s0=s0s,
-         sn=sns,
-         acc=accs,
-         **_sdfg_kw(sdfg, dict(n=n, klev=klev)))
+    sdfg(
+        a=arrs[0].copy(order="F"),
+        b=arrs[1].copy(order="F"),
+        c=arrs[2].copy(order="F"),
+        d=arrs[3].copy(order="F"),
+        e=arrs[4].copy(order="F"),
+        f=arrs[5].copy(order="F"),
+        g=arrs[6].copy(order="F"),
+        h=arrs[7].copy(order="F"),
+        s0=s0s,
+        sn=sns,
+        acc=accs,
+        **_sdfg_kw(sdfg, dict(n=n, klev=klev)),
+    )
 
     np.testing.assert_allclose(accs, accr, rtol=1e-12, atol=1e-12)
 

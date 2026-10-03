@@ -30,10 +30,10 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE bool_pass
 """
-    ref = f2py(src, tmp_path / 'ref', 'bool_pass_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "bool_pass_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_pass', entry='bool_pass').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="bool_pass", entry="bool_pass").build()
 
     flags = np.array([True, False, True, False, True, False, True, False], dtype=np.bool_)
     n = flags.size
@@ -64,16 +64,16 @@ DO j = 1, nblocks
 ENDDO
 END SUBROUTINE bool_2d_pass
 """
-    ref = f2py(src, tmp_path / 'ref', 'bool_2d_pass_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "bool_2d_pass_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_2d_pass', entry='bool_2d_pass').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="bool_2d_pass", entry="bool_2d_pass").build()
 
     klon, nblocks = 1, 4
-    flags = np.array([[False, True, True, False]], dtype=np.bool_, order='F')
+    flags = np.array([[False, True, True, False]], dtype=np.bool_, order="F")
     out_ref = ref.bool_2d_pass(flags)
 
-    out = np.zeros((klon, nblocks), dtype=np.int32, order='F')
+    out = np.zeros((klon, nblocks), dtype=np.int32, order="F")
     sdfg(flags=flags, out=out, klon=klon, nblocks=nblocks)
     np.testing.assert_array_equal(out, out_ref)
 
@@ -91,10 +91,10 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE int_double
 """
-    ref = f2py(src, tmp_path / 'ref', 'int_double_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "int_double_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='int_double', entry='int_double').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="int_double", entry="int_double").build()
 
     inp = np.array([1, 2, 3, 100, -5, 1000000], dtype=np.int32)
     n = inp.size
@@ -124,13 +124,14 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE bool_scalar
 """
-    ref = f2py(src, tmp_path / 'ref', 'bool_scalar_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "bool_scalar_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_scalar', entry='bool_scalar').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="bool_scalar", entry="bool_scalar").build()
 
     from dace.data import Scalar
-    desc = sdfg.arglist().get('flag')
+
+    desc = sdfg.arglist().get("flag")
 
     def _route_bool(v):
         """Route scalar LOGICAL to whatever the bridge declared: ``Scalar(bool)`` takes a

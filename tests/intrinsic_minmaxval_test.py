@@ -22,7 +22,7 @@ res(4) = MINVAL(dt)
 
 END SUBROUTINE minval_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -59,7 +59,7 @@ res(4) = MINVAL(dt)
 
 END SUBROUTINE minval_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.int32)
@@ -106,7 +106,7 @@ res(4) = MAXVAL(dt)
 
 END SUBROUTINE minval_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.float64)
@@ -143,7 +143,7 @@ res(4) = MAXVAL(dt)
 
 END SUBROUTINE minval_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.int32)
@@ -212,7 +212,7 @@ MODULE test_minval
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_func', entry='minval_test_func').build()
+    sdfg = build_sdfg(src, tmp_path, name="minval_test_func", entry="minval_test_func").build()
 
     size = 7
     inp = np.full([size], 0, order="F", dtype=np.int32)

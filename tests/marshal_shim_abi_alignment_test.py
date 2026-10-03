@@ -7,6 +7,7 @@ member CLASS is handled the same way on both sides -- pinned here for: scalar-sy
 (by-value forward), box-of-scalar-array pass-through (both directions), value-record-array
 (one leaf per field), and pointer-to-record handle (skipped on both sides, no leaf).
 Build-only, no gfortran link/run."""
+
 import re
 
 import pytest
@@ -97,12 +98,16 @@ def _outer_patch_leaf_order(tmp_path):
     ``p_<leaf>``; a by-value symbol member appears as ``(int)(p_<leaf>)``. Mapped back to
     bare leaf names, first-appearance order, restricted to ``p_`` leaves."""
     clear_external_registry()
-    keep_external("velo",
-                  args=(Arg(kind="aos", intent="in",
-                            c_abi="per_member_soa"), Arg(kind="scalar", dtype="int32",
-                                                         intent="in"), Arg(kind="scalar", dtype="int32", intent="in"),
-                        Arg(kind="array", dtype="float64", intent="inout")),
-                  dynamic_extents_abi=True)
+    keep_external(
+        "velo",
+        args=(
+            Arg(kind="aos", intent="in", c_abi="per_member_soa"),
+            Arg(kind="scalar", dtype="int32", intent="in"),
+            Arg(kind="scalar", dtype="int32", intent="in"),
+            Arg(kind="array", dtype="float64", intent="inout"),
+        ),
+        dynamic_extents_abi=True,
+    )
     try:
         sdfg = build_sdfg(_OUTER_SRC, tmp_path / "outer", name="driver", entry="m_align_outer::driver").build()
         sdfg.validate()
@@ -125,7 +130,7 @@ def _outer_patch_leaf_order(tmp_path):
             # -- strip the extent suffix so it maps to its owning leaf (not a distinct leaf).
             if not name.startswith("p_"):
                 return
-            leaf = re.sub(r"_d\d+$", "", name[len("p_"):])
+            leaf = re.sub(r"_d\d+$", "", name[len("p_") :])
             if leaf and leaf not in seen:
                 seen.add(leaf)
                 order.append(leaf)
@@ -164,7 +169,7 @@ def _inner_patch_slot_order(tmp_path):
         for a in args:
             if not a.startswith("p_"):
                 continue
-            leaf = a[len("p_"):]
+            leaf = a[len("p_") :]
             # A dynamic member rides a lower-bound + extent scalar per dim ahead of its
             # pointer (<flat>_lb<i> / <flat>_d<i>); both collapse to the owning leaf (the
             # OUTER's matching offset_<flat>_d<i> token is filtered out above).
@@ -185,14 +190,15 @@ def test_outer_marshal_leaf_order_equals_inner_shim_slot_order(tmp_path):
     (both directions), value-record-array (per field), skipped pointer-to-record handle."""
     outer = _outer_patch_leaf_order(tmp_path)
     inner = _inner_patch_slot_order(tmp_path)
-    assert outer == _EXPECTED_PATCH_LEAVES, \
+    assert outer == _EXPECTED_PATCH_LEAVES, (
         f"OUTER p_patch leaf order drifted:\n  got      {outer}\n  expected {_EXPECTED_PATCH_LEAVES}"
-    assert inner == _EXPECTED_PATCH_LEAVES, \
+    )
+    assert inner == _EXPECTED_PATCH_LEAVES, (
         f"INNER shim slot order drifted:\n  got      {inner}\n  expected {_EXPECTED_PATCH_LEAVES}"
+    )
     assert outer == inner, f"outer/inner ABI desync:\n  outer {outer}\n  inner {inner}"
     # The pointer-to-record handle is absent from BOTH (skipped on both sides).
-    assert not any("comm_pat" in leaf for leaf in outer + inner), \
-        "pointer-to-record handle leaked into a leaf sequence"
+    assert not any("comm_pat" in leaf for leaf in outer + inner), "pointer-to-record handle leaked into a leaf sequence"
 
 
 # ---------------------------------------------------------------------------
@@ -304,14 +310,13 @@ def test_neg_lbound_member_lb_slot_marshalled_with_folded_literal(tmp_path):
     outer_args = _neg_lb_outer_marshal_args(tmp_path)
 
     # Precondition: inner shim mints a dim-0 _lb slot for the dynamic end_block member.
-    assert "p_edges_end_block_lb0" in inner_slots, \
-        f"inner shim did not mint end_block dim-0 lb slot:\n{inner_slots}"
+    assert "p_edges_end_block_lb0" in inner_slots, f"inner shim did not mint end_block dim-0 lb slot:\n{inner_slots}"
 
     # LITERAL: the folded -10 lower bound rides as the member's dim-0 _lb slot.
-    assert "(int)(-10)" in outer_args, \
-        f"neg-folded end_block lower bound not marshalled as an _lb slot:\n{outer_args}"
+    assert "(int)(-10)" in outer_args, f"neg-folded end_block lower bound not marshalled as an _lb slot:\n{outer_args}"
 
     # COUNT PARITY: outer marshal lines up slot-for-slot with the inner shim.
     assert len(outer_args) == len(inner_slots), (
         f"neg-lbound _lb slot desync: inner shim {len(inner_slots)} slots vs "
-        f"outer marshal {len(outer_args)} args\n  inner={inner_slots}\n  outer={outer_args}")
+        f"outer marshal {len(outer_args)} args\n  inner={inner_slots}\n  outer={outer_args}"
+    )

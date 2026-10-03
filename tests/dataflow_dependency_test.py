@@ -30,8 +30,15 @@ def _f2py(src_text: str, out_dir: Path, mod_name: str):
     src.write_text(src_text)
     subprocess.check_call(
         [
-            sys.executable, "-m", "numpy.f2py", "-c",
-            str(src), "-m", mod_name, "--quiet", "--f90flags=-O0 -fno-fast-math -ffp-contract=off"
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            str(src),
+            "-m",
+            mod_name,
+            "--quiet",
+            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
         ],
         cwd=out_dir,
     )
@@ -44,6 +51,7 @@ def _f2py(src_text: str, out_dir: Path, mod_name: str):
 def _sdfg_args(sdfg, int_vals):
     """Route ints to Scalar-or-length-1 by SDFG descriptor."""
     from dace.data import Scalar
+
     arglist = sdfg.arglist()
     out = {}
     for k, v in int_vals.items():
@@ -89,12 +97,12 @@ END SUBROUTINE raw_kernel
     kw.update(_sdfg_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
-    np.testing.assert_array_equal(x_sdfg,
-                                  x_ref,
-                                  err_msg="RAW: x (in-place writer) diverged -- impossible unless tasklets reordered")
-    np.testing.assert_array_equal(y_sdfg,
-                                  y_ref,
-                                  err_msg="RAW: y must equal (x_init * 2) + 1 -- bridge dropped the write-before-read")
+    np.testing.assert_array_equal(
+        x_sdfg, x_ref, err_msg="RAW: x (in-place writer) diverged -- impossible unless tasklets reordered"
+    )
+    np.testing.assert_array_equal(
+        y_sdfg, y_ref, err_msg="RAW: y must equal (x_init * 2) + 1 -- bridge dropped the write-before-read"
+    )
 
 
 def test_war_dependency(tmp_path):
@@ -132,10 +140,12 @@ END SUBROUTINE war_kernel
     sdfg(**kw)
 
     np.testing.assert_array_equal(x_sdfg, x_ref, err_msg="WAR: x final values should all be 99.0")
-    np.testing.assert_array_equal(y_sdfg,
-                                  y_ref,
-                                  err_msg="WAR: y must equal x_init * 2 -- bridge reordered the write "
-                                  "before the read (this is the cloudsc Section 4.5 bug shape)")
+    np.testing.assert_array_equal(
+        y_sdfg,
+        y_ref,
+        err_msg="WAR: y must equal x_init * 2 -- bridge reordered the write "
+        "before the read (this is the cloudsc Section 4.5 bug shape)",
+    )
 
 
 def test_waw_dependency(tmp_path):
@@ -164,10 +174,9 @@ END SUBROUTINE waw_kernel
     kw.update(_sdfg_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
-    np.testing.assert_array_equal(x_sdfg,
-                                  x_ref,
-                                  err_msg="WAW: final x must equal 2.0 (later write) -- bridge "
-                                  "reordered the two writes")
+    np.testing.assert_array_equal(
+        x_sdfg, x_ref, err_msg="WAW: final x must equal 2.0 (later write) -- bridge reordered the two writes"
+    )
 
 
 def test_rar_dependency(tmp_path):
@@ -261,10 +270,12 @@ END SUBROUTINE cloudsc_war_shape
     kw.update(_sdfg_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
-    np.testing.assert_array_equal(cv_sdfg,
-                                  cv_ref,
-                                  err_msg="cloudsc-WAR-shape: cv diverges -- bridge moved `f -= e` "
-                                  "before the cv update so the cv tasklet reads post-update f")
+    np.testing.assert_array_equal(
+        cv_sdfg,
+        cv_ref,
+        err_msg="cloudsc-WAR-shape: cv diverges -- bridge moved `f -= e` "
+        "before the cv update so the cv tasklet reads post-update f",
+    )
     np.testing.assert_array_equal(f_sdfg, f_ref, err_msg="f final mismatch")
     np.testing.assert_array_equal(e_sdfg, e_ref, err_msg="e mismatch")
 
@@ -308,10 +319,11 @@ END SUBROUTINE war_default
     sdfg(**kw)
 
     np.testing.assert_array_equal(x_sdfg, x_ref, err_msg="WAR (DEFAULT_PIPELINE): x final mismatch")
-    np.testing.assert_array_equal(y_sdfg,
-                                  y_ref,
-                                  err_msg="WAR (DEFAULT_PIPELINE): y mismatch -- "
-                                  "DEFAULT_PIPELINE pass reordered the write before the read")
+    np.testing.assert_array_equal(
+        y_sdfg,
+        y_ref,
+        err_msg="WAR (DEFAULT_PIPELINE): y mismatch -- DEFAULT_PIPELINE pass reordered the write before the read",
+    )
 
 
 def test_cloudsc_shape_war_default_pipeline(tmp_path):
@@ -362,11 +374,13 @@ END SUBROUTINE cw_default
     kw.update(_sdfg_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
-    np.testing.assert_array_equal(cv_sdfg,
-                                  cv_ref,
-                                  err_msg="cloudsc-WAR (DEFAULT_PIPELINE): cv diverges -- the cv "
-                                  "tasklet reads post-update f because one of the DEFAULT_PIPELINE "
-                                  "passes reordered the write-before-read.  Same bug as cloudsc_full.")
+    np.testing.assert_array_equal(
+        cv_sdfg,
+        cv_ref,
+        err_msg="cloudsc-WAR (DEFAULT_PIPELINE): cv diverges -- the cv "
+        "tasklet reads post-update f because one of the DEFAULT_PIPELINE "
+        "passes reordered the write-before-read.  Same bug as cloudsc_full.",
+    )
     np.testing.assert_array_equal(f_sdfg, f_ref, err_msg="f final mismatch")
     np.testing.assert_array_equal(e_sdfg, e_ref, err_msg="e mismatch")
 
@@ -424,10 +438,12 @@ END SUBROUTINE cw_nested
     kw.update(_sdfg_args(sdfg, dict(n=n, klev=klev, mode=mode)))
     sdfg(**kw)
 
-    np.testing.assert_allclose(cv_sdfg,
-                               cv_ref,
-                               rtol=1e-12,
-                               atol=1e-12,
-                               err_msg="cloudsc-nested-IF (DEFAULT_PIPELINE): cv diverges -- "
-                               "the WAR ordering bug from cloudsc Section 4.5 reproduced here.")
+    np.testing.assert_allclose(
+        cv_sdfg,
+        cv_ref,
+        rtol=1e-12,
+        atol=1e-12,
+        err_msg="cloudsc-nested-IF (DEFAULT_PIPELINE): cv diverges -- "
+        "the WAR ordering bug from cloudsc Section 4.5 reproduced here.",
+    )
     np.testing.assert_allclose(f_sdfg, f_ref, rtol=1e-12, atol=1e-12, err_msg="f final mismatch")

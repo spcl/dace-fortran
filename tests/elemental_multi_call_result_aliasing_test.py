@@ -6,6 +6,7 @@ Repro of the CLOUDSC scc_k_caching zbeta miscompile: ZPOW called 5x in one expre
 aliased onto one zpow_res scalar, so pow(ztp1,2) got overwritten by pow(zlambda,c3r)
 (~170x wrong), seeding the whole-kernel divergence.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -73,10 +74,10 @@ end module m
     n = 8
     rng = np.random.default_rng(1)
     t = np.asfortranarray(2.0 + rng.random(n))
-    l = np.asfortranarray(2.0 + rng.random(n))
+    lam = np.asfortranarray(2.0 + rng.random(n))
     y = np.zeros(n, order="F")
-    sdfg(t=t, l=l, y=y, n=n)
-    ref = t**2.0 * (0.78 / l**0.5 + l**0.25 / t**3.0)
+    sdfg(t=t, l=lam, y=y, n=n)
+    ref = t**2.0 * (0.78 / lam**0.5 + lam**0.25 / t**3.0)
     np.testing.assert_allclose(y, ref, atol=0, rtol=1e-13)
 
 
@@ -199,4 +200,4 @@ end module m
     b = np.asfortranarray(rng.random(n))
     y = np.zeros(n, order="F")
     sdfg(a=a, b=b, y=y, n=n)
-    np.testing.assert_allclose(y, (a + 1.0)**2 * (b + 1.0)**2, atol=1e-13, rtol=0)
+    np.testing.assert_allclose(y, (a + 1.0) ** 2 * (b + 1.0) ** 2, atol=1e-13, rtol=0)

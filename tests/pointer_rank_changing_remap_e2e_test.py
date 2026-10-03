@@ -4,6 +4,7 @@ The bridge detects it via MarkBoundsRemapViews, registers a View with column-maj
 reshape strides over the 1D buffer, and skips the redundant rebind tasklet. Pins
 that every ``p(i, j)`` write lands at the correct flat offset inside ``arr1d``.
 """
+
 import numpy as np
 import pytest
 
@@ -38,7 +39,7 @@ def test_pointer_2d_view_of_1d_target_writes_at_correct_offsets(tmp_path):
 
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    arr = np.full((M * K, ), -1.0, dtype=np.float64, order='F')
+    arr = np.full((M * K,), -1.0, dtype=np.float64, order="F")
     sdfg(arr1d=arr)
 
     expected = np.empty(M * K, dtype=np.float64)

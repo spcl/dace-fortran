@@ -1,5 +1,6 @@
 """Tests for ``BindOmpThreadCount``: the symbol a thread-strided ``CPU_Persistent`` map uses for the team
 size is bound at SDFG entry from ``omp_get_max_threads()``, not passed in by the caller."""
+
 import ctypes
 
 import numpy as np
@@ -16,7 +17,7 @@ M = 4096
 
 def max_threads() -> int:
     """The thread count the generated library sees: the OpenMP runtime reads ``OMP_NUM_THREADS`` once."""
-    libgomp = ctypes.CDLL('libgomp.so.1')
+    libgomp = ctypes.CDLL("libgomp.so.1")
     libgomp.omp_get_max_threads.restype = ctypes.c_int
     return libgomp.omp_get_max_threads()
 
@@ -41,14 +42,14 @@ def thread_strided_sdfg(name: str) -> dace.SDFG:
 
 def test_unbound_symbol_is_a_call_argument():
     """Without the pass the team size is part of the call signature."""
-    sdfg = thread_strided_sdfg('omp_threads_unbound')
+    sdfg = thread_strided_sdfg("omp_threads_unbound")
     assert OMP_NUM_THREADS_SYMBOL in {str(s) for s in sdfg.free_symbols}
     with pytest.raises(KeyError, match=OMP_NUM_THREADS_SYMBOL):
         sdfg(A=np.zeros(N), out=np.zeros(M, dtype=np.int32))
 
 
 def test_symbol_is_bound_at_entry():
-    sdfg = thread_strided_sdfg('omp_threads_structure')
+    sdfg = thread_strided_sdfg("omp_threads_structure")
     scalar = BindOmpThreadCount().apply_pass(sdfg, {})
     sdfg.validate()
 
@@ -57,21 +58,21 @@ def test_symbol_is_bound_at_entry():
     assert OMP_NUM_THREADS_SYMBOL not in sdfg.arglist()
 
     first = sdfg.start_state
-    (tasklet, ) = [n for n in first.nodes() if isinstance(n, dace.nodes.Tasklet)]
+    (tasklet,) = [n for n in first.nodes() if isinstance(n, dace.nodes.Tasklet)]
     assert tasklet.side_effects
     assert tasklet.language == dace.Language.CPP
-    assert 'omp_get_max_threads' in tasklet.code.as_string
-    (edge, ) = sdfg.out_edges(first)
+    assert "omp_get_max_threads" in tasklet.code.as_string
+    (edge,) = sdfg.out_edges(first)
     assert edge.data.assignments == {OMP_NUM_THREADS_SYMBOL: scalar}
 
 
 def test_kernel_runs_without_the_thread_count_argument():
     """The generated code takes the team size from the OpenMP runtime: every thread strides its share of ``A``
     and the outside map covers exactly ``omp_get_max_threads()`` flags."""
-    sdfg = thread_strided_sdfg('omp_threads_run')
+    sdfg = thread_strided_sdfg("omp_threads_run")
     BindOmpThreadCount().apply_pass(sdfg, {})
     code = sdfg.generate_code()[0].clean_code
-    assert 'omp_get_max_threads()' in code
+    assert "omp_get_max_threads()" in code
 
     A = np.zeros(N)
     out = np.zeros(M, dtype=np.int32)
@@ -85,7 +86,7 @@ def test_optimize_binds_the_symbol():
     """The optimization recipe leaves no team-size argument behind."""
     from dace_fortran.pipelines import optimize
 
-    sdfg = optimize(thread_strided_sdfg('omp_threads_optimize'))
+    sdfg = optimize(thread_strided_sdfg("omp_threads_optimize"))
     assert OMP_NUM_THREADS_SYMBOL not in {str(s) for s in sdfg.free_symbols}
 
     A = np.zeros(N)
@@ -96,7 +97,6 @@ def test_optimize_binds_the_symbol():
 
 
 def test_pass_without_the_symbol_is_a_no_op():
-
     @dace.program
     def plain(A: dace.float64[N]):
         for i in dace.map[0:N]:
@@ -109,14 +109,14 @@ def test_pass_without_the_symbol_is_a_no_op():
 
 
 def test_pass_is_idempotent():
-    sdfg = thread_strided_sdfg('omp_threads_twice')
+    sdfg = thread_strided_sdfg("omp_threads_twice")
     assert BindOmpThreadCount().apply_pass(sdfg, {}) is not None
     states = sdfg.number_of_nodes()
     assert BindOmpThreadCount().apply_pass(sdfg, {}) is None
     assert sdfg.number_of_nodes() == states
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test_unbound_symbol_is_a_call_argument()
     test_symbol_is_bound_at_entry()
     test_kernel_runs_without_the_thread_count_argument()

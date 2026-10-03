@@ -2,6 +2,7 @@
 Fix: wrapper sources <dummy>_present from present(x) (was hardwired to 0, so callers passing the
 optional still got the absent branch). Pins both the emitted .f90 plumbing and numeric match vs an
 untransformed gfortran reference."""
+
 import ctypes
 import shutil
 from pathlib import Path

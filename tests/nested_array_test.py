@@ -21,7 +21,7 @@ subroutine main(d)
   d(test(2, 3, 1)) = 5.5
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.full([4], 42, order="F", dtype=np.float64)
     sdfg(d=a)
     assert np.allclose(a, [42, 5.5, 42, 42])
@@ -50,7 +50,7 @@ subroutine main(d, test, indices)
   d(internal_test(2, 3, 1)) = 5.5
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.full([4], 42, order="F", dtype=np.float64)
     test = np.full([3, 4, 5], 42, order="F", dtype=np.int32)
     indices = np.full([3, 4, 5], 42, order="F", dtype=np.int32)
@@ -77,7 +77,7 @@ subroutine main(d, test, indices)
   d(test(2, 3, 1)) = 5.5
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.full([4], 42, order="F", dtype=np.float64)
     test = np.full([3, 4, 5], 42, order="F", dtype=np.int32)
     indices = np.full([3, 4, 5], 42, order="F", dtype=np.int32)

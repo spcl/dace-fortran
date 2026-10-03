@@ -12,6 +12,7 @@ Each test inlines a small multi-module project via inline_to_ast (no entry
 point, optimize=False) and checks the restored USE, plus (if gfortran is
 available) that the single TU compiles.
 """
+
 import re
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from dace_fortran.fparser_inliner import (inline_to_ast, restore_cross_module_uses, strip_builtin_stub_modules)
+from dace_fortran.fparser_inliner import inline_to_ast, restore_cross_module_uses, strip_builtin_stub_modules
 
 
 def _have_gfortran() -> bool:
@@ -34,10 +35,9 @@ def _compiles(src_text: str) -> bool:
     with TemporaryDirectory() as td:
         f = Path(td) / "single.f90"
         f.write_text(src_text)
-        r = subprocess.run(["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c",
-                            str(f)],
-                           cwd=td,
-                           capture_output=True)
+        r = subprocess.run(
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+        )
         if r.returncode != 0:
             print(r.stderr.decode())
         return r.returncode == 0
@@ -65,8 +65,7 @@ def test_restore_use_for_cross_module_subroutine_call():
     """A subroutine calling another module's subroutine gets USE <mod>, ONLY:
     <proc> restored, and the single TU compiles -- the NPB-LU pattern (driver -> compute module)."""
     sources = {
-        "lu.f90":
-        """
+        "lu.f90": """
 module lu
   implicit none
   private
@@ -79,8 +78,7 @@ contains
   end subroutine ssor
 end module lu
 """,
-        "useapplu.f90":
-        """
+        "useapplu.f90": """
 module useapplu
   use lu, only: dolu
   implicit none
@@ -99,8 +97,7 @@ end module useapplu
 def test_restore_use_for_cross_module_function_call():
     """A function reference across modules also gets its ``USE`` restored."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -110,8 +107,7 @@ contains
   end function dbl
 end module lib
 """,
-        "drv.f90":
-        """
+        "drv.f90": """
 module drv
   use lib, only: dbl
   implicit none
@@ -132,8 +128,7 @@ def test_restore_skips_local_name_shadowing_module_proc():
     """A scope whose local array shares a name with some module procedure must
     NOT get a spurious ``USE`` for it (the local would clash with the import)."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -143,8 +138,7 @@ contains
   end function flux
 end module lib
 """,
-        "drv.f90":
-        """
+        "drv.f90": """
 module drv
   implicit none
 contains
@@ -166,8 +160,7 @@ end module drv
 def test_restore_skips_sibling_same_module():
     """A call to a sibling procedure in the same module needs no ``USE``."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -222,8 +215,7 @@ def test_restore_skips_ambiguous_multi_module_proc():
     """A procedure name defined in more than one module is ambiguous and must
     never be auto-imported by name (the call site must already disambiguate)."""
     sources = {
-        "m1.f90":
-        """
+        "m1.f90": """
 module m1
   implicit none
 contains
@@ -231,8 +223,7 @@ contains
   end subroutine foo
 end module m1
 """,
-        "m2.f90":
-        """
+        "m2.f90": """
 module m2
   implicit none
 contains
@@ -240,8 +231,7 @@ contains
   end subroutine foo
 end module m2
 """,
-        "drv.f90":
-        """
+        "drv.f90": """
 module drv
   use m1, only: foo
   implicit none
@@ -261,8 +251,7 @@ end module drv
 def test_restore_idempotent():
     """Running the restore pass twice adds nothing the second time."""
     sources = {
-        "lu.f90":
-        """
+        "lu.f90": """
 module lu
   implicit none
 contains
@@ -270,8 +259,7 @@ contains
   end subroutine dolu
 end module lu
 """,
-        "useapplu.f90":
-        """
+        "useapplu.f90": """
 module useapplu
   use lu, only: dolu
   implicit none
@@ -298,8 +286,7 @@ def test_numeric_kind_literal_survives_merge():
     crash the merge. consolidate_uses rewrites a *named* kind (0.0_wp) into a
     Name to resolve it, but a numeric kind isn't a valid identifier and must stay a plain literal."""
     sources = {
-        "k.f90":
-        """
+        "k.f90": """
 subroutine k(v, out)
   implicit none
   real(8), intent(in) :: v(4)
@@ -321,15 +308,13 @@ def test_named_kind_literal_still_resolves():
     """A *named* kind suffix (``0.0_wp`` with ``wp`` a module parameter) is
     still handled -- the numeric-kind guard must not regress the named case."""
     sources = {
-        "kinds.f90":
-        """
+        "kinds.f90": """
 module kinds
   implicit none
   integer, parameter :: wp = selected_real_kind(15, 307)
 end module kinds
 """,
-        "k.f90":
-        """
+        "k.f90": """
 subroutine k(a)
   use kinds, only: wp
   implicit none
@@ -352,8 +337,7 @@ def test_intrinsic_iso_c_binding_use_preserved():
     (c_double_complex, c_ptr) must survive the merge -- the pipeline otherwise
     strips it (the stub it parses against lacks c_double_complex), leaving those names undeclared."""
     sources = {
-        "kmod.f90":
-        """
+        "kmod.f90": """
 module kmod
   use, intrinsic :: iso_c_binding
   implicit none
@@ -376,8 +360,7 @@ def test_intrinsic_use_in_one_of_several_modules():
     """The intrinsic ``USE`` is restored to the right module when several are
     merged (qualified-name match), and a normal cross-module call still works."""
     sources = {
-        "cmod.f90":
-        """
+        "cmod.f90": """
 module cmod
   use iso_c_binding, only: c_double
   implicit none
@@ -388,8 +371,7 @@ contains
   end function scale2
 end module cmod
 """,
-        "drv.f90":
-        """
+        "drv.f90": """
 module drv
   use cmod, only: scale2
   use iso_c_binding, only: c_double
@@ -418,8 +400,7 @@ def test_external_interface_block_preserved():
     survive the merge -- the pipeline otherwise drops it ("no candidate to
     resolve to"), leaving the call undeclared. Compiles to an object only (external symbol is link-time)."""
     sources = {
-        "kmod.f90":
-        """
+        "kmod.f90": """
 module kmod
   use, intrinsic :: iso_c_binding
   implicit none
@@ -448,8 +429,7 @@ def test_interface_for_defined_procedure_not_duplicated():
     """An interface whose procedure IS defined in the project must not be
     restored as a duplicate declaration (the pipeline resolves it)."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -459,8 +439,7 @@ contains
   end function dbl
 end module lib
 """,
-        "drv.f90":
-        """
+        "drv.f90": """
 module drv
   use lib, only: dbl
   implicit none
@@ -486,9 +465,9 @@ def test_external_interface_not_duplicated_after_pipeline_mangles_inplace():
     copy and re-add exactly one declaration, and a no-arg BIND(C) subroutine
     must keep its (fparser-dropped) (). ICON's mo_mpi -> mo_util_system (util_exit/util_abort) pattern."""
     from dace_fortran.fparser_inliner import inline_to_single_tu
+
     sources = {
-        "s.f90":
-        """
+        "s.f90": """
 module mo_util_system
   use iso_c_binding, only: c_int
   implicit none
@@ -524,11 +503,9 @@ end module m_driver
 """,
     }
     with TemporaryDirectory() as td:
-        tu = inline_to_single_tu(sources,
-                                 entry="m_driver::run",
-                                 out_dir=Path(td),
-                                 name="tu",
-                                 tolerate_external_uses=True)
+        tu = inline_to_single_tu(
+            sources, entry="m_driver::run", out_dir=Path(td), name="tu", tolerate_external_uses=True
+        )
         out = Path(tu).read_text()
     # Exactly one declaration of the external ``util_exit`` survives.
     assert len(re.findall(r"(?im)^\s*SUBROUTINE\s+util_exit\b", out)) == 1, out
@@ -547,8 +524,7 @@ def test_strip_builtin_stub_modules_removes_iso_c_binding():
     but the stub module is stripped from the output (the compiler ships its
     own ``iso_c_binding`` / ``iso_fortran_env``)."""
     sources = {
-        "k.f90":
-        """
+        "k.f90": """
 subroutine k(a) bind(c, name="k")
   use iso_c_binding, only: c_double
   implicit none

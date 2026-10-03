@@ -16,24 +16,25 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 
 _COMPLEX_BIN_OPS = [
     # (fortran_op, numpy_op, label, marks)
-    ('+', np.add, 'add', ()),
-    ('-', np.subtract, 'sub', ()),
-    ('*', np.multiply, 'mul', ()),
+    ("+", np.add, "add", ()),
+    ("-", np.subtract, "sub", ()),
+    ("*", np.multiply, "mul", ()),
     # complex '/' lowers to __divdc3/__divsc3 (Smith's algorithm); bridge recognizes the 4-real call
     # shape and reconstructs the complex operands.
-    ('/', np.divide, 'div', ()),
+    ("/", np.divide, "div", ()),
 ]
 
 _COMPLEX_KINDS = [
     # (kind, np_dtype, fortran_decl, label)
-    (4, np.complex64, 'complex(4)', 'c4'),
-    (8, np.complex128, 'complex(8)', 'c8'),
+    (4, np.complex64, "complex(4)", "c4"),
+    (8, np.complex128, "complex(8)", "c8"),
 ]
 
 
 @pytest.mark.parametrize("kind,np_dtype,decl,klabel", _COMPLEX_KINDS, ids=[k[3] for k in _COMPLEX_KINDS])
-@pytest.mark.parametrize("fop,np_op,oplabel",
-                         [pytest.param(o[0], o[1], o[2], marks=o[3], id=o[2]) for o in _COMPLEX_BIN_OPS])
+@pytest.mark.parametrize(
+    "fop,np_op,oplabel", [pytest.param(o[0], o[1], o[2], marks=o[3], id=o[2]) for o in _COMPLEX_BIN_OPS]
+)
 def test_complex_arithmetic(tmp_path: Path, kind, np_dtype, decl, klabel, fop, np_op, oplabel):
     """Complex arithmetic on length-N arrays, compared against numpy."""
     src = f"""
@@ -47,7 +48,7 @@ subroutine main(n, a, b, out)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n = 8
     rng = np.random.default_rng(0)
     a = (rng.random(n) + 1j * rng.random(n) + 0.1).astype(np_dtype)
@@ -64,15 +65,15 @@ end subroutine main
 
 _COMPLEX_UNARY_FUNCS = [
     # (fortran_intrinsic, numpy_func, label)
-    ('SIN', np.sin, 'sin'),
-    ('COS', np.cos, 'cos'),
-    ('TAN', np.tan, 'tan'),
-    ('SINH', np.sinh, 'sinh'),
-    ('COSH', np.cosh, 'cosh'),
-    ('TANH', np.tanh, 'tanh'),
-    ('EXP', np.exp, 'exp'),
-    ('LOG', np.log, 'log'),
-    ('SQRT', np.sqrt, 'sqrt'),
+    ("SIN", np.sin, "sin"),
+    ("COS", np.cos, "cos"),
+    ("TAN", np.tan, "tan"),
+    ("SINH", np.sinh, "sinh"),
+    ("COSH", np.cosh, "cosh"),
+    ("TANH", np.tanh, "tanh"),
+    ("EXP", np.exp, "exp"),
+    ("LOG", np.log, "log"),
+    ("SQRT", np.sqrt, "sqrt"),
 ]
 
 
@@ -92,7 +93,7 @@ subroutine main(n, a, out)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n = 6
     rng = np.random.default_rng(1)
     # tame domain avoids branch-cut mismatches vs numpy (e.g. imag~=+/-pi/2 for tan, real<=0 for log).
@@ -116,7 +117,7 @@ subroutine main(n, a, out)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n = 4
     a = np.array([3 + 4j, 5 + 12j, -1 + 0j, 0 + 1j], dtype=np.complex128)
     out = np.zeros(n, dtype=np.float64)

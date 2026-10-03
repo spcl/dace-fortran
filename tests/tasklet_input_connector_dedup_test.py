@@ -34,10 +34,10 @@ def test_dedup_same_index_three_times(tmp_path):
                     ENDDO
                     END SUBROUTINE cube
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='cube', entry='cube').build()
-    t = _tasklet_for(sdfg, '_in_a')
+    sdfg = build_sdfg(test_string, tmp_path, name="cube", entry="cube").build()
+    t = _tasklet_for(sdfg, "_in_a")
     assert t is not None, "couldn't find the cube tasklet"
-    in_conns = [c for c in t.in_connectors if c.startswith('_in_a')]
+    in_conns = [c for c in t.in_connectors if c.startswith("_in_a")]
     # Contract: one connector per textual occurrence (no dedup) -- deduping by (array, index)
     # used to misalign the bridge's access list against the textual expression when they
     # disagreed on count (e.g. the MIN/MAX cmp+select pattern).
@@ -61,10 +61,10 @@ def test_no_dedup_when_index_differs(tmp_path):
                     ENDDO
                     END SUBROUTINE pair_sum
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='pair_sum', entry='pair_sum').build()
-    t = _tasklet_for(sdfg, '_in_a')
+    sdfg = build_sdfg(test_string, tmp_path, name="pair_sum", entry="pair_sum").build()
+    t = _tasklet_for(sdfg, "_in_a")
     assert t is not None
-    in_conns = sorted(c for c in t.in_connectors if c.startswith('_in_a'))
+    in_conns = sorted(c for c in t.in_connectors if c.startswith("_in_a"))
     assert len(in_conns) == 2, f"expected two _in_a* connectors, got {in_conns}"
 
     a = np.arange(1.0, 6.0, dtype=np.float64)

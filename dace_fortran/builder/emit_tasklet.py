@@ -14,8 +14,16 @@ from typing import TYPE_CHECKING, Container, Sequence
 
 from dace import Memlet
 
-from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
-                                         resolve_object_member, resolve_object_member_expr, resolve_section_alias)
+from dace_fortran.builder.access import (
+    acc,
+    build_memlet_index,
+    get_access,
+    indirect_host,
+    rename_iters,
+    resolve_object_member,
+    resolve_object_member_expr,
+    resolve_section_alias,
+)
 from dace_fortran.dace_types import MapRanges, connectors
 from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticVar, VarLike
 
@@ -28,7 +36,7 @@ if TYPE_CHECKING:
 # ``(0.0) + 1j*(0.0)``): negative lookbehind drops idents starting right after
 # a digit/``.``, so a real scalar named ``j`` is still matched but ``1j``'s
 # ``j`` isn't mistaken for it (else a spurious ``_in_j`` connector).
-_IDENT_RE = re.compile(r'(?<![0-9.])[a-zA-Z_]\w*')
+_IDENT_RE = re.compile(r"(?<![0-9.])[a-zA-Z_]\w*")
 
 
 def _ident_tokens(expr: str) -> set:
@@ -42,8 +50,7 @@ def _is_len1_scalar_view(builder: SDFGBuilder, nm: str) -> bool:
     ``tmp => x`` lowered as a length-1-array View).  Reads/writes like a scalar,
     so emit paths wire it as ``_in_<nm>``/``<nm>[0]``, not an indexed occurrence."""
     a = builder.arrays.get(nm)
-    return a is not None and a.role == 'view_alias' \
-        and list(a.shape_symbols) == ['1']
+    return a is not None and a.role == "view_alias" and list(a.shape_symbols) == ["1"]
 
 
 def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tuple[str, str, str] | None:
@@ -54,18 +61,20 @@ def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tupl
     v: VarLike | None
     if target in builder.complex_component_aliases:
         from dace_fortran.builder.access import cc_alias_view_spec
+
         v = cc_alias_view_spec(builder, target)
     else:
         v = builder.arrays.get(target)
     if v is None:
         return None
-    if v.bounds_remap_view and v.bounds_remap_source \
-            and v.bounds_remap_source in state.parent.arrays:
-        v = SyntheticVar(role='view_alias',
-                         view_source=v.bounds_remap_source,
-                         view_subset=list(v.bounds_remap_source_subset) or [""],
-                         fortran_name=v.fortran_name)
-    if v.role != 'view_alias':
+    if v.bounds_remap_view and v.bounds_remap_source and v.bounds_remap_source in state.parent.arrays:
+        v = SyntheticVar(
+            role="view_alias",
+            view_source=v.bounds_remap_source,
+            view_subset=list(v.bounds_remap_source_subset) or [""],
+            fortran_name=v.fortran_name,
+        )
+    if v.role != "view_alias":
         return None
     if not v.view_source or v.view_source not in state.parent.arrays:
         return None
@@ -75,6 +84,7 @@ def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tupl
         src_subset = ", ".join(f"0:{d}" for d in src_dims)
     else:
         from dace_fortran.builder.access import resolve_full_dim_markers
+
         src_shape = [str(d) for d in state.parent.arrays[src].shape]
         src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
     view_dims = [str(d) for d in state.parent.arrays[target].shape]
@@ -112,7 +122,7 @@ def ensure_view_read_link(builder: SDFGBuilder, state: SDFGState, read_node: Acc
         return
     src, src_subset, view_subset = spec
     src_node = state.add_access(src)
-    state.add_edge(src_node, None, read_node, 'views', Memlet(data=src, subset=src_subset, other_subset=view_subset))
+    state.add_edge(src_node, None, read_node, "views", Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
 def assign_reads_array(assign_node: NodeLike, arrays: Container[str]) -> bool:
@@ -125,8 +135,9 @@ def assign_reads_array(assign_node: NodeLike, arrays: Container[str]) -> bool:
     return False
 
 
-def _rewrite_read_connectors(code: str, sorted_tokens: Sequence[str], scalar_reads: Container[str],
-                             array_occ: dict[str, int]) -> str:
+def _rewrite_read_connectors(
+    code: str, sorted_tokens: Sequence[str], scalar_reads: Container[str], array_occ: dict[str, int]
+) -> str:
     """Replace each read reference in a tasklet RHS with its per-occurrence
     input connector: scalar ``<name>`` -> ``_in_<name>``; Nth array occurrence
     ``<name>[...]`` -> ``_in_<name>_<N>`` with its balanced ``[...]`` consumed
@@ -135,23 +146,23 @@ def _rewrite_read_connectors(code: str, sorted_tokens: Sequence[str], scalar_rea
     are walked by hand since ``re`` can't balance them."""
     for nm in sorted_tokens:
         if nm in scalar_reads:
-            code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
+            code = re.sub(rf"\b{re.escape(nm)}\b", f"_in_{nm}", code)
             continue
         new_chunks = []
         cursor = 0
-        pat = re.compile(rf'\b{re.escape(nm)}\b')
+        pat = re.compile(rf"\b{re.escape(nm)}\b")
         for m in pat.finditer(code):
             start = m.start()
             end = m.end()
             # If the very next char is '[', consume the balanced [...].
-            if end < len(code) and code[end] == '[':
+            if end < len(code) and code[end] == "[":
                 depth = 1
                 j = end + 1
                 while j < len(code) and depth > 0:
                     ch = code[j]
-                    if ch in '([{':
+                    if ch in "([{":
                         depth += 1
-                    elif ch in ')]}':
+                    elif ch in ")]}":
                         depth -= 1
                         if depth == 0:
                             break
@@ -164,16 +175,18 @@ def _rewrite_read_connectors(code: str, sorted_tokens: Sequence[str], scalar_rea
             new_chunks.append(f"_in_{nm}_{n}")
             cursor = end
         new_chunks.append(code[cursor:])
-        code = ''.join(new_chunks)
+        code = "".join(new_chunks)
     return code
 
 
-def emit_tasklet(builder: SDFGBuilder,
-                 state: SDFGState,
-                 assign_node: NodeLike,
-                 idx: int,
-                 iter_map: dict[str, str],
-                 indirect_syms: dict[str, str] | None = None) -> None:
+def emit_tasklet(
+    builder: SDFGBuilder,
+    state: SDFGState,
+    assign_node: NodeLike,
+    idx: int,
+    iter_map: dict[str, str],
+    indirect_syms: dict[str, str] | None = None,
+) -> None:
     """One Tasklet per array assignment.  Each RHS occurrence of an array
     (e.g. ``e_bln(jc,1)*z + e_bln(jc,2)*z``) gets its own input connector/memlet;
     collapsing them onto one connector would silently compute a wrong result."""
@@ -226,9 +239,12 @@ def emit_tasklet(builder: SDFGBuilder,
 
     # Connector dicts, not sets: ``add_tasklet`` turns a set into a dict anyway, and doing it here
     # keeps the connector order the one this code built rather than a hash order.
-    in_c = connectors([
-        *(f"_in_{sc}" for sc in r_scl), *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))
-    ])
+    in_c = connectors(
+        [
+            *(f"_in_{sc}" for sc in r_scl),
+            *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs))),
+        ]
+    )
     out_c = connectors([f"_out_{target}"])
 
     # iter_map rename MUST run before the connector rewrite: ``d(i) = i*2.0``
@@ -246,12 +262,14 @@ def emit_tasklet(builder: SDFGBuilder,
     # fallback it couldn't trace; raise here instead of letting it reach
     # DaCe's ast.parse as an opaque ``SyntaxError`` at ``<unknown>:1``.
     if "?" in code:
-        raise NotImplementedError(f"emit_tasklet: unresolved operand placeholder ``?`` in tasklet "
-                                  f"body ``{code}`` (target={target!r}).  The C++ AST builder "
-                                  "couldn't trace one of the operand chains -- check "
-                                  "bridge/ast/assigns.cpp ``buildIndexExpr`` and "
-                                  "expressions.cpp ``buildExpr`` for the fallback returning "
-                                  "``?`` against this kernel's HLFIR.")
+        raise NotImplementedError(
+            f"emit_tasklet: unresolved operand placeholder ``?`` in tasklet "
+            f"body ``{code}`` (target={target!r}).  The C++ AST builder "
+            "couldn't trace one of the operand chains -- check "
+            "bridge/ast/assigns.cpp ``buildIndexExpr`` and "
+            "expressions.cpp ``buildExpr`` for the fallback returning "
+            "``?`` against this kernel's HLFIR."
+        )
     t = state.add_tasklet(f"t_{idx}", in_c, out_c, code)
 
     for nm in sorted(reads_by_name):
@@ -283,7 +301,7 @@ def emit_tasklet(builder: SDFGBuilder,
     # bookkeeping keys off the source name.
     v_target = builder.arrays.get(target)
     eff_target = target
-    if v_target is not None and v_target.role == 'section_alias':
+    if v_target is not None and v_target.role == "section_alias":
         eff_target = v_target.view_source
     else:
         # Whole-object rebind member write: retarget onto the real flattened
@@ -292,8 +310,7 @@ def emit_tasklet(builder: SDFGBuilder,
         if obj_real is not None:
             eff_target = obj_real
     cache = builder.access_caches.get(state)
-    is_self_update = (target in r_scl) or (target in reads_by_name) \
-                  or (eff_target in reads_by_name)
+    is_self_update = (target in r_scl) or (target in reads_by_name) or (eff_target in reads_by_name)
     cached_has_readers = False
     if cache is not None and eff_target in cache:
         cached_has_readers = state.out_degree(cache[eff_target]) > 0
@@ -303,7 +320,7 @@ def emit_tasklet(builder: SDFGBuilder,
     # propagates to the parent (parent looks uninitialised).  Covers the
     # pure-write case; self-update/cached-reader branch above handles RMW.
     v_eff = builder.arrays.get(eff_target)
-    is_view_write = v_eff is not None and (v_eff.bounds_remap_view or v_eff.role == 'view_alias')
+    is_view_write = v_eff is not None and (v_eff.bounds_remap_view or v_eff.role == "view_alias")
     if is_view_write or is_self_update or cached_has_readers:
         w = state.add_access(eff_target)
         if cache is not None:
@@ -349,36 +366,36 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
     # chain past ``kBuildIndexExprDepth``, missing indexStack entry, unresolved
     # memref).  Raise here instead of an opaque ``SyntaxError`` at ``<unknown>:1``.
     if "?" in value:
-        raise NotImplementedError(f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
-                                  f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
-                                  "one of the operand chains.  Check bridge/ast/assigns.cpp "
-                                  "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
-                                  "fallback returning ``?`` against this kernel's HLFIR.")
+        raise NotImplementedError(
+            f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
+            f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
+            "one of the operand chains.  Check bridge/ast/assigns.cpp "
+            "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
+            "fallback returning ``?`` against this kernel's HLFIR."
+        )
     src_name = value.strip()
     tgt_var = builder.arrays.get(target)
-    tgt_is_array = (tgt_var is not None and tgt_var.rank > 0 and len(tgt_var.shape_symbols) == tgt_var.rank)
+    tgt_is_array = tgt_var is not None and tgt_var.rank > 0 and len(tgt_var.shape_symbols) == tgt_var.rank
 
     # Bounds-remap-view rebind (``p(1:M,1:K) => arr1d``): the View descriptor +
     # source->view linking edge (access.py) already establish the alias, so this
     # bare ``p = arr1d`` store is redundant.  Skip it -- else ``set_<target>``
     # writes a rank-1 subset against a multi-D View and the validator rejects it.
-    if tgt_var is not None and tgt_var.bounds_remap_view \
-            and tgt_var.bounds_remap_source == src_name:
+    if tgt_var is not None and tgt_var.bounds_remap_view and tgt_var.bounds_remap_source == src_name:
         return
 
     # Plain section rebind (``p => a(:, j)``) lowered as view_alias: the
     # source->view link (access.py) already establishes it, so this bare store
     # is NOT a data copy -- skip it, else DaCe reports "ambiguous view".
-    if tgt_var is not None and tgt_var.role == "view_alias" \
-            and tgt_var.view_source == src_name:
+    if tgt_var is not None and tgt_var.role == "view_alias" and tgt_var.view_source == src_name:
         return
 
     if tgt_is_array:
         assert tgt_var is not None
-        is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
+        is_whole_array_copy = src_name in builder.arrays and re.fullmatch(r"[A-Za-z_]\w*", src_name) is not None
         if is_whole_array_copy:
             src_var = builder.arrays[src_name]
-            if (src_var.rank == tgt_var.rank and len(src_var.shape_symbols) == src_var.rank):
+            if src_var.rank == tgt_var.rank and len(src_var.shape_symbols) == src_var.rank:
                 # Plain whole-array copy (pointer-rebind RewritePointerAssigns didn't
                 # collapse): AccessNode(src) -> AccessNode(tgt), full-shape subsets, no tasklet.
                 read = acc(builder, state, src_name)
@@ -426,16 +443,19 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
     # else the tasklet emits invalid ``int*`` arithmetic (``tmp + 1`` on a view).
     # ``nm != target`` was wrong: ``i = i + 1`` needs a read edge on target itself.
     reads = [
-        nm for nm in sorted(tokens, key=len, reverse=True) if nm in builder.scalars
-        or _is_len1_scalar_view(builder, nm) or resolve_object_member(builder, nm) in builder.scalars
+        nm
+        for nm in sorted(tokens, key=len, reverse=True)
+        if nm in builder.scalars
+        or _is_len1_scalar_view(builder, nm)
+        or resolve_object_member(builder, nm) in builder.scalars
     ]
 
     code = value
     for nm in reads:
-        code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
+        code = re.sub(rf"\b{re.escape(nm)}\b", f"_in_{nm}", code)
 
     in_c = connectors(f"_in_{nm}" for nm in reads)
-    out_c = connectors(['_out'])
+    out_c = connectors(["_out"])
     t = state.add_tasklet(f"set_{target}", in_c, out_c, f"_out = {code}")
 
     for nm in reads:
@@ -444,7 +464,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         # binds its real flattened descriptor; ``acc`` already redirected the
         # node, so the memlet must name the real descriptor too.
         eff_nm = resolve_object_member(builder, nm) or nm
-        state.add_edge(r, None, t, f"_in_{nm}", Memlet(data=eff_nm, subset='0'))
+        state.add_edge(r, None, t, f"_in_{nm}", Memlet(data=eff_nm, subset="0"))
 
     # Self-update (``i = i + 1``): read and write need DIFFERENT access nodes
     # so the state stays a DAG (no cycle on one node).  Same applies when an
@@ -453,7 +473,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
     # ``max_vcfl_dyn = MAX(p_diag%max_vcfl_dyn, ...)`` then
     # ``p_diag%max_vcfl_dyn = max_vcfl_dyn`` (2nd write's target was 1st read).
     cache = builder.access_caches.get(state)
-    cached_has_readers = (cache is not None and target in cache and state.out_degree(cache[target]) > 0)
+    cached_has_readers = cache is not None and target in cache and state.out_degree(cache[target]) > 0
     if (target in reads) or cached_has_readers:
         a = state.add_access(target)
         if cache is not None:
@@ -461,7 +481,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         ensure_view_writeback_link(builder, state, a, target)
     else:
         a = acc(builder, state, target)
-    state.add_edge(t, '_out', a, None, Memlet(data=target, subset='0'))
+    state.add_edge(t, "_out", a, None, Memlet(data=target, subset="0"))
 
 
 def _cc_elem_subset(name: str, elem_exprs: Sequence[str]) -> str:
@@ -472,12 +492,14 @@ def _cc_elem_subset(name: str, elem_exprs: Sequence[str]) -> str:
     return ", ".join(f"({e}) - offset_{name}_d{k}" for k, e in enumerate(elem_exprs))
 
 
-def emit_complex_component_assign(builder: SDFGBuilder,
-                                  state: SDFGState,
-                                  node: NodeLike,
-                                  idx: int,
-                                  iter_map: dict[str, str],
-                                  indirect_syms: dict[str, str] | None = None) -> None:
+def emit_complex_component_assign(
+    builder: SDFGBuilder,
+    state: SDFGState,
+    node: NodeLike,
+    idx: int,
+    iter_map: dict[str, str],
+    indirect_syms: dict[str, str] | None = None,
+) -> None:
     """``qg(c, i...) = <rhs>`` where ``qg`` is a complex-as-2-reals component
     alias (``REAL(2,N)`` dummy bound to a COMPLEX element -- QE's ``qvan2``
     ``qg(2,ngy)`` aliasing ``qgm(1,ijh)``), registered as a SAME-dtype COMPLEX
@@ -493,8 +515,9 @@ def emit_complex_component_assign(builder: SDFGBuilder,
     accesses = node.accesses or []
     wac = next((a for a in accesses if a.array_name == node.target and not a.is_read), None)
     if wac is None:
-        raise NotImplementedError(f"complex_component_alias '{node.target}': "
-                                  "assign has no write access to map onto the complex source")
+        raise NotImplementedError(
+            f"complex_component_alias '{node.target}': assign has no write access to map onto the complex source"
+        )
     qg_exprs = list(wac.index_exprs)
     comp_expr = rename_iters(qg_exprs[comp_dim], iter_map)
     elem_exprs = [rename_iters(e, iter_map) for i, e in enumerate(qg_exprs) if i != comp_dim]
@@ -502,7 +525,7 @@ def emit_complex_component_assign(builder: SDFGBuilder,
 
     # rhs: replace bare ``qg`` reads with the CURRENT component ``_cur``.
     rhs = rename_iters(node.expr, iter_map)
-    rhs = re.sub(rf'\b{re.escape(node.target)}\b', '_cur', rhs)
+    rhs = re.sub(rf"\b{re.escape(node.target)}\b", "_cur", rhs)
 
     # Collect the OTHER rhs reads (everything but ``qg``, now ``_cur``) and wire
     # like ``emit_tasklet``; the component selector scalar folds into the same set.
@@ -528,24 +551,31 @@ def emit_complex_component_assign(builder: SDFGBuilder,
     sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
     rhs_code = _rewrite_read_connectors(rhs, sorted_tokens, r_scl, occ)
     if "?" in rhs_code:
-        raise NotImplementedError(f"emit_complex_component_assign: unresolved operand placeholder "
-                                  f"``?`` in rhs ``{rhs_code}`` (target={name!r}).")
+        raise NotImplementedError(
+            f"emit_complex_component_assign: unresolved operand placeholder "
+            f"``?`` in rhs ``{rhs_code}`` (target={name!r})."
+        )
 
-    in_conns = connectors([
-        '_in_z', *(f"_in_{sc}" for sc in r_scl),
-        *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs)))
-    ])
+    in_conns = connectors(
+        [
+            "_in_z",
+            *(f"_in_{sc}" for sc in r_scl),
+            *(f"_in_{nm}_{i}" for nm, acs in reads_by_name.items() for i in range(len(acs))),
+        ]
+    )
     # ``.real()``/``.imag()`` METHODS, not ``re()``/``im()`` helpers: a bare
     # ``im`` token collides with QE's kernel variable ``im`` (reserved-name
     # rewrite turns the call into a call on an int).  Attribute access isn't a
     # free Name, so symbol substitution can't touch it.
-    code = (f"_cur = ((_in_z).real() if ({comp_ref} == 1) else (_in_z).imag())\n"
-            f"_new = {rhs_code}\n"
-            f"_out_z = (_new + 1j*(_in_z).imag()) if ({comp_ref} == 1) else ((_in_z).real() + 1j*_new)")
-    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, connectors(['_out_z']), code)
+    code = (
+        f"_cur = ((_in_z).real() if ({comp_ref} == 1) else (_in_z).imag())\n"
+        f"_new = {rhs_code}\n"
+        f"_out_z = (_new + 1j*(_in_z).imag()) if ({comp_ref} == 1) else ((_in_z).real() + 1j*_new)"
+    )
+    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, connectors(["_out_z"]), code)
 
     rz = acc(builder, state, name)  # COMPLEX view read (installs src -> view link)
-    state.add_edge(rz, None, t, '_in_z', Memlet(f"{name}[{elem_sub}]"))
+    state.add_edge(rz, None, t, "_in_z", Memlet(f"{name}[{elem_sub}]"))
     for nm in sorted(reads_by_name):
         r = acc(builder, state, nm)
         for i, ac in enumerate(reads_by_name[nm]):
@@ -558,5 +588,5 @@ def emit_complex_component_assign(builder: SDFGBuilder,
     # Fresh write node so ``view_read -> tasklet -> view_write`` is a clean RMW
     # chain; ``ensure_view_writeback_link`` wires the view -> source direction.
     wz = state.add_access(name)
-    state.add_edge(t, '_out_z', wz, None, Memlet(f"{name}[{elem_sub}]"))
+    state.add_edge(t, "_out_z", wz, None, Memlet(f"{name}[{elem_sub}]"))
     ensure_view_writeback_link(builder, state, wz, name)

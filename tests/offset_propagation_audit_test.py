@@ -24,7 +24,7 @@ def _build(src: str, tmp_path: Path, entry: str):
     """Compile ``src`` to a built SDFG."""
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name=entry.split('P')[-1], entry=entry).build()
+    sdfg = build_sdfg(src, d, name=entry.split("P")[-1], entry=entry).build()
     sdfg.validate()
     return sdfg
 
@@ -61,11 +61,12 @@ subroutine two_outer(arr, out)
 end subroutine two_outer
 """
     sdfg = _build(src, tmp_path, "two_outer")
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -4, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -4, (
         f"2-level inline literal should propagate -4; got "
-        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
     arr = np.asfortranarray(np.array([10, 20, 30, 40, 50], dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out, arr_d0=np.int64(5))
     assert out[0] == 10  # arr(-4) = first element with lb=-4
 
@@ -83,12 +84,13 @@ subroutine assumed_lb(arr, n, out)
 end subroutine assumed_lb
 """
     sdfg = _build(src, tmp_path, "assumed_lb")
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -5, (
         f"explicit arr(-5:) lower bound should specialise to -5; got "
-        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
     # arr(-5..5): 11 elements; arr(-5)=buf[0], arr(-3)=buf[2], arr(0)=buf[5]
     arr = np.asfortranarray(np.array([(i - 5) * 10 for i in range(11)], dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, n=np.int32(5), out=out)
     # arr(-5)= -50, arr(-3)= -30, arr(0)= 0 -> sum -80
     assert out[0] == -80
@@ -115,10 +117,10 @@ subroutine sec_assign(out)
 end subroutine sec_assign
 """
     sdfg = _build(src, tmp_path, "sec_assign")
-    consts = dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants))
-    assert consts.get('offset_dst_d0') == -3, (f"dst lower bound should be -3; got {consts.get('offset_dst_d0')}")
-    assert consts.get('offset_src_d0') == -3, (f"src lower bound should be -3; got {consts.get('offset_src_d0')}")
-    out = np.zeros(7, dtype=np.int32, order='F')
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
+    assert consts.get("offset_dst_d0") == -3, f"dst lower bound should be -3; got {consts.get('offset_dst_d0')}"
+    assert consts.get("offset_src_d0") == -3, f"src lower bound should be -3; got {consts.get('offset_src_d0')}"
+    out = np.zeros(7, dtype=np.int32, order="F")
     sdfg(out=out)
     np.testing.assert_array_equal(out, [i * 11 for i in range(-3, 4)])
 
@@ -143,12 +145,13 @@ subroutine read_member(p, out)
 end subroutine read_member
 """
     sdfg = _build(src, tmp_path, "read_member")
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0') == -7, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_p_tbl_d0") == -7, (
         f"struct allocatable member literal -7 should specialise; got "
-        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0')}")
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0')}"
+    )
     # p_tbl(-7..5): 13 elements
     tbl = np.asfortranarray(np.array([(i - 7) for i in range(13)], dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(p_tbl=tbl, out=out, p_tbl_d0=np.int64(13))
     # p%tbl(-7)=-7, p%tbl(0)=0, p%tbl(5)=5 -> sum -2
     assert out[0] == -2
@@ -168,11 +171,12 @@ subroutine computed_dummy(arr, out)
 end subroutine computed_dummy
 """
     sdfg = _build(src, tmp_path, "computed_dummy")
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -5, (
         f"PARAMETER arithmetic should fold to literal -5; got "
-        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
     # arr(lb-1) = arr(-5); buffer arr(-5..5), 11 elements, offset -5 -> arr(-5) reads buf[0]
     arr = np.asfortranarray(np.array([777] + [0] * 10, dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out, arr_d0=np.int64(11))
     assert out[0] == 777

@@ -21,12 +21,12 @@ subroutine main(d)
   d(2) = 5.5 + i
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.full([4], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0)
-    assert (a[0] == 42)
-    assert (a[1] == 12.5)
-    assert (a[2] == 42)
+    assert a[0] == 42
+    assert a[1] == 12.5
+    assert a[2] == 42
 
 
 def test_fortran_frontend_if1(tmp_path):
@@ -50,10 +50,10 @@ subroutine main(d)
   d(1, 1, 1) = ZFAC(1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d, jk=0, jl=0, rtt=0, nssopt=0)
-    assert (d[0, 0, 0] == 2)
+    assert d[0, 0, 0] == 2
 
 
 def test_fortran_frontend_loop1(tmp_path):
@@ -76,13 +76,13 @@ subroutine main(d)
   d(1, 1, 2) = LLFALL(2)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     # d is Fortran LOGICAL -- pass np.bool_ (1 byte/elem) to match the SDFG's bool*
     # declaration. Filled True so assertions can distinguish SDFG writes from the initial value.
     d = np.full([3, 4, 5], True, order="F", dtype=np.bool_)
     sdfg(d=d, a=0, jk=0, jl=0, jm=0)
     # LLFALL(1)=.false. (no positive ZVQX at JM=1); LLFALL(2)=.true. (ZVQX(2)=1.0).
-    assert d[0, 0, 0] == False
+    assert not d[0, 0, 0]
     assert bool(d[0, 0, 1])
 
 
@@ -106,11 +106,11 @@ subroutine main(d)
   d(1, 1, 2) = RES
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d)
-    assert (d[0, 0, 0] == 5.1)
-    assert (d[0, 0, 1] == 5.1)
+    assert d[0, 0, 0] == 5.1
+    assert d[0, 0, 1] == 5.1
 
 
 def test_internal_subprograms(tmp_path):
@@ -140,7 +140,7 @@ contains
   end subroutine fn
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
     d = np.full([1], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert np.allclose(d, [2])
@@ -168,7 +168,7 @@ end subroutine main
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='main').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="main").build()
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d)
     np.testing.assert_allclose(d, d_ref, rtol=1e-12, atol=1e-12)
@@ -196,7 +196,7 @@ end subroutine main
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='main').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="main").build()
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d)
     np.testing.assert_allclose(d, d_ref, rtol=1e-12, atol=1e-12)
@@ -221,7 +221,7 @@ end subroutine main
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='main').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="main").build()
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d)
     np.testing.assert_allclose(d, d_ref, rtol=1e-12, atol=1e-12)

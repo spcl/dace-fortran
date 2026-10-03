@@ -14,6 +14,7 @@ USE-renames of in-TU bodies, not undefined.
 
 @pytest.mark.long: builds the 3166-LoC dycore to an SDFG (minutes).
 """
+
 import shutil
 from pathlib import Path
 
@@ -40,10 +41,31 @@ _ENTRY = "mo_solve_nonhydro::solve_nh"
 # with the ordinary FlattenStructs split, double-declaring p_patch_edges_primal_normal_cell_v1 etc.
 # Milestone 2a-i keeps velocity a no-op; 2a-ii wires it.
 _DO_NOT_EMIT = [
-    "sync_patch_array", "sync_patch_array_mult", "exchange_data", "p_barrier", "p_max", "p_min", "p_sum", "global_max",
-    "global_min", "global_sum", "setup_comm_pattern", "finish", "message", "message_text", "warning", "print_status",
-    "print_value", "init_logger", "dbg_print", "work_mpi_barrier", "timer_start", "timer_stop", "new_timer",
-    "delete_timer", "check_patch_array_3d_dp"
+    "sync_patch_array",
+    "sync_patch_array_mult",
+    "exchange_data",
+    "p_barrier",
+    "p_max",
+    "p_min",
+    "p_sum",
+    "global_max",
+    "global_min",
+    "global_sum",
+    "setup_comm_pattern",
+    "finish",
+    "message",
+    "message_text",
+    "warning",
+    "print_status",
+    "print_value",
+    "init_logger",
+    "dbg_print",
+    "work_mpi_barrier",
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",
+    "check_patch_array_3d_dp",
 ]
 
 
@@ -71,10 +93,7 @@ def test_solve_nh_numerical_e2e(tmp_path: Path):
             "kstart_moist": 1,
             "ndyn_substeps_var": 1,
         },
-        array_overrides={
-            "p_patch_nlev": 7,
-            "p_patch_nlevp1": 8
-        },
+        array_overrides={"p_patch_nlev": 7, "p_patch_nlevp1": 8},
         # vct_a (vertical coord table) is an ALLOCATABLE module global the kernel indexes directly
         # (vct_a(jk)); unallocated in an isolated run, so the stock reference would SEGV. Harness
         # allocates + fills it identically on both sides (value is inert, only cross-side identity

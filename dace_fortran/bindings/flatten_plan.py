@@ -75,15 +75,16 @@ class FlattenRecipe:
         invalid next size" glibc diagnostic in the ICON
         velocity_tendencies e2e).
     """
+
     flat_names: Tuple[str, ...]
     read_exprs: Tuple[str, ...]
-    write_expr: str = ''
+    write_expr: str = ""
     rank: int = 0
     shape_exprs: Tuple[str, ...] = field(default_factory=tuple)
     aliasable: bool = False
-    scratch_dtype: str = 'float64'
+    scratch_dtype: str = "float64"
     aos_alloc: bool = False
-    cap_symbol: str = ''
+    cap_symbol: str = ""
     source_logical_kind: int = 0
 
     # ----- JSON I/O ---------------------------------------------------
@@ -91,18 +92,18 @@ class FlattenRecipe:
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (tuple fields become lists)."""
         d = asdict(self)
-        d['flat_names'] = list(self.flat_names)
-        d['read_exprs'] = list(self.read_exprs)
-        d['shape_exprs'] = list(self.shape_exprs)
+        d["flat_names"] = list(self.flat_names)
+        d["read_exprs"] = list(self.read_exprs)
+        d["shape_exprs"] = list(self.shape_exprs)
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'FlattenRecipe':
+    def from_dict(cls, d: dict) -> "FlattenRecipe":
         """Rebuild from a :meth:`to_dict` mapping (lists back to tuples)."""
         d = dict(d)
-        d['flat_names'] = tuple(d.get('flat_names', []))
-        d['read_exprs'] = tuple(d.get('read_exprs', []))
-        d['shape_exprs'] = tuple(d.get('shape_exprs', []))
+        d["flat_names"] = tuple(d.get("flat_names", []))
+        d["read_exprs"] = tuple(d.get("read_exprs", []))
+        d["shape_exprs"] = tuple(d.get("shape_exprs", []))
         return cls(**d)
 
 
@@ -117,6 +118,7 @@ class FlattenEntry:
         set triggers a copy-out loop.
     recipe: the FlattenRecipe describing the unpack.
     """
+
     outer_expr: str
     outer_type: str
     writeback_intent: str
@@ -125,20 +127,20 @@ class FlattenEntry:
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (recurses into the recipe)."""
         return {
-            'outer_expr': self.outer_expr,
-            'outer_type': self.outer_type,
-            'writeback_intent': self.writeback_intent,
-            'recipe': self.recipe.to_dict(),
+            "outer_expr": self.outer_expr,
+            "outer_type": self.outer_type,
+            "writeback_intent": self.writeback_intent,
+            "recipe": self.recipe.to_dict(),
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'FlattenEntry':
+    def from_dict(cls, d: dict) -> "FlattenEntry":
         """Rebuild from a :meth:`to_dict` mapping."""
         return cls(
-            outer_expr=d['outer_expr'],
-            outer_type=d['outer_type'],
-            writeback_intent=d.get('writeback_intent', ''),
-            recipe=FlattenRecipe.from_dict(d['recipe']),
+            outer_expr=d["outer_expr"],
+            outer_type=d["outer_type"],
+            writeback_intent=d.get("writeback_intent", ""),
+            recipe=FlattenRecipe.from_dict(d["recipe"]),
         )
 
 
@@ -159,11 +161,12 @@ class SyntheticGlobal:
     member: the scalar component read off ``entity``.
     dtype: SDFG element dtype of the member.
     """
+
     symbol: str
     module: str
     entity: str
     member: str
-    dtype: str = 'float64'
+    dtype: str = "float64"
 
     @property
     def sdfg_name(self) -> str:
@@ -176,14 +179,14 @@ class SyntheticGlobal:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'SyntheticGlobal':
+    def from_dict(cls, d: dict) -> "SyntheticGlobal":
         """Rebuild from a :meth:`to_dict` mapping."""
         return cls(
-            symbol=d['symbol'],
-            module=d['module'],
-            entity=d['entity'],
-            member=d['member'],
-            dtype=d.get('dtype', 'float64'),
+            symbol=d["symbol"],
+            module=d["module"],
+            entity=d["entity"],
+            member=d["member"],
+            dtype=d.get("dtype", "float64"),
         )
 
 
@@ -199,32 +202,33 @@ class FlattenPlan:
         record.  Each needs a ``<symbol> = <entity>%<member>`` assignment in
         the binding wrapper before the call.
     """
+
     entries: Tuple[FlattenEntry, ...] = field(default_factory=tuple)
     synthetic_globals: Tuple[SyntheticGlobal, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (one entry per flattened dummy)."""
         return {
-            'entries': [e.to_dict() for e in self.entries],
-            'synthetic_globals': [s.to_dict() for s in self.synthetic_globals],
+            "entries": [e.to_dict() for e in self.entries],
+            "synthetic_globals": [s.to_dict() for s in self.synthetic_globals],
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'FlattenPlan':
+    def from_dict(cls, d: dict) -> "FlattenPlan":
         """Rehydrate from a plain dict -- the bridge returns the MLIR-side
         ``hlfir.flatten_plan`` attribute in this same nested shape."""
         return cls(
-            entries=tuple(FlattenEntry.from_dict(e) for e in d.get('entries', [])),
-            synthetic_globals=tuple(SyntheticGlobal.from_dict(s) for s in d.get('synthetic_globals', [])),
+            entries=tuple(FlattenEntry.from_dict(e) for e in d.get("entries", [])),
+            synthetic_globals=tuple(SyntheticGlobal.from_dict(s) for s in d.get("synthetic_globals", [])),
         )
 
     def to_json(self, path: str) -> None:
         """Write the plan to ``path`` as indented JSON."""
-        with open(path, 'w') as fh:
+        with open(path, "w") as fh:
             json.dump(self.to_dict(), fh, indent=2)
 
     @classmethod
-    def from_json(cls, path: str) -> 'FlattenPlan':
+    def from_json(cls, path: str) -> "FlattenPlan":
         """Load a plan previously written by :meth:`to_json`."""
         with open(path) as fh:
             return cls.from_dict(json.load(fh))
@@ -234,7 +238,7 @@ class FlattenPlan:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_INDEX_RE = re.compile(r'\$i(\d+)')
+_INDEX_RE = re.compile(r"\$i(\d+)")
 
 
 def substitute_indices(expr: str, names: Tuple[str, ...]) -> str:
@@ -258,5 +262,5 @@ def strip_index_args(expr: str) -> str:
     path alone -- ``c_loc`` needs the array, not an element.  Returns the
     input unchanged if it has no parenthesised placeholder suffix.
     """
-    m = re.match(r'^(.+?)\(\s*\$i\d+(?:\s*,\s*\$i\d+)*\s*\)\s*$', expr)
+    m = re.match(r"^(.+?)\(\s*\$i\d+(?:\s*,\s*\$i\d+)*\s*\)\s*$", expr)
     return m.group(1) if m else expr

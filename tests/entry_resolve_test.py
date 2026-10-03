@@ -1,7 +1,6 @@
 """Resolve a plain Fortran procedure name to its mangled flang symbol (and
 back), so callers pass ``solve_nh`` instead of ``_QMmo_solve_nonhydroPsolve_nh``.
 """
-from pathlib import Path
 
 import pytest
 
@@ -28,7 +27,9 @@ def _src(tmp_path, name, text):
 
 def test_resolve_module_subroutine(tmp_path):
     s = _src(
-        tmp_path, "m", """
+        tmp_path,
+        "m",
+        """
 module mo_solve_nonhydro
   implicit none
 contains
@@ -36,7 +37,8 @@ contains
     real, intent(inout) :: a(:)
   end subroutine solve_nh
 end module mo_solve_nonhydro
-""")
+""",
+    )
     assert resolve_entry("solve_nh", [s]) == "solve_nh"
 
 
@@ -48,7 +50,9 @@ def test_resolve_free_subroutine(tmp_path):
 def test_resolve_skips_interface_blocks(tmp_path):
     # An ``interface`` declaration of ``bar`` must not count as a definition.
     s = _src(
-        tmp_path, "i", """
+        tmp_path,
+        "i",
+        """
 module mo_a
   interface
     subroutine bar(x)
@@ -59,7 +63,8 @@ contains
   subroutine baz()
   end subroutine baz
 end module mo_a
-""")
+""",
+    )
     with pytest.raises(ValueError, match="no subroutine"):
         resolve_entry("bar", [s])
     assert resolve_entry("baz", [s]) == "baz"

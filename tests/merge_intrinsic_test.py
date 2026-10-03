@@ -25,7 +25,7 @@ subroutine probe(a, b, mask, out)
   out = merge(a, b, mask)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     for mask_val in (True, False):
         out = np.zeros(1, dtype=np.float64)
         sdfg(a=1.5, b=2.5, mask=mask_val, out=out)
@@ -42,7 +42,7 @@ subroutine probe(a, b, out)
   out = merge(a, b, a > b)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     for a_in, b_in, expected in [(3.0, 2.0, 3.0), (1.0, 5.0, 5.0), (4.0, 4.0, 4.0)]:
         out = np.zeros(1, dtype=np.float64)
         sdfg(a=a_in, b=b_in, out=out)
@@ -62,7 +62,7 @@ subroutine main(t, f, mask, out, n)
   out = MERGE(t, f, mask)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     rng = np.random.default_rng(0)
     n = 12
     t = np.ascontiguousarray(rng.standard_normal(n, dtype=np.float64))
@@ -77,6 +77,7 @@ def test_merge_array_verifies_libnode_present(tmp_path: Path):
     """Same as above, but also asserts a MergeLibraryNode is present in the
     built SDFG -- pins bridge->library-node routing so a silent fallback to per-element tasklets trips this test."""
     from dace.libraries.standard.nodes import MergeLibraryNode
+
     src = """
 subroutine main(t, f, mask, out, n)
   integer, intent(in)  :: n
@@ -86,6 +87,6 @@ subroutine main(t, f, mask, out, n)
   out = MERGE(t, f, mask)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     libnodes = [n for state in sdfg.all_states() for n in state.nodes() if isinstance(n, MergeLibraryNode)]
     assert len(libnodes) == 1, f"expected exactly one MergeLibraryNode, got {len(libnodes)}"

@@ -6,6 +6,7 @@ generic_interface, private_public).
 Each test inlines a small multi-module project into one ``.f90``, asserts the
 right code survives/drops, then (if ``gfortran`` present) compiles it.
 """
+
 import re
 import shutil
 import subprocess
@@ -28,10 +29,9 @@ def _compiles(src_text: str) -> bool:
     with TemporaryDirectory() as td:
         f = Path(td) / "single.f90"
         f.write_text(src_text)
-        r = subprocess.run(["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c",
-                            str(f)],
-                           cwd=td,
-                           capture_output=True)
+        r = subprocess.run(
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+        )
         if r.returncode != 0:
             print(r.stderr.decode())
         return r.returncode == 0
@@ -44,15 +44,13 @@ def _inline_text(sources, entry, **kw) -> str:
 def test_basic_single_tu_two_modules():
     """A driver USE-ing a helper module inlines into one TU and compiles."""
     sources = {
-        "mo_kind.f90":
-        """
+        "mo_kind.f90": """
 module mo_kind
   implicit none
   integer, parameter :: wp = selected_real_kind(15, 307)
 end module mo_kind
 """,
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   use mo_kind, only: wp
   implicit none
@@ -63,8 +61,7 @@ contains
   end function dbl
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: dbl
   use mo_kind, only: wp
@@ -83,8 +80,7 @@ end subroutine run
 def test_only_clause_imports_just_what_is_named():
     """``USE ..., ONLY:`` brings in only the named symbol; the unnamed sibling is pruned away."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -98,8 +94,7 @@ contains
   end function unused
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: used
   implicit none
@@ -117,8 +112,7 @@ end subroutine run
 def test_rename_in_only_clause():
     """Renamed import (``ONLY: ll => longname``) survives inlining and is callable in the single TU."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -128,8 +122,7 @@ contains
   end function longname
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: ll => longname
   implicit none
@@ -146,14 +139,12 @@ end subroutine run
 def test_name_collision_across_modules():
     """Two modules each defining a same-named parameter inline together; consolidated USE-ONLY clauses keep references unambiguous."""
     sources = {
-        "a.f90":
-        """
+        "a.f90": """
 module a
   integer, parameter :: token = 1
 end module a
 """,
-        "b.f90":
-        """
+        "b.f90": """
 module b
   integer, parameter :: token = 2
 contains
@@ -164,8 +155,7 @@ contains
   end subroutine foo
 end module b
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(o)
   use b, only: foo
   implicit none
@@ -183,8 +173,7 @@ end subroutine run
 def test_nested_derived_types():
     """A derived type nesting another survives inlining with both type definitions present."""
     sources = {
-        "types_mod.f90":
-        """
+        "types_mod.f90": """
 module types_mod
   implicit none
   type inner
@@ -195,8 +184,7 @@ module types_mod
   end type outer
 end module types_mod
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use types_mod, only: outer
   implicit none
@@ -219,8 +207,7 @@ def test_keep_type_components_preserves_unreferenced_members():
     references them -- lets one kernel's single-TU carry the struct-member union
     a sibling kernel also consumes.  Unreferenced, unnamed members still pruned."""
     sources = {
-        "types_mod.f90":
-        """
+        "types_mod.f90": """
 module types_mod
   implicit none
   type t_thing
@@ -230,8 +217,7 @@ module types_mod
   end type t_thing
 end module types_mod
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(t, out)
   use types_mod, only: t_thing
   implicit none
@@ -257,8 +243,7 @@ def test_entry_also_external_keeps_its_body():
     make-noop set.  (ICON extracts ``velocity_tendencies`` as its own single-TU
     while ``solve_nh`` registers it as an external -- both true at once.)"""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -268,8 +253,7 @@ contains
   end subroutine work
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine work_entry(a)
   use lib, only: work
   implicit none
@@ -289,8 +273,7 @@ end subroutine work_entry
 def test_helper_proc_transitively_pulled_in():
     """A helper called only indirectly (through the entry's callee) is kept by reachability-driven pruning."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -304,8 +287,7 @@ contains
   end function helper
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: top
   implicit none
@@ -323,8 +305,7 @@ end subroutine run
 def test_unresolved_use_module_is_an_error():
     """Contract: every ``USE``-d module must be supplied; an unresolved module is an inlining ERROR (no keep-external mode)."""
     sources = {
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use some_external_mod, only: ext_const
   implicit none
@@ -340,23 +321,20 @@ end subroutine run
 def test_use_cycle_between_modules():
     """Mutually-``USE``-ing modules (a cycle) inline without looping forever; both modules appear once."""
     sources = {
-        "a.f90":
-        """
+        "a.f90": """
 module a
   use b, only: bconst
   implicit none
   integer, parameter :: aconst = 10
 end module a
 """,
-        "b.f90":
-        """
+        "b.f90": """
 module b
   implicit none
   integer, parameter :: bconst = 20
 end module b
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(o)
   use a, only: aconst
   use b, only: bconst
@@ -374,8 +352,7 @@ end subroutine run
 def test_generic_interface_resolves_to_specific():
     """A generic-interface call is deconstructed to the specific procedure during inlining."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
   interface dbl
@@ -388,8 +365,7 @@ contains
   end function dbl_r
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: dbl
   implicit none
@@ -408,8 +384,7 @@ end subroutine run
 def test_private_public_visibility():
     """PRIVATE-default module + PUBLIC procedure inlines; the public procedure remains callable."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
   private
@@ -425,8 +400,7 @@ contains
   end function priv
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: pub
   implicit none
@@ -445,8 +419,7 @@ end subroutine run
 def test_make_noop_empties_body():
     """``make_noop`` replaces a procedure body with nothing while keeping the shell."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -461,8 +434,7 @@ contains
   end function compute
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: compute
   implicit none
@@ -481,8 +453,7 @@ def test_do_not_emit_leaves_procedure_external():
     """``do_not_emit=[names]`` leaves a procedure external on the public API --
     body emptied (like ``make_noop``) but addressed by call-site name, not ``(module, name)``."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -497,8 +468,7 @@ contains
   end function compute
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: compute
   implicit none
@@ -518,8 +488,7 @@ def test_make_return_false_stubs_logical_function():
     bind) but replaces the body with ``<result> = .FALSE.`` -- original body and
     its module-state dependence are gone."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
   integer :: mode
@@ -537,8 +506,7 @@ contains
   end function compute
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: compute
   implicit none
@@ -560,8 +528,7 @@ end subroutine run
 def test_inline_to_single_tu_writes_file(tmp_path):
     """The headline API writes a single ``.f90`` and returns its path."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -571,8 +538,7 @@ contains
   end function dbl
 end module lib
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use lib, only: dbl
   implicit none
@@ -609,10 +575,9 @@ subroutine run(a)
   a = dbl(a)
 end subroutine run
 """)
-    out = inline_to_single_tu([tmp_path / "lib.f90", tmp_path / "driver.f90"],
-                              "run",
-                              out_dir=tmp_path / "out",
-                              include_builtins=False)
+    out = inline_to_single_tu(
+        [tmp_path / "lib.f90", tmp_path / "driver.f90"], "run", out_dir=tmp_path / "out", include_builtins=False
+    )
     assert out.is_file()
     assert "SUBROUTINE run" in out.read_text()
 
@@ -620,8 +585,7 @@ end subroutine run
 def test_module_qualified_entry():
     """A ``module::proc`` entry resolves and prunes to that procedure."""
     sources = {
-        "lib.f90":
-        """
+        "lib.f90": """
 module lib
   implicit none
 contains
@@ -653,8 +617,7 @@ def test_pointer_component_of_extension_type_survives_pruning():
     read in ``lhs_area``; the single TU must keep ``grid`` and compile.
     """
     sources = {
-        "geom.f90":
-        """
+        "geom.f90": """
 module geom
   implicit none
   type :: t_grid
@@ -662,8 +625,7 @@ module geom
   end type t_grid
 end module geom
 """,
-        "operators.f90":
-        """
+        "operators.f90": """
 module operators
   use geom, only: t_grid
   implicit none
@@ -688,8 +650,7 @@ contains
   end function lhs_area
 end module operators
 """,
-        "driver.f90":
-        """
+        "driver.f90": """
 subroutine run(a)
   use geom, only: t_grid
   use operators, only: t_lhs, lhs_construct, lhs_area

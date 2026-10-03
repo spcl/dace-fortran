@@ -8,8 +8,6 @@ statement must fail here. Filenames are hardcoded relative paths; the test ``chd
 Pins the acceptance criteria for the ``_FortranAio*`` recognizer (maps Fortran I/O to
 ``dace_fortran.libraries.fortran_io`` nodes).
 """
-import os
-from pathlib import Path
 
 import numpy as np
 import pytest

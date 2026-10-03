@@ -8,6 +8,7 @@ by the real build).
 
 This is the shape ICON's ~150-module USE-closure hits; reproduced minimally here.
 """
+
 import re
 from pathlib import Path
 
@@ -79,10 +80,9 @@ def test_cpp_wrapped_module_merges_and_builds(tmp_path: Path):
     helpers = tmp_path / "helpers.f90"
     helpers.write_text(_HELPERS)
 
-    sdfg = build_sdfg_from_files([caller, helpers],
-                                 entry="apply_dbl_mod::apply_dbl",
-                                 name="apply_dbl",
-                                 out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files(
+        [caller, helpers], entry="apply_dbl_mod::apply_dbl", name="apply_dbl", out_dir=tmp_path / "build"
+    )
     k = 5
     out = np.zeros(4, dtype=np.float64)
     sdfg(k=np.int32(k), out=out)

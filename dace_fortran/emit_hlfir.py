@@ -169,8 +169,9 @@ _MOD_OPEN_RE = re.compile(r"^\s*module\s+([a-z_]\w*)\s*$", re.IGNORECASE)
 _MOD_END_RE = re.compile(r"^\s*end\s+module\b", re.IGNORECASE)
 _INTERFACE_RE = re.compile(r"^\s*(abstract\s+)?interface\b", re.IGNORECASE)
 _END_INTERFACE_RE = re.compile(r"^\s*end\s+interface\b", re.IGNORECASE)
-_SUBR_DEF_RE = re.compile(r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)",
-                          re.IGNORECASE)
+_SUBR_DEF_RE = re.compile(
+    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)", re.IGNORECASE
+)
 
 
 def _scan_subroutine_defs(text: str) -> List[Tuple[str, Optional[str]]]:
@@ -227,8 +228,9 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tupl
         # Back-compat: a hand-written mangled symbol.  Demangle to the plain
         # proc + module so the rest of the pipeline stays mangling-free.
         mod = _entry_module(name)
-        m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) \
-            or re.match(r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE)
+        m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) or re.match(
+            r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE
+        )
         return (m.group(1).lower() if m else name), mod
     want_mod, want_proc = split_qualified_entry(name)
 
@@ -247,8 +249,9 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tupl
         raise ValueError(f"resolve_entry: no subroutine {name!r} found in the sources")
     if len(matches) > 1:
         cands = ", ".join(f"{m or '<free>'}::{p}" for p, m in sorted(matches))
-        raise ValueError(f"resolve_entry: {name!r} is ambiguous ({cands}); "
-                         f"qualify it as module::proc or pass the mangled symbol")
+        raise ValueError(
+            f"resolve_entry: {name!r} is ambiguous ({cands}); qualify it as module::proc or pass the mangled symbol"
+        )
     return matches.pop()
 
 
@@ -344,15 +347,17 @@ def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], d
     subprocess.check_call(cmd, cwd=str(out_dir))
 
 
-def emit(*,
-         compile_commands: Optional[Path] = None,
-         sources: Sequence[Path] = (),
-         stubs: Sequence[Path] = (),
-         out_dir: Path,
-         extra_includes: Sequence[Path] = (),
-         extra_defines: Sequence[str] = (),
-         entry: Optional[str] = None,
-         flang: Optional[str] = None) -> List[Path]:
+def emit(
+    *,
+    compile_commands: Optional[Path] = None,
+    sources: Sequence[Path] = (),
+    stubs: Sequence[Path] = (),
+    out_dir: Path,
+    extra_includes: Sequence[Path] = (),
+    extra_defines: Sequence[str] = (),
+    entry: Optional[str] = None,
+    flang: Optional[str] = None,
+) -> List[Path]:
     """Emit ``.hlfir`` files under ``out_dir``.  Exactly one of
     ``compile_commands`` or ``sources`` must drive the file list:
 
@@ -415,72 +420,85 @@ def emit(*,
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m dace_fortran.emit_hlfir",
-                                description="Emit HLFIR for a Fortran project so "
-                                "dace_fortran.build_sdfg_from_hlfir can consume it.")
-    p.add_argument("compile_commands",
-                   nargs="?",
-                   type=Path,
-                   help="path to a cmake / ninja compile_commands.json "
-                   "(use -DCMAKE_EXPORT_COMPILE_COMMANDS=ON when "
-                   "configuring) -- preferred path; build order + "
-                   "-I/-D flags inferred from this artefact.")
-    p.add_argument("--source",
-                   action="append",
-                   default=[],
-                   type=Path,
-                   dest="sources",
-                   help="fallback: explicit .f90 file (repeat) when no "
-                   "compile_commands.json is available; ordering "
-                   "derived by USE-graph topo-sort.")
-    p.add_argument("--stub",
-                   action="append",
-                   default=[],
-                   type=Path,
-                   dest="stubs",
-                   help="flang-buildable stub source for an external "
-                   "module flang has no shipped .mod for "
-                   "(mpi / netcdf / hdf5 / ...); compiled first.")
-    p.add_argument("--include",
-                   action="append",
-                   default=[],
-                   type=Path,
-                   dest="extra_includes",
-                   help="extra -I path (--source mode only; "
-                   "compile_commands inherits its own -I list).")
-    p.add_argument("--define",
-                   "-D",
-                   action="append",
-                   default=[],
-                   dest="extra_defines",
-                   metavar="NAME[=val]",
-                   help="extra -D cpp macro for flang's preprocessor "
-                   "(repeat); the only way to set cpp config in "
-                   "--source mode, and an augment in compile_commands "
-                   "mode.")
-    p.add_argument("--entry",
-                   default=None,
-                   help="mangled entry symbol (_QMmodPproc); restricts a "
-                   "compile_commands run to that entry's USE-closure "
-                   "instead of emitting every TU.")
+    p = argparse.ArgumentParser(
+        prog="python -m dace_fortran.emit_hlfir",
+        description="Emit HLFIR for a Fortran project so dace_fortran.build_sdfg_from_hlfir can consume it.",
+    )
+    p.add_argument(
+        "compile_commands",
+        nargs="?",
+        type=Path,
+        help="path to a cmake / ninja compile_commands.json "
+        "(use -DCMAKE_EXPORT_COMPILE_COMMANDS=ON when "
+        "configuring) -- preferred path; build order + "
+        "-I/-D flags inferred from this artefact.",
+    )
+    p.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        type=Path,
+        dest="sources",
+        help="fallback: explicit .f90 file (repeat) when no "
+        "compile_commands.json is available; ordering "
+        "derived by USE-graph topo-sort.",
+    )
+    p.add_argument(
+        "--stub",
+        action="append",
+        default=[],
+        type=Path,
+        dest="stubs",
+        help="flang-buildable stub source for an external "
+        "module flang has no shipped .mod for "
+        "(mpi / netcdf / hdf5 / ...); compiled first.",
+    )
+    p.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        type=Path,
+        dest="extra_includes",
+        help="extra -I path (--source mode only; compile_commands inherits its own -I list).",
+    )
+    p.add_argument(
+        "--define",
+        "-D",
+        action="append",
+        default=[],
+        dest="extra_defines",
+        metavar="NAME[=val]",
+        help="extra -D cpp macro for flang's preprocessor "
+        "(repeat); the only way to set cpp config in "
+        "--source mode, and an augment in compile_commands "
+        "mode.",
+    )
+    p.add_argument(
+        "--entry",
+        default=None,
+        help="mangled entry symbol (_QMmodPproc); restricts a "
+        "compile_commands run to that entry's USE-closure "
+        "instead of emitting every TU.",
+    )
     p.add_argument("--out", required=True, type=Path, help="output directory; .hlfir + .mod files land here.")
-    p.add_argument("--flang",
-                   default=None,
-                   help="flang binary to drive (default: the first supported LLVM flang on PATH).")
+    p.add_argument(
+        "--flang", default=None, help="flang binary to drive (default: the first supported LLVM flang on PATH)."
+    )
     args = p.parse_args(argv)
     if args.flang is not None and shutil.which(args.flang) is None:
         p.error(f"flang binary {args.flang!r} not on PATH")
     if (args.compile_commands is None) == (not args.sources):
-        p.error("pass either compile_commands.json (positional) or one or "
-                "more --source paths, not both / neither")
-    out = emit(compile_commands=args.compile_commands,
-               sources=args.sources,
-               stubs=args.stubs,
-               out_dir=args.out,
-               extra_includes=args.extra_includes,
-               extra_defines=args.extra_defines,
-               entry=args.entry,
-               flang=args.flang)
+        p.error("pass either compile_commands.json (positional) or one or more --source paths, not both / neither")
+    out = emit(
+        compile_commands=args.compile_commands,
+        sources=args.sources,
+        stubs=args.stubs,
+        out_dir=args.out,
+        extra_includes=args.extra_includes,
+        extra_defines=args.extra_defines,
+        entry=args.entry,
+        flang=args.flang,
+    )
     print(f"emitted {len(out)} .hlfir under {args.out}")
     return 0
 

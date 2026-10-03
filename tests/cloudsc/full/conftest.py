@@ -15,15 +15,14 @@ def _strict_fp_cpu_args():
     FMA contraction; restore flags after. Flag set is the flang-portable core
     (see CLOUDSC_F90FLAGS).
     """
-    prev = dace.Config.get('compiler', 'cpu', 'args')
+    prev = dace.Config.get("compiler", "cpu", "args")
     dace.Config.set(
-        'compiler',
-        'cpu',
-        'args',
-        value='-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off '
-        '-Wno-unused-parameter -Wno-unused-label',
+        "compiler",
+        "cpu",
+        "args",
+        value="-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off -Wno-unused-parameter -Wno-unused-label",
     )
     try:
         yield
     finally:
-        dace.Config.set('compiler', 'cpu', 'args', value=prev)
+        dace.Config.set("compiler", "cpu", "args", value=prev)

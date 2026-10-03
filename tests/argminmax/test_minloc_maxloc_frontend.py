@@ -6,6 +6,7 @@ asserts the resulting SDFG carries an :class:`ArgMin` /
 ``one_based`` configuration.  Numerical correctness of the lib node
 itself is covered in d-face's ``tests/library/argminmax_test.py``.
 """
+
 from pathlib import Path
 import sys
 

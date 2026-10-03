@@ -33,8 +33,8 @@ subroutine main(a)
   a(22) = 7.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
-    a = np.zeros(5, dtype=np.float64, order='F')
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
+    a = np.zeros(5, dtype=np.float64, order="F")
     sdfg(a=a)
     np.testing.assert_array_equal(a, [0.0, 0.0, 7.0, 0.0, 0.0])
 
@@ -49,8 +49,8 @@ subroutine main(a)
   a(4) = 5.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
-    a = np.zeros(5, dtype=np.float64, order='F')
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
+    a = np.zeros(5, dtype=np.float64, order="F")
     sdfg(a=a)
     np.testing.assert_array_equal(a, [1.0, 0.0, 0.0, 0.0, 5.0])
 
@@ -66,9 +66,9 @@ subroutine main(src, res)
   res(2:4) = src(2:4) * 2.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
-    src = np.array([10., 20., 30., 40., 50.], dtype=np.float64, order='F')
-    res = np.full(5, -1.0, dtype=np.float64, order='F')
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
+    src = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float64, order="F")
+    res = np.full(5, -1.0, dtype=np.float64, order="F")
     sdfg(src=src, res=res)
     # Only res[1..3] should change; res[0] and res[4] stay at -1.0.
     np.testing.assert_array_equal(res, [-1.0, 40.0, 60.0, 80.0, -1.0])

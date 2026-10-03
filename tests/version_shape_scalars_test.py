@@ -30,6 +30,7 @@ ONLY a post-allocation reassignment is acted on: straight-line -> versioned;
 inside a loop / conditional branch -> the extent is FROZEN (snapshot) at each
 ALLOCATE, so the valid kernel still lifts without a corrupting mutable shape.
 """
+
 import pytest
 
 from _util import build_sdfg, have_flang

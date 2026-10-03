@@ -6,6 +6,7 @@ steps with a defensive throw; encountered upstream in QE's ``vexx_bp_k_gpu``
 expression. Forward iteration is assumed; runtime-negative step symbols yield zero-or-one
 iterations under ``uid <= bound``, matching Fortran's trip-count formula.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -52,15 +53,13 @@ end subroutine kernel
 end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(src,
-                                   tmp_path,
-                                   ref_kwargs=dict(jstart=2, jend=20, batch=3, n=8),
-                                   mod_name="kern_scalar_batch3",
-                                   sdfg_kwargs=dict(out=out,
-                                                    jstart=np.int32(2),
-                                                    jend=np.int32(20),
-                                                    batch=np.int32(3),
-                                                    n=np.int32(8)))
+    ref_out, sdfg = _build_and_run(
+        src,
+        tmp_path,
+        ref_kwargs=dict(jstart=2, jend=20, batch=3, n=8),
+        mod_name="kern_scalar_batch3",
+        sdfg_kwargs=dict(out=out, jstart=np.int32(2), jend=np.int32(20), batch=np.int32(3), n=np.int32(8)),
+    )
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     # Sanity: the batch=3 stride captured ``2, 5, 8, 11, 14, 17, 20``.
     expected = np.array([2, 5, 8, 11, 14, 17, 20, -1], dtype=np.int32)
@@ -89,15 +88,13 @@ end subroutine kernel
 end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(src,
-                                   tmp_path,
-                                   ref_kwargs=dict(jstart=1, jend=5, batch=1, n=8),
-                                   mod_name="kern_scalar_batch1",
-                                   sdfg_kwargs=dict(out=out,
-                                                    jstart=np.int32(1),
-                                                    jend=np.int32(5),
-                                                    batch=np.int32(1),
-                                                    n=np.int32(8)))
+    ref_out, sdfg = _build_and_run(
+        src,
+        tmp_path,
+        ref_kwargs=dict(jstart=1, jend=5, batch=1, n=8),
+        mod_name="kern_scalar_batch1",
+        sdfg_kwargs=dict(out=out, jstart=np.int32(1), jend=np.int32(5), batch=np.int32(1), n=np.int32(8)),
+    )
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     expected = np.array([1, 2, 3, 4, 5, -1, -1, -1], dtype=np.int32)
     np.testing.assert_array_equal(sdfg["out"], expected)
@@ -129,15 +126,13 @@ end module kernel_mod
 """
     stride_arr = np.array([2, 3, 5], dtype=np.int32, order="F")
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(src,
-                                   tmp_path,
-                                   ref_kwargs=dict(stride_arr=stride_arr, idx=2, n=8, m=3),
-                                   mod_name="kern_array_stride",
-                                   sdfg_kwargs=dict(out=out,
-                                                    stride_arr=stride_arr,
-                                                    idx=np.int32(2),
-                                                    n=np.int32(8),
-                                                    m=np.int32(3)))
+    ref_out, sdfg = _build_and_run(
+        src,
+        tmp_path,
+        ref_kwargs=dict(stride_arr=stride_arr, idx=2, n=8, m=3),
+        mod_name="kern_array_stride",
+        sdfg_kwargs=dict(out=out, stride_arr=stride_arr, idx=np.int32(2), n=np.int32(8), m=np.int32(3)),
+    )
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     # stride=3: iterations 1, 4, 7.
     expected = np.array([1, 4, 7, -1, -1, -1, -1, -1], dtype=np.int32)
@@ -149,6 +144,7 @@ def test_step_expr_field_is_populated_on_symbolic_step(tmp_path: Path):
     directly so the contract is pinned independent of any downstream emit path."""
     from dace_fortran.build_bridge import hb
     from dace_fortran import DEFAULT_PIPELINE
+
     src = """
 subroutine kernel(jstart, jend, batch)
   implicit none
@@ -162,18 +158,26 @@ end subroutine kernel
 """
     import subprocess
     import tempfile
+
     with tempfile.TemporaryDirectory() as td:
         from pathlib import Path as _P
+
         f = _P(td) / "k.f90"
         f.write_text(src)
         h = _P(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(f), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(f),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.set_entry_symbol("kernel")
@@ -191,7 +195,5 @@ end subroutine kernel
     assert loop_nodes, "no loop node found in AST"
     # The kernel's only loop has the symbolic step.
     step_exprs = [n.loop_step_expr for n in loop_nodes if n.loop_step_expr]
-    assert step_exprs, \
-        f"no loop carries loop_step_expr; loops: {[n.loop_step for n in loop_nodes]}"
-    assert any("batch" in s for s in step_exprs), \
-        f"step expression should mention 'batch', got {step_exprs}"
+    assert step_exprs, f"no loop carries loop_step_expr; loops: {[n.loop_step for n in loop_nodes]}"
+    assert any("batch" in s for s in step_exprs), f"step expression should mention 'batch', got {step_exprs}"

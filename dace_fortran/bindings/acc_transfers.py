@@ -115,8 +115,10 @@ class AccResidency:
         for name, entry in (raw.get("args") or {}).items():
             residency = (entry or {}).get("residency")
             if residency not in (DEVICE, HOST):
-                raise AccResidencyError(f"acc residency sidecar: argument {name!r} has residency "
-                                        f"{residency!r}; expected {DEVICE!r} or {HOST!r}")
+                raise AccResidencyError(
+                    f"acc residency sidecar: argument {name!r} has residency "
+                    f"{residency!r}; expected {DEVICE!r} or {HOST!r}"
+                )
             args[str(name)] = residency
             entry_refs = (entry or {}).get("refs") or ([(entry or {}).get("ref")] if (entry or {}).get("ref") else [])
             if entry_refs:
@@ -168,7 +170,7 @@ class AccTransferPlan:
     @property
     def data_region(self) -> Tuple[Tuple[str, str], ...]:
         """``(clause, name)`` pairs for the ``!$ACC DATA`` region, in emission order."""
-        groups = (('COPYIN', self.copyin), ('COPY', self.copy), ('COPYOUT', self.copyout))
+        groups = (("COPYIN", self.copyin), ("COPY", self.copy), ("COPYOUT", self.copyout))
         return tuple((clause, name) for clause, names in groups for name in names)
 
 
@@ -182,7 +184,8 @@ def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> Tuple[str, ...]:
     """
     prefix = arg + "_"
     return tuple(
-        sorted(n for n, desc in sdfg.arrays.items() if not desc.transient and (n == arg or n.startswith(prefix))))
+        sorted(n for n, desc in sdfg.arrays.items() if not desc.transient and (n == arg or n.startswith(prefix)))
+    )
 
 
 def is_scalar_arg(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> bool:
@@ -199,12 +202,16 @@ def is_scalar_arg(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> bool:
 def _arg_storage(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> str:
     """Classify ``arg`` as ``host`` or ``device`` storage from the SDFG."""
     if not containers:
-        raise AccResidencyError(f"argument {arg!r} has no SDFG data container and is not an SDFG "
-                                f"symbol; its storage side cannot be determined")
+        raise AccResidencyError(
+            f"argument {arg!r} has no SDFG data container and is not an SDFG "
+            f"symbol; its storage side cannot be determined"
+        )
     sides = {(DEVICE if sdfg.arrays[n].storage in _GPU_STORAGE else HOST) for n in containers}
     if len(sides) > 1:
-        raise AccResidencyError(f"argument {arg!r} maps to SDFG containers with mixed host/GPU storage: " +
-                                ", ".join(f"{n}={sdfg.arrays[n].storage.name}" for n in containers))
+        raise AccResidencyError(
+            f"argument {arg!r} maps to SDFG containers with mixed host/GPU storage: "
+            + ", ".join(f"{n}={sdfg.arrays[n].storage.name}" for n in containers)
+        )
     return sides.pop()
 
 
@@ -251,22 +258,28 @@ def validate_acc_mappability(sdfg: dace.SDFG, residency: AccResidency, arg_order
         if is_scalar_arg(sdfg, arg, containers):
             continue
         if not containers:
-            problems.append(f"{arg!r} is device-resident but has no flat binding argument in the "
-                            f"SDFG (pointer on GPU must be mappable)")
+            problems.append(
+                f"{arg!r} is device-resident but has no flat binding argument in the "
+                f"SDFG (pointer on GPU must be mappable)"
+            )
             continue
-        for ref in residency.refs.get(arg) or (arg, ):
+        for ref in residency.refs.get(arg) or (arg,):
             flat = _ref_to_flat_name(ref)
             exact = [n for n in containers if n == flat]
             prefixed = [n for n in containers if n.startswith(flat + "_")]
             if exact:
                 continue
             if len(prefixed) == 0:
-                problems.append(f"device-resident entity {ref!r} of argument {arg!r} does not resolve "
-                                f"to any flat binding argument (candidates: "
-                                f"{', '.join(containers)}); pointer on GPU must be mappable")
+                problems.append(
+                    f"device-resident entity {ref!r} of argument {arg!r} does not resolve "
+                    f"to any flat binding argument (candidates: "
+                    f"{', '.join(containers)}); pointer on GPU must be mappable"
+                )
     if problems:
-        raise AccResidencyError(f"acc residency sidecar for {residency.routine or '<unknown>'} fails the "
-                                f"mappability invariant -- " + "; ".join(problems))
+        raise AccResidencyError(
+            f"acc residency sidecar for {residency.routine or '<unknown>'} fails the "
+            f"mappability invariant -- " + "; ".join(problems)
+        )
 
 
 def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iterable[str]) -> AccTransferPlan:
@@ -291,11 +304,14 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
     if residency.has_device_args:
         stuck = [a for a in buffers if a in unclassified]
         if stuck:
-            offenders.append("left unclassified by the extractor while the routine has device-resident "
-                             "arguments: " + ", ".join(stuck))
+            offenders.append(
+                "left unclassified by the extractor while the routine has device-resident "
+                "arguments: " + ", ".join(stuck)
+            )
     if offenders:
-        raise AccResidencyError(f"acc residency sidecar for {residency.routine or '<unknown>'} cannot be "
-                                f"applied -- " + "; ".join(offenders))
+        raise AccResidencyError(
+            f"acc residency sidecar for {residency.routine or '<unknown>'} cannot be applied -- " + "; ".join(offenders)
+        )
 
     validate_acc_mappability(sdfg, residency, arg_order)
 
@@ -314,8 +330,10 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
         elif side == HOST and storage[arg] == DEVICE:
             bad.append(f"{arg} (host-resident in ICON, GPU storage in the SDFG)")
     if bad:
-        raise AccResidencyError(f"acc residency sidecar for {residency.routine or '<unknown>'} cannot be "
-                                f"applied -- no transfer is defined for: " + "; ".join(bad))
+        raise AccResidencyError(
+            f"acc residency sidecar for {residency.routine or '<unknown>'} cannot be "
+            f"applied -- no transfer is defined for: " + "; ".join(bad)
+        )
 
     return AccTransferPlan(
         update_host=tuple(update_host),
@@ -339,7 +357,7 @@ def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
     must hand the SDFG the DEVICE address, which is what ``HOST_DATA USE_DEVICE`` makes
     ``c_loc`` return.  Argument order follows the snapshot, so the emission is stable.
     """
-    by_clause: Dict[str, list] = {'copyin': [], 'copyout': [], 'copy': []}
+    by_clause: Dict[str, list] = {"copyin": [], "copyout": [], "copy": []}
     for arg in frozen.args:
         clause = arg.acc_data_clause
         if clause:
@@ -347,11 +365,11 @@ def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
     moved = tuple(a.sdfg_name for a in frozen.args if a.acc_data_clause)
     return AccTransferPlan(
         use_device=moved,
-        copyin=tuple(by_clause['copyin']),
-        copyout=tuple(by_clause['copyout']),
-        copy=tuple(by_clause['copy']),
-        storage={a.sdfg_name: DEVICE if a.acc_data_clause else HOST
-                 for a in frozen.args if a.kind == 'array'})
+        copyin=tuple(by_clause["copyin"]),
+        copyout=tuple(by_clause["copyout"]),
+        copy=tuple(by_clause["copy"]),
+        storage={a.sdfg_name: DEVICE if a.acc_data_clause else HOST for a in frozen.args if a.kind == "array"},
+    )
 
 
 def render_data_open(plan: AccTransferPlan, indent: str = "  ") -> list:

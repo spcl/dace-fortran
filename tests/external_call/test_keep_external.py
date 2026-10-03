@@ -4,6 +4,7 @@ Simple ``bind(c)`` cases derive their arg plan from the HLFIR call site via
 :func:`apply_external_functions`. The ``kind='comm'`` cases keep the authored :class:`Arg`
 list -- an ``MPI_Comm`` handle is an ABI fact HLFIR can't infer.
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,8 +13,14 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, clear_external_registry, keep_external,
-                                   lookup_external)
+from dace_fortran.external import (
+    Arg,
+    ExternalCall,
+    apply_external_functions,
+    clear_external_registry,
+    keep_external,
+    lookup_external,
+)
 from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = [
@@ -137,17 +144,22 @@ def test_apply_external_functions_empty_args_passthrough():
 
 def test_comm_kind_c_decl_type_is_mpi_comm():
     """``Arg(kind='comm')`` declares ``MPI_Comm`` regardless of ``dtype`` (documented as ignored for this kind)."""
-    from dace_fortran.external import Arg, ExternalSignature
+    from dace_fortran.external import ExternalSignature
+
     a = Arg(kind="comm")
     assert a.c_decl_type() == "MPI_Comm"
     # An explicit (and irrelevant) dtype must not change the C type.
     a_explicit = Arg(kind="comm", dtype="int32")
     assert a_explicit.c_decl_type() == "MPI_Comm"
 
-    sig = ExternalSignature(c_name="shim_with_comm",
-                            args=(Arg(kind="array", dtype="float64",
-                                      intent="inout"), Arg(kind="scalar", dtype="int32",
-                                                           intent="in"), Arg(kind="comm")))
+    sig = ExternalSignature(
+        c_name="shim_with_comm",
+        args=(
+            Arg(kind="array", dtype="float64", intent="inout"),
+            Arg(kind="scalar", dtype="int32", intent="in"),
+            Arg(kind="comm"),
+        ),
+    )
     decl = sig.c_declaration()
     # Argument order is preserved verbatim (left-to-right same as args).
     assert decl == 'extern "C" void shim_with_comm(double *, int, MPI_Comm);'
@@ -155,7 +167,7 @@ def test_comm_kind_c_decl_type_is_mpi_comm():
 
 def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
     """Unknown ``dtype`` is fatal for array/scalar (resolved via ``_C_TYPES``) but not for comm (its type is fixed)."""
-    from dace_fortran.external import Arg
+
     with pytest.raises(ValueError, match="unsupported dtype"):
         Arg(kind="array", dtype="float16").c_decl_type()
     with pytest.raises(ValueError, match="unsupported dtype"):
@@ -166,18 +178,19 @@ def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
 
 def test_keep_external_with_comm_signature_round_trip():
     """``keep_external`` accepts ``kind='comm'`` and stores the signature unchanged (the registry is type-blind; ``emit_call`` wires the opaque(MPI_Comm) connector)."""
-    from dace_fortran.external import Arg
+
     clear_external_registry()
-    keep_external("exch_with_comm",
-                  c_name="exch_with_comm_c",
-                  args=[
-                      Arg(kind="array", dtype="float64", intent="inout"),
-                      Arg(kind="scalar", dtype="int32", intent="in"),
-                      Arg(kind="comm")
-                  ])
+    keep_external(
+        "exch_with_comm",
+        c_name="exch_with_comm_c",
+        args=[
+            Arg(kind="array", dtype="float64", intent="inout"),
+            Arg(kind="scalar", dtype="int32", intent="in"),
+            Arg(kind="comm"),
+        ],
+    )
     sig = lookup_external("exch_with_comm")
     assert sig is not None and sig.c_name == "exch_with_comm_c"
     assert tuple(a.kind for a in sig.args) == ("array", "scalar", "comm")
-    assert sig.c_declaration() == \
-        'extern "C" void exch_with_comm_c(double *, int, MPI_Comm);'
+    assert sig.c_declaration() == 'extern "C" void exch_with_comm_c(double *, int, MPI_Comm);'
     clear_external_registry()

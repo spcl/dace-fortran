@@ -16,31 +16,33 @@ def _one(name: str, arity: int = 1) -> tuple[str, ElementwiseIntrinsic]:
     return name, ElementwiseIntrinsic(name=name, arity=arity)
 
 
-ELEMENTWISE_INTRINSICS: dict[str, ElementwiseIntrinsic] = dict([
-    # Transcendentals
-    _one('sin'),
-    _one('cos'),
-    _one('tan'),
-    _one('asin'),
-    _one('acos'),
-    _one('atan'),
-    _one('sinh'),
-    _one('cosh'),
-    _one('tanh'),
-    _one('exp'),
-    _one('log'),
-    _one('log10'),
-    _one('sqrt'),
-    # Rounding / sign
-    _one('abs'),
-    _one('floor'),
-    _one('ceil'),
-    # Special functions
-    _one('erf'),
-    _one('erfc'),
-    # Two-arg
-    _one('min', arity=2),
-    _one('max', arity=2),
-    _one('pow', arity=2),
-    _one('atan2', arity=2),
-])
+ELEMENTWISE_INTRINSICS: dict[str, ElementwiseIntrinsic] = dict(
+    [
+        # Transcendentals
+        _one("sin"),
+        _one("cos"),
+        _one("tan"),
+        _one("asin"),
+        _one("acos"),
+        _one("atan"),
+        _one("sinh"),
+        _one("cosh"),
+        _one("tanh"),
+        _one("exp"),
+        _one("log"),
+        _one("log10"),
+        _one("sqrt"),
+        # Rounding / sign
+        _one("abs"),
+        _one("floor"),
+        _one("ceil"),
+        # Special functions
+        _one("erf"),
+        _one("erfc"),
+        # Two-arg
+        _one("min", arity=2),
+        _one("max", arity=2),
+        _one("pow", arity=2),
+        _one("atan2", arity=2),
+    ]
+)

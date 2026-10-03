@@ -11,7 +11,7 @@ from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
 
 def _frozen(origins):
-    return FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("nproma", ), module_symbol_origins=origins)
+    return FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("nproma",), module_symbol_origins=origins)
 
 
 def _iface(sources):
@@ -53,19 +53,25 @@ def test_missing_origins_attr_degrades_to_explicit():
 
 def test_frozen_signature_json_roundtrip(tmp_path):
     """``module_symbol_origins`` round-trips through JSON as tuples, not a separate per-arg representation."""
-    fs = FrozenSignature(entry="k",
-                         mangled="_QPk",
-                         args=(FrozenArg(fortran_name="nrdmax",
-                                         sdfg_name="nrdmax",
-                                         kind="array",
-                                         dtype="int32",
-                                         rank=1,
-                                         shape=("10", ),
-                                         intent="inout"), ),
-                         free_symbols=("nproma", ),
-                         module_symbol_origins={"nproma": ("mo_parallel_config", "nproma")})
+    fs = FrozenSignature(
+        entry="k",
+        mangled="_QPk",
+        args=(
+            FrozenArg(
+                fortran_name="nrdmax",
+                sdfg_name="nrdmax",
+                kind="array",
+                dtype="int32",
+                rank=1,
+                shape=("10",),
+                intent="inout",
+            ),
+        ),
+        free_symbols=("nproma",),
+        module_symbol_origins={"nproma": ("mo_parallel_config", "nproma")},
+    )
     p = tmp_path / "fs.json"
     fs.to_json(str(p))
     rt = FrozenSignature.from_json(str(p))
     assert rt.module_symbol_origins == {"nproma": ("mo_parallel_config", "nproma")}
-    assert rt.args[0].shape == ("10", )
+    assert rt.args[0].shape == ("10",)

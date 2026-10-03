@@ -18,7 +18,7 @@ res(1) = COUNT(d)
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     size = 5
     d = np.full([size], False, order="F", dtype=np.bool_)
@@ -43,7 +43,7 @@ res(1) = COUNT(d, 1)
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
 
 def test_fortran_frontend_count_array_comparison(tmp_path):
@@ -67,7 +67,7 @@ res(7) = COUNT(first(1:2) .eq. second(4:5))
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
@@ -108,7 +108,7 @@ res(8) = COUNT(6 .gt. first)
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
@@ -142,7 +142,7 @@ res(1) = COUNT(d)
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     sizes = [5, 7]
     d = np.full(sizes, True, order="F", dtype=np.bool_)
@@ -181,7 +181,7 @@ res(7) = COUNT(first(2:3, 3:4) .eq. second(2:3, 3:4))
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -212,7 +212,7 @@ res(2) = COUNT(first(1:2, 3:4) .eq. second(4:5, 2:3))
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -244,7 +244,7 @@ res(2) = COUNT(first(20:21, 3:4) .eq. second(4:5, 8:9))
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_count_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)

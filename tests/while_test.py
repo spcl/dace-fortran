@@ -28,7 +28,7 @@ end do
 
 END SUBROUTINE while_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='while_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="while_test_function").build()
 
     inp = np.full([2], 42, order="F", dtype=np.float32)
     res = np.full([2], 42, order="F", dtype=np.float32)

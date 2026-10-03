@@ -3,6 +3,7 @@ matmul, transpose, dot_product) compose freely: chains, reduction+rebroadcast,
 nested either direction, struct-component subsets, and inside do-while bodies.
 See while_loop_counter_e2e_test.py for the plain do-while element-wise case.
 """
+
 import numpy as np
 import pytest
 
@@ -29,7 +30,7 @@ end subroutine
     a = np.arange(1, N + 1, dtype=np.float64)
     b = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
     c = np.full(N, 2.0)
-    d = np.zeros(N, dtype=np.float64, order='F')
+    d = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), d=d)
     np.testing.assert_allclose(d, a + b - c)
 
@@ -49,7 +50,7 @@ end subroutine
     a = np.array([1.0, 2.0, 3.0, 4.0])
     b = np.array([5.0, 5.0, 5.0, 5.0])
     c = np.array([2.0, 3.0, 4.0, 5.0])
-    e = np.zeros(N, dtype=np.float64, order='F')
+    e = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), e=e)
     np.testing.assert_allclose(e, (a + b) * c - a / 2.0)
 
@@ -73,7 +74,7 @@ end subroutine
     a = np.array([1.0, 2.0, 3.0, 4.0])
     b = np.array([5.0, 5.0, 5.0, 5.0])
     c = np.array([100.0, 200.0, 300.0, 400.0])
-    out = np.zeros(N, dtype=np.float64, order='F')
+    out = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), out=out)
     np.testing.assert_allclose(out, c + np.max(a + b - 1.0))
 
@@ -93,7 +94,7 @@ end subroutine
     a = np.array([1.0, 2.0, 3.0, 4.0])
     b = np.array([5.0, 5.0, 5.0, 5.0])
     c = np.array([100.0, 200.0, 300.0, 400.0])
-    out = np.zeros(N, dtype=np.float64, order='F')
+    out = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), out=out)
     np.testing.assert_allclose(out, c * np.sum(a * b))
 
@@ -113,7 +114,7 @@ end subroutine
     a = np.array([1.0, 9.0, 3.0, 4.0])
     b = np.array([5.0, 2.0, 7.0, 8.0])
     c = np.array([100.0, 200.0, 300.0, 400.0])
-    out = np.zeros(N, dtype=np.float64, order='F')
+    out = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), out=out)
     np.testing.assert_allclose(out, c + np.max(a) - np.min(b))
 
@@ -134,10 +135,10 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="arr_plus_mm", entry="m::arr_plus_mm").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    C = np.array([[100.0, 200.0], [300.0, 400.0]], order='F')
-    res = np.zeros((2, 2), dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    C = np.array([[100.0, 200.0], [300.0, 400.0]], order="F")
+    res = np.zeros((2, 2), dtype=np.float64, order="F")
     sdfg(a=A, b=B, c=C, res=res)
     np.testing.assert_allclose(res, C + A @ B)
 
@@ -155,10 +156,10 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm_of_chain", entry="m::mm_of_chain").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], order='F')
-    B = np.ones((3, 3), order='F')
-    q = np.array([1.0, 2.0, 3.0], order='F')
-    res = np.zeros(3, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], order="F")
+    B = np.ones((3, 3), order="F")
+    q = np.array([1.0, 2.0, 3.0], order="F")
+    res = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=A, b=B, q=q, res=res)
     np.testing.assert_allclose(res, (A + B) @ q)
 
@@ -178,7 +179,7 @@ end subroutine
     a = np.array([1.0, 2.0, 3.0])
     b = np.array([4.0, 5.0, 6.0])
     c = np.array([10.0, 20.0, 30.0])
-    out = np.zeros(N, dtype=np.float64, order='F')
+    out = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), b=np.asfortranarray(b), c=np.asfortranarray(c), out=out)
     np.testing.assert_allclose(out, c + np.dot(a, b))
 
@@ -196,9 +197,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="tr_inline", entry="m::tr_inline").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[10.0, 20.0], [30.0, 40.0]], order='F')
-    res = np.zeros((2, 2), dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[10.0, 20.0], [30.0, 40.0]], order="F")
+    res = np.zeros((2, 2), dtype=np.float64, order="F")
     sdfg(a=A, b=B, res=res)
     np.testing.assert_allclose(res, B + A.T)
 
@@ -226,7 +227,7 @@ end module
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="dec_member", entry="m::dec_member").build()
     assert "arr_w" in sdfg.arrays, f"expected flattened companion arr_w, got {list(sdfg.arrays)}"
     K = 4
-    arr_w = np.arange(1, K * 3 + 1, dtype=np.float64).reshape(K, 3).copy(order='F')
+    arr_w = np.arange(1, K * 3 + 1, dtype=np.float64).reshape(K, 3).copy(order="F")
     before = arr_w.copy()
     i = 2  # Fortran 1-based -> 0-based row 1
     sdfg(arr_w=arr_w, i=np.int32(i), k=np.int32(K), arr_w_d0=K)
@@ -259,8 +260,8 @@ end module
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="fuse_member", entry="m::fuse_member").build()
     assert "a_w" in sdfg.arrays and "b_w" in sdfg.arrays, list(sdfg.arrays)
     K = 3
-    a_w = np.arange(1, K * 3 + 1, dtype=np.float64).reshape(K, 3).copy(order='F')
-    b_w = np.full((K, 3), 10.0, dtype=np.float64, order='F')
+    a_w = np.arange(1, K * 3 + 1, dtype=np.float64).reshape(K, 3).copy(order="F")
+    b_w = np.full((K, 3), 10.0, dtype=np.float64, order="F")
     before = a_w.copy()
     i = 3
     sdfg(a_w=a_w, b_w=b_w, i=np.int32(i), k=np.int32(K), a_w_d0=K, b_w_d0=K)
@@ -293,7 +294,7 @@ end subroutine
     N = 4
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="redux_in_while", entry="redux_in_while").build()
     a = np.array([1.0, 9.0, 3.0, 4.0])
-    out = np.zeros(N, dtype=np.float64, order='F')
+    out = np.zeros(N, dtype=np.float64, order="F")
     sdfg(n=np.int32(N), a=np.asfortranarray(a), out=out)
     np.testing.assert_allclose(out, np.full(N, 3.0 * np.max(a)))
 
@@ -317,10 +318,10 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="sum_of_mm", entry="m::sum_of_mm").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    c = np.array([1.0, 2.0], order='F')
-    out = np.zeros(2, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    c = np.array([1.0, 2.0], order="F")
+    out = np.zeros(2, dtype=np.float64, order="F")
     sdfg(a=A, b=B, c=c, out=out)
     np.testing.assert_allclose(out, c + np.sum(A @ B))
 
@@ -338,9 +339,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="max_of_mm", entry="m::max_of_mm").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    out = np.zeros(1, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    out = np.zeros(1, dtype=np.float64, order="F")
     sdfg(a=A, b=B, out=out)
     np.testing.assert_allclose(out[0], np.max(A @ B))
 
@@ -358,9 +359,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="prod_of_mm", entry="m::prod_of_mm").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    out = np.zeros(1, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    out = np.zeros(1, dtype=np.float64, order="F")
     sdfg(a=A, b=B, out=out)
     np.testing.assert_allclose(out[0], np.prod(A @ B))
 
@@ -379,10 +380,10 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm_of_mm", entry="m::mm_of_mm").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    C = np.array([[2.0, 0.0], [1.0, 3.0]], order='F')
-    out = np.zeros((2, 2), dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    C = np.array([[2.0, 0.0], [1.0, 3.0]], order="F")
+    out = np.zeros((2, 2), dtype=np.float64, order="F")
     sdfg(a=A, b=B, c=C, out=out)
     np.testing.assert_allclose(out, (A @ B) @ C)
 
@@ -400,10 +401,10 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="dot_of_mv", entry="m::dot_of_mv").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    v = np.array([5.0, 6.0], order='F')
-    w = np.array([7.0, 8.0], order='F')
-    out = np.zeros(1, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    v = np.array([5.0, 6.0], order="F")
+    w = np.array([7.0, 8.0], order="F")
+    out = np.zeros(1, dtype=np.float64, order="F")
     sdfg(a=A, v=v, w=w, out=out)
     np.testing.assert_allclose(out[0], np.dot(A @ v, w))
 
@@ -422,9 +423,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="sum_mmT", entry="m::sum_mmT").build()
-    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
-    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
-    out = np.zeros(1, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order="F")
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order="F")
+    out = np.zeros(1, dtype=np.float64, order="F")
     sdfg(a=A, b=B, out=out)
     np.testing.assert_allclose(out[0], np.sum(A.T @ B))
 
@@ -443,8 +444,8 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="sum_maxdim", entry="m::sum_maxdim").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], order='F')
-    out = np.zeros(1, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], order="F")
+    out = np.zeros(1, dtype=np.float64, order="F")
     sdfg(a=A, out=out)
     # MAXVAL(a, dim=1) reduces the FIRST Fortran dim -> max over each column.
     np.testing.assert_allclose(out[0], np.sum(np.max(A, axis=0)))

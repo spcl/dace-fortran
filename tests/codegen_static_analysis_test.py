@@ -65,8 +65,9 @@ def test_generated_cpp_has_no_critical_warnings(kernel, tmp_path):
     """No generated TU may emit a UB-class warning; see ``CRITICAL_WARNINGS`` for the list and why."""
     sdfg = built_sdfg(SOURCES[kernel], tmp_path, name=kernel)
     found = analyze(sdfg, "warnings")
-    assert not found, ("generated C++ emits critical warnings (" + ", ".join(CRITICAL_WARNINGS) + "):\n" +
-                       "\n".join(found))
+    assert not found, (
+        "generated C++ emits critical warnings (" + ", ".join(CRITICAL_WARNINGS) + "):\n" + "\n".join(found)
+    )
 
 
 @pytest.mark.parametrize("kernel", sorted(SOURCES))

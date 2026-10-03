@@ -4,6 +4,7 @@ Covers only ``_python_cmake_hints`` (sysconfig-derived cmake hints, the
 venv/pyenv fix) and ``needs_build`` (source-vs-``.so`` mtime gate); the
 cmake/LLVM shell-out paths are exercised by CI's build step, not mocked here.
 """
+
 import os
 import subprocess
 import sys
@@ -91,8 +92,7 @@ def test_a_differently_configured_build_dir_is_reported(monkeypatch, tmp_path):
     """Reconfiguring in place leaves entries cmake does not overwrite pointing at the old prefix,
     which is how one module ends up linking parts of two LLVM installs."""
     monkeypatch.setattr(build_bridge, "_BUILD_DIR", tmp_path)
-    (tmp_path / "CMakeCache.txt").write_text("LLVM_VERSION:STRING=21\n"
-                                             "LLVM_DIR:PATH=/opt/llvm-21/lib/cmake/llvm\n")
+    (tmp_path / "CMakeCache.txt").write_text("LLVM_VERSION:STRING=21\nLLVM_DIR:PATH=/opt/llvm-21/lib/cmake/llvm\n")
 
     assert build_bridge._cache_conflicts({"LLVM_VERSION": "21"}) == []
 

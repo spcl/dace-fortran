@@ -13,6 +13,7 @@ These probes pin that pattern: the bridge routes the whole-assign case through
 ``hlfir-optimized-bufferization``), and the libcall dispatcher emits GEMM with
 the transpose flag threaded through -- no transposed-matrix materialisation.
 """
+
 import numpy as np
 import pytest
 
@@ -35,9 +36,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="matmul_t", entry="m::matmul_t").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
-    tmp = np.zeros(3, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    tmp = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=A, q=q, tmp=tmp)
     expected = A.T @ q
     np.testing.assert_allclose(tmp, expected)
@@ -60,9 +61,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_pattern", entry="m::vcut_pattern").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
-    res = np.zeros(3, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    res = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=A, q=q, scalar=np.float64(2.0), res=res)
     expected = (A.T @ q) / 2.0
     np.testing.assert_allclose(res, expected)
@@ -81,9 +82,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm", entry="m::mm").build()
-    A = np.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]], dtype=np.float64, order='F')
-    B = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float64, order='F')
-    C = np.zeros((3, 2), dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]], dtype=np.float64, order="F")
+    B = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float64, order="F")
+    C = np.zeros((3, 2), dtype=np.float64, order="F")
     sdfg(a=A, b=B, c=C)
     expected = A @ B
     np.testing.assert_allclose(C, expected)
@@ -106,9 +107,9 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="inline_qe", entry="m::inline_qe").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
-    res = np.zeros(3, dtype=np.float64, order='F')
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    res = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=A, q=q, scalar=np.float64(2.0), res=res)
     expected = (A.T @ q) / 2.0
     np.testing.assert_allclose(res, expected)
@@ -159,7 +160,7 @@ end module
     rng = np.random.default_rng(2)
     A = np.asfortranarray(rng.standard_normal((4, 3)))
     B = np.asfortranarray(rng.standard_normal((5, 3)))
-    C = np.zeros((4, 5), dtype=np.float64, order='F')
+    C = np.zeros((4, 5), dtype=np.float64, order="F")
     sdfg(a=A, b=B, c=C)
     np.testing.assert_allclose(C, A @ B.T)
 

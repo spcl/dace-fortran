@@ -31,8 +31,9 @@ pytestmark = [
 ]
 
 
-def _build_binding_lib(tmp_path: Path, *, kernel_src: str, name: str, entry: str, iface: OriginalInterface,
-                       driver_src: str):
+def _build_binding_lib(
+    tmp_path: Path, *, kernel_src: str, name: str, entry: str, iface: OriginalInterface, driver_src: str
+):
     """Build the SDFG, emit its F90 binding, gfortran-link binding+driver against the SDFG .so.
     Returns (ctypes lib, compiled SDFG) -- SDFG returned so the same build can also run via flat ABI."""
     sdfg_dir = tmp_path / "sdfg"
@@ -137,17 +138,19 @@ def test_e2e_logical_intent_out(tmp_path: Path, kind_spec: str, width: int, cty)
     iface = OriginalInterface(
         entry=name,
         args=(
-            OriginalArg(name="a", fortran_type=f"logical{kind_spec}", rank=1, shape=("n", ), intent="in"),
-            OriginalArg(name="b", fortran_type=f"logical{kind_spec}", rank=1, shape=("n", ), intent="out"),
+            OriginalArg(name="a", fortran_type=f"logical{kind_spec}", rank=1, shape=("n",), intent="in"),
+            OriginalArg(name="b", fortran_type=f"logical{kind_spec}", rank=1, shape=("n",), intent="out"),
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
         ),
     )
-    lib, sdfg = _build_binding_lib(tmp_path,
-                                   kernel_src=kernel,
-                                   name=name,
-                                   entry=f"_QP{name}",
-                                   iface=iface,
-                                   driver_src=_out_sdfg_driver(kind_spec, suffix))
+    lib, sdfg = _build_binding_lib(
+        tmp_path,
+        kernel_src=kernel,
+        name=name,
+        entry=f"_QP{name}",
+        iface=iface,
+        driver_src=_out_sdfg_driver(kind_spec, suffix),
+    )
     ref = _build_ref_lib(tmp_path, kernel_src=kernel, ref_driver_src=_out_ref_driver(kind_spec, suffix), name=name)
 
     n = 9
@@ -228,16 +231,18 @@ def test_e2e_logical_intent_inout(tmp_path: Path):
     iface = OriginalInterface(
         entry="toggle_io",
         args=(
-            OriginalArg(name="mask", fortran_type="logical", rank=1, shape=("n", ), intent="inout"),
+            OriginalArg(name="mask", fortran_type="logical", rank=1, shape=("n",), intent="inout"),
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
         ),
     )
-    lib, sdfg = _build_binding_lib(tmp_path,
-                                   kernel_src=_INOUT_KERNEL,
-                                   name="toggle_io",
-                                   entry="toggle_io_mod::toggle_io",
-                                   iface=iface,
-                                   driver_src=_INOUT_SDFG_DRIVER)
+    lib, sdfg = _build_binding_lib(
+        tmp_path,
+        kernel_src=_INOUT_KERNEL,
+        name="toggle_io",
+        entry="toggle_io_mod::toggle_io",
+        iface=iface,
+        driver_src=_INOUT_SDFG_DRIVER,
+    )
     ref = _build_ref_lib(tmp_path, kernel_src=_INOUT_KERNEL, ref_driver_src=_INOUT_REF_DRIVER, name="toggle_io")
 
     n = 7
@@ -324,20 +329,21 @@ def test_e2e_scalar_logical_intent_inout(tmp_path: Path):
         entry="flip_flag",
         args=(
             OriginalArg(name="flag", fortran_type="logical", rank=0, intent="inout"),
-            OriginalArg(name="hits", fortran_type="integer(c_int)", rank=1, shape=("n", ), intent="out"),
+            OriginalArg(name="hits", fortran_type="integer(c_int)", rank=1, shape=("n",), intent="out"),
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
         ),
     )
-    lib, sdfg = _build_binding_lib(tmp_path,
-                                   kernel_src=_SCALAR_INOUT_KERNEL,
-                                   name="flip_flag",
-                                   entry="flip_flag_mod::flip_flag",
-                                   iface=iface,
-                                   driver_src=_SCALAR_INOUT_SDFG_DRIVER)
-    ref = _build_ref_lib(tmp_path,
-                         kernel_src=_SCALAR_INOUT_KERNEL,
-                         ref_driver_src=_SCALAR_INOUT_REF_DRIVER,
-                         name="flip_flag")
+    lib, sdfg = _build_binding_lib(
+        tmp_path,
+        kernel_src=_SCALAR_INOUT_KERNEL,
+        name="flip_flag",
+        entry="flip_flag_mod::flip_flag",
+        iface=iface,
+        driver_src=_SCALAR_INOUT_SDFG_DRIVER,
+    )
+    ref = _build_ref_lib(
+        tmp_path, kernel_src=_SCALAR_INOUT_KERNEL, ref_driver_src=_SCALAR_INOUT_REF_DRIVER, name="flip_flag"
+    )
 
     n = 5
     for start in (True, False):

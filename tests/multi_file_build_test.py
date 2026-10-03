@@ -2,6 +2,7 @@
 any order) + entry -> one SDFG.  ``build_sdfg_from_files`` stages the files and
 ``merge_used_modules`` inlines every ``USE``-d module into the root's TU (the file
 defining the entry's procedure) so flang sees one self-contained TU."""
+
 from pathlib import Path
 
 import numpy as np
@@ -81,11 +82,9 @@ def _write(tmp: Path, **named) -> list:
 def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
     """Driver + one ``USE``-d module, files given out of order (both engines)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
-    sdfg = build_sdfg_from_files(list(reversed(files)),
-                                 entry="run",
-                                 name="run",
-                                 out_dir=tmp_path / "b",
-                                 merge_engine=merge_engine)
+    sdfg = build_sdfg_from_files(
+        list(reversed(files)), entry="run", name="run", out_dir=tmp_path / "b", merge_engine=merge_engine
+    )
     n = 16
     rng = np.random.default_rng(0)
     x = np.asfortranarray(rng.random(n))
@@ -99,11 +98,9 @@ def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
 def test_three_files_transitive_use(tmp_path: Path, merge_engine):
     """Driver USEs mod_scale which USEs mod_add -> transitive inline (both engines)."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE, driver=_DRIVER_CHAIN)
-    sdfg = build_sdfg_from_files(files,
-                                 entry="run_chain",
-                                 name="run_chain",
-                                 out_dir=tmp_path / "b",
-                                 merge_engine=merge_engine)
+    sdfg = build_sdfg_from_files(
+        files, entry="run_chain", name="run_chain", out_dir=tmp_path / "b", merge_engine=merge_engine
+    )
     n = 8
     rng = np.random.default_rng(1)
     x = np.asfortranarray(rng.random(n))
@@ -118,6 +115,7 @@ def test_entry_proc_name_accepts_all_three_spellings():
     mangled Flang symbol, plain name) to the bare procedure name.  Regression:
     ``module::proc`` used to fall through unstripped and match nothing."""
     from dace_fortran.build import _entry_proc_name
+
     assert _entry_proc_name("mo_solve_nonhydro::solve_nh") == "solve_nh"
     assert _entry_proc_name("m_array_return::kern") == "kern"
     assert _entry_proc_name("_QMmymodPbar") == "bar"

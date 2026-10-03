@@ -17,6 +17,7 @@ one DaCe scalar with no intra-state ordering).  Fixed by
 ``emit_cfg._scalar_reassign_in_state``; see ``tests/scalar_reuse_war_test.py``
 for the minimal reproducer.
 """
+
 import ctypes
 import shutil
 import subprocess
@@ -51,21 +52,23 @@ def _compile_reference(tmp_path):
         pytest.skip("gfortran required for the reference build")
 
     libpath = tmp_path / "liblu_ref.so"
-    subprocess.check_call([
-        "gfortran",
-        "-shared",
-        "-fPIC",
-        "-O0",
-        "-fno-fast-math",
-        "-ffp-contract=off",
-        "-ffree-line-length-none",
-        str(_LU),
-        str(_USE),
-        str(_CALLER),
-        "-o",
-        str(libpath),
-    ],
-                          cwd=str(tmp_path))
+    subprocess.check_call(
+        [
+            "gfortran",
+            "-shared",
+            "-fPIC",
+            "-O0",
+            "-fno-fast-math",
+            "-ffp-contract=off",
+            "-ffree-line-length-none",
+            str(_LU),
+            str(_USE),
+            str(_CALLER),
+            "-o",
+            str(libpath),
+        ],
+        cwd=str(tmp_path),
+    )
     lib = ctypes.CDLL(str(libpath))
 
     init = lib.init_lu_c
@@ -101,11 +104,13 @@ def _build_sdfg(tmp_path):
     comparison can't silently drift if a future commit weakens the defaults.
     """
     import dace
-    dace.Config.set("compiler",
-                    "cpu",
-                    "args",
-                    value=("-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off "
-                           "-Wno-unused-parameter -Wno-unused-label"))
+
+    dace.Config.set(
+        "compiler",
+        "cpu",
+        "args",
+        value=("-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off -Wno-unused-parameter -Wno-unused-label"),
+    )
     return build_sdfg_from_files(
         [_LU, _USE],
         entry=_ENTRY,
@@ -127,7 +132,7 @@ def _run_sdfg(sdfg):
         if isinstance(desc, dace_data.Scalar):
             kw[name] = np_dtype(0)
         else:
-            kw[name] = np.zeros(tuple(int(s) for s in desc.shape), dtype=np_dtype, order='F')
+            kw[name] = np.zeros(tuple(int(s) for s in desc.shape), dtype=np_dtype, order="F")
 
     def seed(name, value):
         if name not in kw:
@@ -137,11 +142,19 @@ def _run_sdfg(sdfg):
         else:
             kw[name] = type(kw[name])(value)
 
-    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA), ('dt', _DT),
-                        ('inorm', _ITMAX), ('tolrsd', _TOLRSD)):
+    for name, value in (
+        ("nx0", _NX0),
+        ("ny0", _NY0),
+        ("nz0", _NZ0),
+        ("itmax", _ITMAX),
+        ("omega", _OMEGA),
+        ("dt", _DT),
+        ("inorm", _ITMAX),
+        ("tolrsd", _TOLRSD),
+    ):
         seed(name, value)
     sdfg(**kw)
-    return kw['rsdnm']
+    return kw["rsdnm"]
 
 
 def test_lu_reference_runs(tmp_path):

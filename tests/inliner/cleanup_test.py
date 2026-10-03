@@ -62,7 +62,9 @@ def test_inherited_type_bound_function_through_component_resolves():
 
 def test_globally_unique_names():
     """All subprograms and variables are renamed to globally unique names (avoids collisions when moving code)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type :: Square
@@ -108,9 +110,12 @@ subroutine main
   s%sides = area(s, 4.1)
   circle = 5.0
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = cleanup.assign_globally_unique_subprogram_names(ast, {("main", )})
+    ast = cleanup.assign_globally_unique_subprogram_names(ast, {("main",)})
     ast = cleanup.assign_globally_unique_variable_names(ast, set())
 
     got = ast.tofortran()
@@ -167,8 +172,10 @@ END SUBROUTINE main
 
 def test_remove_binds():
     """BIND(C) statements are removed from the AST (not relevant for dataflow analysis)."""
-    sources, _ = (SourceCodeBuilder().add_file(
-        """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(
+            """
 module lib
   type, bind(C) :: cmplx
     real :: r = 1., i = 2.
@@ -195,8 +202,11 @@ subroutine main
   call fun
 end subroutine main
 """,
-        "main",
-    ).check_with_gfortran().get())
+            "main",
+        )
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = cleanup.remove_access_and_bind_statements(ast)
 
@@ -234,8 +244,10 @@ END SUBROUTINE main
 def test_remove_contiguous_statements():
     """CONTIGUOUS attribute is preserved (perf-relevant); cleanup pass must not crash on it."""
     # TODO: pins FParser can parse these (failed in v0.1.3); still needed?
-    sources, _ = (SourceCodeBuilder().add_file(
-        """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(
+            """
 subroutine main(a)
   implicit none
   type T
@@ -247,8 +259,11 @@ subroutine main(a)
   a = sum(z % x)
 end subroutine main
 """,
-        "main",
-    ).check_with_gfortran().get())
+            "main",
+        )
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = cleanup.remove_access_and_bind_statements(ast)
 
@@ -271,7 +286,9 @@ END SUBROUTINE main
 
 def test_consolidate_global_data():
     """Global variables from modules consolidate into a single derived type, passed as an argument (makes global data dependencies explicit)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   logical :: inited_var = .false.
@@ -298,7 +315,10 @@ subroutine main
   call update(uninited_var)
   if (inited_var .and. uninited_var) a = 7.1
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = cleanup.consolidate_global_data_into_arg(ast)
 
@@ -348,7 +368,9 @@ END SUBROUTINE main
 
 def test_create_global_initializers():
     """Initializer subroutines are created for global variables/derived types with initial values (explicit global-state init)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   logical :: inited_var = .false.
@@ -377,9 +399,12 @@ subroutine main
   call update(uninited_var)
   if (inited_var .and. uninited_var) a = 7.1
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
-    ast = cleanup.create_global_initializers(ast, [("main", )])
+    ast = cleanup.create_global_initializers(ast, [("main",)])
 
     got = ast.tofortran()
     want = """

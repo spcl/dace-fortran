@@ -26,7 +26,7 @@ subroutine probe(a, n, m, sz, sz1, sz2, lb, ub)
   ub = ubound(a, 1)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     rng = np.random.default_rng(0)
     n, m = 4, 5
     a = np.asfortranarray(rng.random((n, m)))
@@ -55,7 +55,7 @@ subroutine probe(a, lb, ub, sz)
   sz = size(a)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='probe').build()
+    sdfg = build_sdfg(src, tmp_path, name="probe").build()
     a = np.asfortranarray(np.arange(5, dtype=np.float64))
     lb = np.zeros(1, dtype=np.int32)
     ub = np.zeros(1, dtype=np.int32)

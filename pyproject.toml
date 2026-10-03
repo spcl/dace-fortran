@@ -55,14 +55,14 @@ testing = [
 ]
 # mpi4py builds against the system MPI: ``MPICC=mpicc uv sync --group mpi``.
 mpi = ["mpi4py"]
-# Pinned so a local ``pre-commit run`` agrees with the CI ``format`` job (see .pre-commit-config.yaml,
-# .style.yapf, .clang-format, .fprettify.rc).
+# Pinned so a local ``pre-commit run`` agrees with the CI ``format`` job (see .pre-commit-config.yaml).
 linting = [
     "pre-commit",
-    "yapf==0.43.0",
+    "ruff==0.14.3",
+    "mypy==1.18.2",
+    "pyright==1.1.407",
     "fprettify",
     "clang-format~=21.1",
-    "flake8",
 ]
 dev = [
     { include-group = "testing" },
@@ -71,6 +71,9 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+# Editable installs as a plain path entry: mypy and pyright cannot follow setuptools' import-hook finders, so an
+# editable dace (``uv pip install -e <dace checkout>``) resolves for them only in compat mode.
+config-settings = { editable_mode = "compat" }
 
 [project.urls]
 Homepage = "https://github.com/spcl/dace-fortran"
@@ -78,9 +81,27 @@ Repository = "https://github.com/spcl/dace-fortran"
 Documentation = "https://spcldace.readthedocs.io"
 Issues = "https://github.com/spcl/dace-fortran/issues"
 
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["tests/icon/full/icon-model", "tests/cloudsc/variants/dwarf-p-cloudsc"]
+
+[tool.ruff.lint.per-file-ignores]
+# Spack recipes star-import the package DSL by spack's own convention.
+"spack/**/package.py" = ["F403", "F405"]
+# The MPI / stack environment has to be in place before mpi4py and dace are imported.
+"tests/conftest.py" = ["E402"]
+# Imports the ICON test helpers, which expect tests/ on sys.path.
+"scripts/build_icon_solve_nh_libs.py" = ["E402"]
+
 [tool.mypy]
 files = ["dace_fortran"]
 follow_imports = "silent"
+
+# dace ships no ``py.typed`` marker; analyze its sources instead of treating every dace name as ``Any``.
+[[tool.mypy.overrides]]
+module = ["dace", "dace.*"]
+follow_untyped_imports = true
 
 # fparser ships neither annotations nor a ``py.typed`` marker (``typings/`` stubs it for pyright, whose
 # ``type[Base]`` module ``__getattr__`` mypy does not accept in annotations); networkx stubs are not a dependency.

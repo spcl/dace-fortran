@@ -7,6 +7,7 @@ Technically undefined per the standard, but every mainstream compiler agrees,
 so the bridge's SSA loop-iterator reconstruction must match it. E2e against
 an f2py-compiled reference.
 """
+
 import numpy as np
 import pytest
 
@@ -19,10 +20,10 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 def _run(tmp_path, name: str, src: str, *, expected: int, n: int):
     """Build SDFG, build f2py reference, call both, assert they agree on
     the captured exit-value and on the int returned by ``get_iter_after``."""
-    ref = f2py(src, tmp_path / 'ref', f'{name}_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", f"{name}_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name=name, entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name=name, entry="driver").build()
 
     # f2py: ``out_iter`` is intent(out) integer scalar -- returned as Python int.
     iter_ref = ref.kernel_mod.driver(n=n)
@@ -50,7 +51,7 @@ out_iter = i
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    _run(tmp_path, name='loop_exit_fwd', src=src, expected=11, n=10)
+    _run(tmp_path, name="loop_exit_fwd", src=src, expected=11, n=10)
 
 
 def test_fortran_frontend_loop_iterator_exit_reverse(tmp_path):
@@ -70,7 +71,7 @@ out_iter = i
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    _run(tmp_path, name='loop_exit_rev', src=src, expected=0, n=10)
+    _run(tmp_path, name="loop_exit_rev", src=src, expected=0, n=10)
 
 
 def test_fortran_frontend_loop_iterator_exit_strided(tmp_path):
@@ -91,4 +92,4 @@ out_iter = i
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    _run(tmp_path, name='loop_exit_strided', src=src, expected=11, n=10)
+    _run(tmp_path, name="loop_exit_strided", src=src, expected=11, n=10)

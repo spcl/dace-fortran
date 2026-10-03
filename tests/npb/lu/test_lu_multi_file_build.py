@@ -1,6 +1,7 @@
 """NPB3.4 LU: multi-file SDFG build (lu.F90 + useapplu.F90) via build_sdfg_from_files.
 Must produce a valid SDFG under both merge engines (fparser, regex).
 """
+
 import json
 from pathlib import Path
 
@@ -36,5 +37,6 @@ def test_lu_multi_file_builds(tmp_path, merge_engine):
     sdfg.validate()
     # At least one LU kernel must appear in the serialized SDFG, else the merge silently dropped lu.F90's body.
     sdfg_text = json.dumps(sdfg.to_json()).lower()
-    assert any(k in sdfg_text for k in _LU_KERNELS), (f"built SDFG does not reference any of {_LU_KERNELS}; the "
-                                                      "multi-file merge likely dropped lu.F90's body.")
+    assert any(k in sdfg_text for k in _LU_KERNELS), (
+        f"built SDFG does not reference any of {_LU_KERNELS}; the multi-file merge likely dropped lu.F90's body."
+    )

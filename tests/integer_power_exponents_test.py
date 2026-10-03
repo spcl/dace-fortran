@@ -74,8 +74,15 @@ def _f2py(src_text: str, out_dir: Path, mod: str):
     (out_dir / f"{mod}.f90").write_text(src_text)
     subprocess.check_call(
         [
-            sys.executable, "-m", "numpy.f2py", "-c", f"{mod}.f90", "-m", mod, "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off"
+            sys.executable,
+            "-m",
+            "numpy.f2py",
+            "-c",
+            f"{mod}.f90",
+            "-m",
+            mod,
+            "--quiet",
+            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
         ],
         cwd=out_dir,
     )
@@ -107,6 +114,7 @@ def test_array_base_float_power_matches_gfortran(tmp_path: Path):
 
     ys = np.zeros(n, order="F")
     from dace.data import Scalar
+
     al = sdfg.arglist()
     nkw = {"n": n if isinstance(al.get("n"), Scalar) else np.array([n], np.int32)}
     sdfg(a=a.copy(order="F"), y=ys, **nkw)

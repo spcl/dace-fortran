@@ -18,6 +18,7 @@ unmaterialised.
 Pinned: (1) build + validate of the verbatim QE ``hpsort`` body, (2) numerical
 sort correctness incl. the index permutation and the duplicate-key tie-break.
 """
+
 import numpy as np
 import pytest
 
@@ -123,8 +124,6 @@ def test_hpsort_goto_while_numerical(tmp_path):
     ra_orig = ra.copy()
     sdfg(ra=ra, ind=ind, n=n)
     assert np.all(np.diff(ra) >= 0), f"not sorted ascending: {ra}"
-    np.testing.assert_allclose(ra_orig[ind - 1],
-                               ra,
-                               rtol=0,
-                               atol=0,
-                               err_msg="ind is not the permutation of the sorted array")
+    np.testing.assert_allclose(
+        ra_orig[ind - 1], ra, rtol=0, atol=0, err_msg="ind is not the permutation of the sorted array"
+    )

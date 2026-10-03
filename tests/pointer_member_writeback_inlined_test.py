@@ -11,6 +11,7 @@ dropped -- the member never changed (and calling with the member name raised ``K
 (``hlfir.designate %memberBox (i, j)``), which honours the component's strides and erases the
 phantom ``v``. A per-element pattern (``i + 100*j``) catches a dropped/transposed index.
 """
+
 from pathlib import Path
 
 import numpy as np

@@ -38,15 +38,15 @@ subroutine fun(res, idx)
   res(idx%start:idx%end) = 42
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
 
     size = 6
     res = np.full([size], 42, order="F", dtype=np.int32)
     res[:] = 0
     # Scalar I/O convention: intent(in) scalar dummies surface as plain Scalars on the SDFG signature.
     sdfg(res=res, startidx=2, endidx=5)
-    assert (res[1] == 42 and res[4] == 42)
-    assert (res[0] == 0 and res[5] == 0)
+    assert res[1] == 42 and res[4] == 42
+    assert res[0] == 0 and res[5] == 0
 
 
 def test_fortran_struct_lhs(tmp_path):
@@ -85,7 +85,7 @@ subroutine fun(idx)
   idx%var%res(idx%var%start:idx%var%end) = 42
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
 
     size = 6
     res = np.full([size], 42, order="F", dtype=np.int32)

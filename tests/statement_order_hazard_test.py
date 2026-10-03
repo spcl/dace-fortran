@@ -83,8 +83,12 @@ def kernel_source(shape: str) -> str:
 
 def inputs():
     rng = np.random.default_rng(7)
-    return (np.asfortranarray(rng.random(N) + 0.5), np.asfortranarray(rng.random(N) + 0.5),
-            np.asfortranarray(rng.random(N) + 0.5), np.zeros(N, dtype=np.float64, order="F"))
+    return (
+        np.asfortranarray(rng.random(N) + 0.5),
+        np.asfortranarray(rng.random(N) + 0.5),
+        np.asfortranarray(rng.random(N) + 0.5),
+        np.zeros(N, dtype=np.float64, order="F"),
+    )
 
 
 def reverse_node_order(sdfg):

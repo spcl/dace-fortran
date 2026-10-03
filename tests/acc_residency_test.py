@@ -1,6 +1,7 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for :mod:`dace_fortran.acc_residency`."""
+
 import json
 import subprocess
 import sys
@@ -66,12 +67,15 @@ def _payload():
     return classify(FIXTURE, "kernel", "fixture.f90")
 
 
-@pytest.mark.parametrize(("arg", "clause", "marker"), [
-    ("a_present", "PRESENT", "PRESENT(a_present)"),
-    ("b_copyin", "COPYIN", "COPYIN(b_copyin)"),
-    ("c_copyout", "COPYOUT", "COPYOUT(c_copyout)"),
-    ("d_create", "CREATE", "CREATE(d_create"),
-])
+@pytest.mark.parametrize(
+    ("arg", "clause", "marker"),
+    [
+        ("a_present", "PRESENT", "PRESENT(a_present)"),
+        ("b_copyin", "COPYIN", "COPYIN(b_copyin)"),
+        ("c_copyout", "COPYOUT", "COPYOUT(c_copyout)"),
+        ("d_create", "CREATE", "CREATE(d_create"),
+    ],
+)
 def test_device_clauses(payload, arg, clause, marker):
     assert payload["args"][arg] == {
         "residency": "device",
@@ -119,7 +123,15 @@ def test_default_present_is_not_evidence(payload):
     """``DEFAULT(PRESENT)`` must not classify anything."""
     assert all(info["evidence"] != "fixture.f90:0" for info in payload["args"].values())
     assert set(payload["args"]) | set(payload["unclassified"]) == {
-        "a_present", "b_copyin", "c_copyout", "d_create", "e_cont", "f_nested", "g_hostonly", "h_none", "n"
+        "a_present",
+        "b_copyin",
+        "c_copyout",
+        "d_create",
+        "e_cont",
+        "f_nested",
+        "g_hostonly",
+        "h_none",
+        "n",
     }
 
 
@@ -229,11 +241,10 @@ def test_cli(tmp_path):
     src.write_text(FIXTURE)
     out = tmp_path / "res.json"
     subprocess.run(
-        [sys.executable, "-m", "dace_fortran.acc_residency",
-         str(src), "--routine", "kernel", "--out",
-         str(out)],
+        [sys.executable, "-m", "dace_fortran.acc_residency", str(src), "--routine", "kernel", "--out", str(out)],
         check=True,
-        cwd=REPO)
+        cwd=REPO,
+    )
     assert json.loads(out.read_text())["args"]["b_copyin"]["clause"] == "COPYIN"
 
 

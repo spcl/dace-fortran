@@ -14,6 +14,7 @@ gfortran reference and as the DaCe SDFG (sync registered ``keep_external`` so th
 bridge routes to the real-MPI ``.so``); per-element comparison (1-ULP + bit-exact).
 
 Skipped under an odd or <2 rank count so single-rank ``pytest tests/`` doesn't trip."""
+
 import ctypes
 import shutil
 import subprocess
@@ -155,8 +156,8 @@ def _build_sync_mpi_lib(build_dir: Path) -> Path:
     src.write_text(_SYNC_MPI_SRC)
     so_path = build_dir / "libocean_sync_mpi.so"
     subprocess.check_call(
-        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}",
-         str(src), "-o", str(so_path)], cwd=build_dir)
+        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}", str(src), "-o", str(so_path)], cwd=build_dir
+    )
     return so_path
 
 
@@ -169,13 +170,24 @@ def _build_ref_lib(build_dir: Path, sync_so: Path, sync_build_dir: Path) -> Path
     driver_src = build_dir / "driver.f90"
     driver_src.write_text(_REF_DRIVER_SRC)
     so_path = build_dir / "libocean_dycore_ref.so"
-    subprocess.check_call([
-        "mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}", f"-I{sync_build_dir}",
-        str(dycore_src),
-        str(driver_src), f"-L{sync_so.parent}", f"-Wl,-rpath,{sync_so.parent}", f"-l:{sync_so.name}", "-o",
-        str(so_path)
-    ],
-                          cwd=build_dir)
+    subprocess.check_call(
+        [
+            "mpifort",
+            "-shared",
+            "-fPIC",
+            *_O0_FFLAGS,
+            f"-J{build_dir}",
+            f"-I{sync_build_dir}",
+            str(dycore_src),
+            str(driver_src),
+            f"-L{sync_so.parent}",
+            f"-Wl,-rpath,{sync_so.parent}",
+            f"-l:{sync_so.name}",
+            "-o",
+            str(so_path),
+        ],
+        cwd=build_dir,
+    )
     return so_path
 
 
@@ -187,6 +199,7 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     ``keep_external`` so the bridge routes to ``libocean_sync_mpi.so``'s bind(c)
     wrapper instead of lowering the embedded ``MPI_Sendrecv``."""
     from mpi4py import MPI
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -194,8 +207,7 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # CI runs -n 4: COMM_WORLD splits into adjacent pairs {0,1},{2,3},... each doing an
     # independent exchange; also proves the comm is correctly scoped (no cross-pair leak).
     if size < 2 or size % 2 != 0:
-        pytest.skip("needs an even rank count >= 2 "
-                    "(mpirun --oversubscribe -n 2 / -n 4 ...)")
+        pytest.skip("needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)")
     pair = comm.Split(color=rank // 2, key=rank)
     partner_world = rank ^ 1  # the other world rank sharing this pair
 
@@ -221,7 +233,7 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
                 Arg(kind="array", dtype="float64", intent="inout"),  # field
                 Arg(kind="scalar", dtype="int32", intent="in"),  # comm
             ),
-            libraries=(sync_so_str, ),
+            libraries=(sync_so_str,),
             dynamic_extents_abi=True,
         )
         _orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
@@ -272,8 +284,8 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     nproma, n_zlev, nblks = 4, 3, 2
     rng = np.random.default_rng(seed=42 + rank)
     field_init = np.asfortranarray(rng.standard_normal((nproma, n_zlev, nblks)))
-    field_sdfg = field_init.copy(order='F')
-    field_ref = field_init.copy(order='F')
+    field_sdfg = field_init.copy(order="F")
+    field_ref = field_init.copy(order="F")
     coeff = 2.5
     # hand the kernel the PAIR communicator (not COMM_WORLD) -- halo swap stays within {rank, partner_world}
     mpi_comm_int = ctypes.c_int(pair.py2f())  # Fortran MPI handle
@@ -299,14 +311,16 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # (reconstructed locally) -- the actual proof MPI ran and filled the halo.  Using
     # the pair partner's seed means a cross-pair leak (rank 0 <- rank 2) is caught here.
     other_rank_init = np.asfortranarray(
-        np.random.default_rng(seed=42 + partner_world).standard_normal((nproma, n_zlev, nblks)))
+        np.random.default_rng(seed=42 + partner_world).standard_normal((nproma, n_zlev, nblks))
+    )
     expected_halo = other_rank_init[:, :, 0].copy()
     for k in range(n_zlev):
         for i in range(nproma):
             expected_halo[i, k] = expected_halo[i, k] * coeff + float(i + 1) / float((k + 1) + 1)
-    np.testing.assert_allclose(field_sdfg[:, :, 1],
-                               expected_halo,
-                               rtol=one_ulp_rtol,
-                               atol=0.0,
-                               err_msg=("halo (block 2) does NOT match the neighbour's computed block 1 -- "
-                                        "MPI_Sendrecv probably mis-fired"))
+    np.testing.assert_allclose(
+        field_sdfg[:, :, 1],
+        expected_halo,
+        rtol=one_ulp_rtol,
+        atol=0.0,
+        err_msg=("halo (block 2) does NOT match the neighbour's computed block 1 -- MPI_Sendrecv probably mis-fired"),
+    )

@@ -12,6 +12,7 @@ SDFG representation), recording (rank, dims, direction); ``fftw_execute_dft``
 becomes a single :class:`FFT`/:class:`IFFT` library node; ``fftw_destroy_plan``
 is dropped (the lib node's expansion owns the plan lifecycle).
 """
+
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ def _build_and_assert_fft(src: str, entry: str, name: str, out_dir):
     """Build the SDFG, validate, and assert a single FFT lib node is emitted."""
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(out_dir), entry=entry, name=name)
     sdfg.validate()
-    fft_nodes = [n for s in sdfg.states() for n in s.nodes() if 'FFT' in type(n).__name__]
+    fft_nodes = [n for s in sdfg.states() for n in s.nodes() if "FFT" in type(n).__name__]
     assert fft_nodes, f"no FFT lib node emitted -- got states {[s.label for s in sdfg.states()]}"
     return sdfg
 

@@ -13,6 +13,7 @@ counter must reach ``n`` (not stay at ``1``), proving the increment
 actually runs.  The LU SSOR sweep being a no-op at the time this
 test was written suggests the counter doesn't iterate correctly.
 """
+
 import numpy as np
 import pytest
 
@@ -43,7 +44,7 @@ end module m
 """
     N = 8
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="m::fill").build()
-    arr = np.full((N, ), -1.0, dtype=np.float64, order='F')
+    arr = np.full((N,), -1.0, dtype=np.float64, order="F")
     sdfg(arr=arr, n=np.int32(N))
     expected = np.arange(1, N + 1, dtype=np.float64)
     np.testing.assert_array_equal(arr, expected)
@@ -73,7 +74,7 @@ end module m
 """
     N = 6
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="count_to_n", entry="m::count_to_n").build()
-    out = np.full((N, ), -1, dtype=np.int32, order='F')
+    out = np.full((N,), -1, dtype=np.int32, order="F")
     sdfg(out_arr=out, n=np.int32(N))
     expected = np.arange(1, N + 1, dtype=np.int32) * 7
     np.testing.assert_array_equal(out, expected)
@@ -115,7 +116,7 @@ end module m
 """
     N = 4
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_loop", entry="m::scale_loop").build()
-    a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
+    a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
     sdfg(a=a, n=np.int32(N))
     np.testing.assert_array_equal(a, np.array([1.0, 2.0, 3.0, 4.0]) * 8.0)
 
@@ -141,6 +142,6 @@ end module m
     N = 3
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="drain", entry="m::drain").build()
     # start all 2.0 -> after iter1 all 1.0 (sum 3>0), iter2 all 0.0 (sum 0, stop)
-    a = np.full((N, ), 2.0, dtype=np.float64, order='F')
+    a = np.full((N,), 2.0, dtype=np.float64, order="F")
     sdfg(a=a, n=np.int32(N))
     np.testing.assert_array_equal(a, np.zeros(N, dtype=np.float64))

@@ -15,6 +15,7 @@ STATUS: the outer-SDFG-builds gate below PASSES (marshal v2 landed: ``t_patch``'
 ``t_tangent_vectors``, now expands to one SoA leaf per record field). Remaining: wire the
 inner velocity ``.so`` + the full deep-copy-all differential run.
 """
+
 import re
 import shutil
 from pathlib import Path
@@ -53,15 +54,37 @@ _VELOCITY_CALLBACK_ARGS = tuple(
     + [Arg(kind="scalar", dtype="int32", intent="in")] * 2  # ntnd / istep
     + [Arg(kind="scalar", dtype="bool", intent="in")]  # lvn_only
     + [Arg(kind="scalar", dtype="float64", intent="in")] * 2  # dtime / dt_linintp_ubc
-    + [Arg(kind="scalar", dtype="bool", intent="in")])  # ldeepatmo
+    + [Arg(kind="scalar", dtype="bool", intent="in")]
+)  # ldeepatmo
 
 # halo/sync/diagnostics dropped so no MPI survives and velocity is the only external;
 # same set as the atmo "external" harness config plus inlined-mode side effects.
 _DO_NOT_EMIT = [
-    "sync_patch_array", "sync_patch_array_mult", "exchange_data", "p_barrier", "p_max", "p_min", "p_sum", "global_max",
-    "global_min", "global_sum", "setup_comm_pattern", "finish", "message", "message_text", "warning", "print_status",
-    "print_value", "init_logger", "dbg_print", "work_mpi_barrier", "timer_start", "timer_stop", "new_timer",
-    "delete_timer", "check_patch_array_3d_dp"
+    "sync_patch_array",
+    "sync_patch_array_mult",
+    "exchange_data",
+    "p_barrier",
+    "p_max",
+    "p_min",
+    "p_sum",
+    "global_max",
+    "global_min",
+    "global_sum",
+    "setup_comm_pattern",
+    "finish",
+    "message",
+    "message_text",
+    "warning",
+    "print_status",
+    "print_value",
+    "init_logger",
+    "dbg_print",
+    "work_mpi_barrier",
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",
+    "check_patch_array_3d_dp",
 ]
 
 
@@ -86,8 +109,10 @@ def test_solve_nh_velocity_callback_outer_sdfg_builds(tmp_path: Path):
         sdfg.validate()
         # velocity callback must emit as an external library node, not inlined/dropped
         from dace.sdfg import nodes as dnodes
+
         ext = [
-            n for n, _ in sdfg.all_nodes_recursive()
+            n
+            for n, _ in sdfg.all_nodes_recursive()
             if isinstance(n, dnodes.LibraryNode) and "velocity" in (n.label or "").lower()
         ]
         assert ext, "outer SDFG built but emitted no external velocity_tendencies call"
@@ -109,10 +134,9 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
       ``c_f_pointer`` dereferences the integer as an address.
     """
     clear_external_registry()
-    inner_builder = build_sdfg(_VELOCITY_TU.read_text(),
-                               tmp_path / "vel_sdfg",
-                               name="velocity_tendencies",
-                               entry=_VELOCITY_ENTRY)
+    inner_builder = build_sdfg(
+        _VELOCITY_TU.read_text(), tmp_path / "vel_sdfg", name="velocity_tendencies", entry=_VELOCITY_ENTRY
+    )
     inner_builder.build()
     iface = build_auto_interface(inner_builder._fortran_interface_raw, "velocity_tendencies")
     shim = emit_bind_c_shim(iface, str(tmp_path / "vel_c.f90")).read_text()
@@ -142,15 +166,23 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
     # here is a dropped ``_lb`` slot on a deferred-shape member (count too low)
     # or a spurious lb on a value-record companion (count too high).
     assert len(outer_args) == len(inner_slots), (
-        f"velocity callback ABI slot-count desync: inner shim {len(inner_slots)} vs "
-        f"outer marshal {len(outer_args)}")
+        f"velocity callback ABI slot-count desync: inner shim {len(inner_slots)} vs outer marshal {len(outer_args)}"
+    )
 
     # TYPE: each grid-dim scalar member the shim takes as a pointer marshals as a
     # materialised ``&_pv_<sym>`` -- the member slot, distinct from that same
     # symbol's legitimate by-value ``(int)(<sym>)`` use as ANOTHER array's extent.
-    for member in ("p_patch_id", "p_patch_n_childdom", "p_patch_nblks_c", "p_patch_nblks_e", "p_patch_nblks_v",
-                   "p_patch_nlev", "p_patch_nlevp1"):
+    for member in (
+        "p_patch_id",
+        "p_patch_n_childdom",
+        "p_patch_nblks_c",
+        "p_patch_nblks_e",
+        "p_patch_nblks_v",
+        "p_patch_nlev",
+        "p_patch_nlevp1",
+    ):
         assert member in ptr_members, f"{member} should be a callee pointer member"
         assert f"&_pv_{member}" in outer_args, (
             f"grid-dim member {member} must marshal as a materialised pointer (&_pv_{member}); the "
-            f"inner shim declares it type(c_ptr), value and dereferences via c_f_pointer")
+            f"inner shim declares it type(c_ptr), value and dereferences via c_f_pointer"
+        )

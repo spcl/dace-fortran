@@ -5,6 +5,7 @@ dead code for a numerical-equivalence SDFG. The pass replaces each I/O call's
 SSA result(s) with a benign constant (i1->false, i32->0 iostat, cookie->
 fir.zero_bits) then erases the call.
 """
+
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,13 +26,19 @@ def _emit_hlfir_and_strip(src: str) -> str:
         f = Path(td) / "k.F90"
         f.write_text(src)
         h = Path(td) / "k.hlfir"
-        subprocess.check_call([
-            flang_binary(), "-fc1", "-fintrinsic-modules-path",
-            flang_intrinsic_modules_path(), "-emit-hlfir",
-            str(f), "-o",
-            str(h)
-        ],
-                              cwd=td)
+        subprocess.check_call(
+            [
+                flang_binary(),
+                "-fc1",
+                "-fintrinsic-modules-path",
+                flang_intrinsic_modules_path(),
+                "-emit-hlfir",
+                str(f),
+                "-o",
+                str(h),
+            ],
+            cwd=td,
+        )
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.run_passes("hlfir-strip-runtime-io")

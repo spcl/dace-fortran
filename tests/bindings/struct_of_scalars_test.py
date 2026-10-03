@@ -58,8 +58,8 @@ def test_dt_of_scalar_constants_flattens_per_member(tmp_path):
     for member, e in entries_by_outer.items():
         assert e.recipe.rank == 0, f"{member}: scalar member should be rank 0, got {e.recipe.rank}"
         assert e.recipe.scratch_dtype == "float64", f"{member}: dtype {e.recipe.scratch_dtype}"
-        assert e.recipe.flat_names == (member.replace("%", "_"), ), e.recipe.flat_names
-        assert e.recipe.read_exprs == (member, ), e.recipe.read_exprs
+        assert e.recipe.flat_names == (member.replace("%", "_"),), e.recipe.flat_names
+        assert e.recipe.read_exprs == (member,), e.recipe.read_exprs
 
     # SDFG arglist carries the flat per-member names.
     arglist = list(sdfg.arglist().keys())
@@ -86,6 +86,7 @@ def test_dt_of_scalar_constants_numerical(tmp_path):
 
     # bridge surfaces scalar struct members as length-1 Array(1,) rather than Scalar; route accordingly.
     from dace.data import Scalar
+
     arglist = sdfg.arglist()
 
     def _route(name, value):

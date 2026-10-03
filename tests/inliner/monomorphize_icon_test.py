@@ -15,6 +15,7 @@ upstream ICON ocean-solver sources:
 A compilable self-contained TU for a flang check on the real sources is the
 inliner's job and out of scope here. Reads the icon-model submodule (no build), marked `long`.
 """
+
 import os
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program
-from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, monomorphize, MonomorphizationSpec)
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, monomorphize, MonomorphizationSpec
 
 pytestmark = pytest.mark.long
 
@@ -35,9 +36,9 @@ _SOLVER = _ICON_SRC / "src" / "ocean" / "math"
 
 if not (_SOLVER / "mo_ocean_solve_backend.f90").is_file():
     pytest.skip(
-        "icon-model submodule not checked out (run "
-        "`git submodule update --init tests/icon/full/icon-model`)",
-        allow_module_level=True)
+        "icon-model submodule not checked out (run `git submodule update --init tests/icon/full/icon-model`)",
+        allow_module_level=True,
+    )
 
 _CPP = re.compile(r"^\s*#")
 
@@ -45,11 +46,13 @@ _CPP = re.compile(r"^\s*#")
 # transfer/lhs-agen are pinned to one concrete type at the construction site, so
 # they retype. Hand-written per the locked design; a later pass should auto-generate it.
 _BACKEND = "t_ocean_solve_backend"
-_REAL_ICON_SPEC = MonomorphizationSpec(axes=[
-    AxisSpec(base="t_transfer", strategy="retype", concrete="t_trivial_transfer"),
-    AxisSpec(base="t_lhs_agen", strategy="retype", concrete="t_primal_flip_flop_lhs"),
-    AxisSpec(base=_BACKEND, strategy="ladder"),
-])
+_REAL_ICON_SPEC = MonomorphizationSpec(
+    axes=[
+        AxisSpec(base="t_transfer", strategy="retype", concrete="t_trivial_transfer"),
+        AxisSpec(base="t_lhs_agen", strategy="retype", concrete="t_primal_flip_flop_lhs"),
+        AxisSpec(base=_BACKEND, strategy="ladder"),
+    ]
+)
 
 # the seven concrete backend solver arms registered to t_ocean_solve_backend.
 _BACKEND_ARMS = {
@@ -115,7 +118,8 @@ _TYPEDEF_MODULES = [
 def _typedef_program() -> f03.Program:
     """All axis type definitions in one synthetic module -- for analysis only."""
     typedefs = "\n".join(
-        _extract_types(_src(m)) for m in ["mo_ocean_solve_backend.f90", "mo_ocean_solve.f90"] + _TYPEDEF_MODULES)
+        _extract_types(_src(m)) for m in ["mo_ocean_solve_backend.f90", "mo_ocean_solve.f90"] + _TYPEDEF_MODULES
+    )
     return parse_program(f"module zz_icon_typedefs\n{typedefs}\nend module\n")
 
 
@@ -151,8 +155,11 @@ def test_analyzer_accepts_real_icon_solver_hierarchy():
         assert set(arm.bindings) == {"doit_sp", "doit_wp"}
 
     assert {a.type_name.lower() for a in plans["t_transfer"].arms} == {"t_trivial_transfer", "t_subset_transfer"}
-    assert {a.type_name.lower()
-            for a in plans["t_lhs_agen"].arms} == {"t_surface_height_lhs", "t_lhs_zstar", "t_primal_flip_flop_lhs"}
+    assert {a.type_name.lower() for a in plans["t_lhs_agen"].arms} == {
+        "t_surface_height_lhs",
+        "t_lhs_zstar",
+        "t_primal_flip_flop_lhs",
+    }
 
 
 def test_driver_collapses_real_icon_dispatch():

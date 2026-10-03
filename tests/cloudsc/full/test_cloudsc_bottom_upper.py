@@ -16,7 +16,8 @@ import pytest
 
 from _util import f2py_compile, have_flang
 from cloudsc.full._registries import (
-    CLOUDSC_F90FLAGS, )
+    CLOUDSC_F90FLAGS,
+)
 from cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
@@ -33,7 +34,7 @@ def _f2py_bottom_upper(tmp_path_factory):
         "cloudsc_bottom_upper_ref",
         # -ffree-line-length-none is gfortran-only (long-line source); flang has no line limit, needs no equivalent.
         extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter", ),
+        only=("cloudscouter",),
     )
 
 

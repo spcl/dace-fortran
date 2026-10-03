@@ -1,6 +1,7 @@
 """Smoke tests for the HLFIR -> SDFG frontend: inline Fortran source, build an SDFG,
 validate against a numpy reference (E2E-numerical rule) plus structural assertions
 against silent SDFG-shape regressions."""
+
 import numpy as np
 import pytest
 
@@ -72,8 +73,7 @@ end subroutine chained
 
     body = next(s for s in iter_states(sdfg) if any(isinstance(n, nd.Tasklet) for n in s.nodes()))
     tmp_nodes = [n for n in body.nodes() if isinstance(n, nd.AccessNode) and n.data == "tmp"]
-    assert len(tmp_nodes) == 1, (f"expected a single shared access node for tmp in the body state; "
-                                 f"got {len(tmp_nodes)}")
+    assert len(tmp_nodes) == 1, f"expected a single shared access node for tmp in the body state; got {len(tmp_nodes)}"
 
     rng = np.random.default_rng(1)
     n = 8

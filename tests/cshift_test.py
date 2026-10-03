@@ -7,6 +7,7 @@ a negative shift in range).  These tests pin the numerics against
 ``numpy.roll`` -- Fortran ``CSHIFT(arr, s)`` shifts LEFT by ``s``, i.e.
 ``np.roll(arr, -s)``.
 """
+
 import numpy as np
 import pytest
 

@@ -9,6 +9,7 @@ select-follow to the zero-clamp idiom fixes it.
 Drives the kernel through its auto-generated bind(c) binding and compares every output buffer
 against the original Fortran on random input (same harness as the ICON-O ocean kernels).
 """
+
 import shutil
 
 import pytest

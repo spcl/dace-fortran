@@ -16,6 +16,7 @@ See the borrowed test's docstring for what the fixture pins and why -- in partic
 array lower bounds, the config-module globals seeded on both sides, and the non-degenerate vertical
 column without which the kernel's automatic transients stay uninitialised.
 """
+
 import shutil
 from pathlib import Path
 
@@ -48,24 +49,19 @@ def run_variant(seed: int, tu_name: str):
         seed=seed,
         int_fill=1,  # one in-domain block; every connectivity index -> element 1
         # nflatlev is a DO lower bound; BSS 0 would start jk at 0 -> OOB.
-        module_seeds={
-            "nproma": 8,
-            "nflatlev": 1,
-            "nrdmax": 1
-        },
+        module_seeds={"nproma": 8, "nflatlev": 1, "nrdmax": 1},
         # real vertical column within the n=8 buffers so the vertical loops run
         # and fully initialise the kernel's automatic transients.
-        array_overrides={
-            "p_patch_nlev": 7,
-            "p_patch_nlevp1": 8
-        },
+        array_overrides={"p_patch_nlev": 7, "p_patch_nlevp1": 8},
     )
 
 
 @pytest.mark.xdist_group("atmo_velocity_fparser")
-@pytest.mark.parametrize("tu_name,loop_exchange",
-                         VELOCITY_TU_VARIANTS,
-                         ids=[("loopexch" if le else "noloopexch") for _, le in VELOCITY_TU_VARIANTS])
+@pytest.mark.parametrize(
+    "tu_name,loop_exchange",
+    VELOCITY_TU_VARIANTS,
+    ids=[("loopexch" if le else "noloopexch") for _, le in VELOCITY_TU_VARIANTS],
+)
 def test_velocity_tendencies_pipeline_numerical_e2e(monkeypatch, tu_name, loop_exchange):
     """Pre-optimize and post-optimize bindings both match the reference bit-exactly.
 
@@ -79,7 +75,7 @@ def test_velocity_tendencies_pipeline_numerical_e2e(monkeypatch, tu_name, loop_e
     pre = run_variant(seed, tu_name)
     assert pre["passed"], f"velocity_tendencies: unoptimized build/lower/run failed:\n{pre['output'][-3500:]}"
     assert pre["n_changed"] > 0, "no output buffer changed -- the kernel did no work (test is vacuous)"
-    assert pre["max_diff"] == 0.0, (f"unoptimized SDFG diverged from reference, max|d|={pre['max_diff']:.3e}")
+    assert pre["max_diff"] == 0.0, f"unoptimized SDFG diverged from reference, max|d|={pre['max_diff']:.3e}"
 
     # The harness forks a child that re-execs _ocean_e2e.py; the child inherits os.environ and
     # resolves the hook against tests/ on its PYTHONPATH.
@@ -93,4 +89,4 @@ def test_velocity_tendencies_pipeline_numerical_e2e(monkeypatch, tu_name, loop_e
     # Bit-exact, same bar the unoptimized leg above just cleared: the pipeline reorders statements
     # and forms maps but never reassociates arithmetic, and the flags pin FMA contraction off. With
     # both legs at exactly 0.0 against one reference, pre and post are bit-identical to each other.
-    assert opt["max_diff"] == 0.0, (f"pipeline changed the numerics, max|d|={opt['max_diff']:.3e} (must be 0)")
+    assert opt["max_diff"] == 0.0, f"pipeline changed the numerics, max|d|={opt['max_diff']:.3e} (must be 0)"

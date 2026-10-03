@@ -28,10 +28,13 @@ END SUBROUTINE bar
 
 def test_fortran_frontend_multi_callsite_whole_array(tmp_path):
     """Two ``bar`` calls, one against ``a``, one against ``b``  --  whole arrays."""
-    src = """
+    src = (
+        """
 MODULE kernel_mod
 CONTAINS
-""" + _BAR_DEF + """
+"""
+        + _BAR_DEF
+        + """
 SUBROUTINE driver(a, b)
 double precision, intent(inout) :: a(10), b(10)
 integer i
@@ -46,10 +49,11 @@ CALL bar(b)
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'multi_callsite_whole_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    )
+    ref = f2py(src, tmp_path / "ref", "multi_callsite_whole_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_whole', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="multi_callsite_whole", entry="driver").build()
 
     a_ref = np.zeros(10, dtype=np.float64)
     b_ref = np.zeros(10, dtype=np.float64)
@@ -64,10 +68,13 @@ END MODULE kernel_mod
 
 def test_fortran_frontend_multi_callsite_section_slice(tmp_path):
     """Two ``bar`` calls, each on a section slice of a different 2-D array."""
-    src = """
+    src = (
+        """
 MODULE kernel_mod
 CONTAINS
-""" + _BAR_DEF + """
+"""
+        + _BAR_DEF
+        + """
 SUBROUTINE driver(a, b)
 double precision, intent(inout) :: a(10, 5), b(10, 5)
 integer i, j
@@ -84,10 +91,11 @@ CALL bar(b(:, 2))
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'multi_callsite_slice_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    )
+    ref = f2py(src, tmp_path / "ref", "multi_callsite_slice_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_slice', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="multi_callsite_slice", entry="driver").build()
 
     a_ref = np.asfortranarray(np.zeros((10, 5), dtype=np.float64))
     b_ref = np.asfortranarray(np.zeros((10, 5), dtype=np.float64))

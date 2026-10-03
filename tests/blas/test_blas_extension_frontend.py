@@ -5,6 +5,7 @@ One test per routine; drives ``run_<routine>`` through the bridge and asserts th
 lower to a standard copy node and a map, so they run against numpy. The triangular routines have no
 library node at all and are rejected as unsupported library calls.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +26,7 @@ def _build_and_assert(entry: str, expected_node: str, tmp_path):
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / name), entry=entry, name=name)
     sdfg.validate()
     classes = {type(n).__name__ for s in sdfg.states() for n in s.nodes()}
-    assert expected_node in classes, \
-        f"{entry}: expected a {expected_node!r} lib node, got {sorted(classes)!r}"
+    assert expected_node in classes, f"{entry}: expected a {expected_node!r} lib node, got {sorted(classes)!r}"
 
 
 def _assert_unsupported(entry: str, routine: str, tmp_path):
@@ -41,10 +41,9 @@ def test_dcopy_lowers_to_a_copy_node(tmp_path):
 
 
 def test_dcopy_numerical(tmp_path):
-    sdfg = dace_fortran.build_sdfg(_SRC.read_text(),
-                                   out_dir=str(tmp_path / "dcopy"),
-                                   entry="blas_extension_probes::run_dcopy",
-                                   name="run_dcopy")
+    sdfg = dace_fortran.build_sdfg(
+        _SRC.read_text(), out_dir=str(tmp_path / "dcopy"), entry="blas_extension_probes::run_dcopy", name="run_dcopy"
+    )
     x = np.random.default_rng(0).standard_normal(9)
     y = np.zeros(9)
     sdfg(n=np.int32(9), x=x, y=y)
@@ -56,10 +55,9 @@ def test_dswap_lowers_to_a_map(tmp_path):
 
 
 def test_dswap_numerical(tmp_path):
-    sdfg = dace_fortran.build_sdfg(_SRC.read_text(),
-                                   out_dir=str(tmp_path / "dswap"),
-                                   entry="blas_extension_probes::run_dswap",
-                                   name="run_dswap")
+    sdfg = dace_fortran.build_sdfg(
+        _SRC.read_text(), out_dir=str(tmp_path / "dswap"), entry="blas_extension_probes::run_dswap", name="run_dswap"
+    )
     rng = np.random.default_rng(1)
     x, y = rng.standard_normal(9), rng.standard_normal(9)
     x0, y0 = x.copy(), y.copy()
@@ -103,9 +101,19 @@ def test_dsyrk_recognised(tmp_path):
 if __name__ == "__main__":
     import tempfile
 
-    for test in (test_dcopy_lowers_to_a_copy_node, test_dcopy_numerical, test_dswap_lowers_to_a_map,
-                 test_dswap_numerical, test_dger_recognised, test_dtrsv_is_unsupported, test_dtrmv_is_unsupported,
-                 test_dsymv_recognised, test_dtrsm_is_unsupported, test_dtrmm_is_unsupported, test_dsymm_recognised,
-                 test_dsyrk_recognised):
+    for test in (
+        test_dcopy_lowers_to_a_copy_node,
+        test_dcopy_numerical,
+        test_dswap_lowers_to_a_map,
+        test_dswap_numerical,
+        test_dger_recognised,
+        test_dtrsv_is_unsupported,
+        test_dtrmv_is_unsupported,
+        test_dsymv_recognised,
+        test_dtrsm_is_unsupported,
+        test_dtrmm_is_unsupported,
+        test_dsymm_recognised,
+        test_dsyrk_recognised,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             test(Path(tmp))

@@ -18,21 +18,59 @@ from .. import ast_utils
 # Represents program entry points like the main program, subroutines, and functions.
 ENTRY_POINT_OBJECT_CLASSES = (f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram)
 # Represents nodes that define a new scope (e.g., modules, functions, derived types).
-SCOPE_OBJECT_TYPES = Union[f03.Main_Program, f03.Module, f03.Function_Subprogram, f03.Subroutine_Subprogram,
-                           f03.Derived_Type_Def, f03.Interface_Block, f03.Subroutine_Body, f03.Function_Body,
-                           f03.Stmt_Function_Stmt]
-SCOPE_OBJECT_CLASSES = (f03.Main_Program, f03.Module, f03.Function_Subprogram, f03.Subroutine_Subprogram,
-                        f03.Derived_Type_Def, f03.Interface_Block, f03.Subroutine_Body, f03.Function_Body,
-                        f03.Stmt_Function_Stmt)
+SCOPE_OBJECT_TYPES = Union[
+    f03.Main_Program,
+    f03.Module,
+    f03.Function_Subprogram,
+    f03.Subroutine_Subprogram,
+    f03.Derived_Type_Def,
+    f03.Interface_Block,
+    f03.Subroutine_Body,
+    f03.Function_Body,
+    f03.Stmt_Function_Stmt,
+]
+SCOPE_OBJECT_CLASSES = (
+    f03.Main_Program,
+    f03.Module,
+    f03.Function_Subprogram,
+    f03.Subroutine_Subprogram,
+    f03.Derived_Type_Def,
+    f03.Interface_Block,
+    f03.Subroutine_Body,
+    f03.Function_Body,
+    f03.Stmt_Function_Stmt,
+)
 # Represents statements that have a name and are of interest for analysis.
-NAMED_STMTS_OF_INTEREST_TYPES = Union[f03.Program_Stmt, f03.Module_Stmt, f03.Function_Stmt, f03.Subroutine_Stmt,
-                                      f03.Derived_Type_Stmt, f03.Component_Decl, f03.Entity_Decl, f03.Specific_Binding,
-                                      f03.Generic_Binding, f03.Interface_Stmt, f03.Stmt_Function_Stmt,
-                                      f03.Proc_Component_Def_Stmt, f03.Proc_Decl]
-NAMED_STMTS_OF_INTEREST_CLASSES = (f03.Program_Stmt, f03.Module_Stmt, f03.Function_Stmt, f03.Subroutine_Stmt,
-                                   f03.Derived_Type_Stmt, f03.Component_Decl, f03.Entity_Decl, f03.Specific_Binding,
-                                   f03.Generic_Binding, f03.Interface_Stmt, f03.Stmt_Function_Stmt,
-                                   f03.Proc_Component_Def_Stmt, f03.Proc_Decl)
+NAMED_STMTS_OF_INTEREST_TYPES = Union[
+    f03.Program_Stmt,
+    f03.Module_Stmt,
+    f03.Function_Stmt,
+    f03.Subroutine_Stmt,
+    f03.Derived_Type_Stmt,
+    f03.Component_Decl,
+    f03.Entity_Decl,
+    f03.Specific_Binding,
+    f03.Generic_Binding,
+    f03.Interface_Stmt,
+    f03.Stmt_Function_Stmt,
+    f03.Proc_Component_Def_Stmt,
+    f03.Proc_Decl,
+]
+NAMED_STMTS_OF_INTEREST_CLASSES = (
+    f03.Program_Stmt,
+    f03.Module_Stmt,
+    f03.Function_Stmt,
+    f03.Subroutine_Stmt,
+    f03.Derived_Type_Stmt,
+    f03.Component_Decl,
+    f03.Entity_Decl,
+    f03.Specific_Binding,
+    f03.Generic_Binding,
+    f03.Interface_Stmt,
+    f03.Stmt_Function_Stmt,
+    f03.Proc_Component_Def_Stmt,
+    f03.Proc_Decl,
+)
 
 
 def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
@@ -45,13 +83,14 @@ def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
         _, bname, _ = node.children
         name = bname
     elif isinstance(node, f03.Interface_Stmt):
-        name, = node.children
-        if name == 'ABSTRACT':
+        (name,) = node.children
+        if name == "ABSTRACT":
             return None
     elif isinstance(node, f03.Proc_Component_Def_Stmt):
         tgt, attrs, plist = node.children
-        assert len(plist.children) == 1, \
+        assert len(plist.children) == 1, (
             f"Only one procedure per statement is accepted due to Fparser bug. Break down the line: {node}"
+        )
         # Name comes from the proc-decl list, not ``tgt``: for ``procedure(fun), pointer :: nofun``,
         # ``tgt`` is ``fun``, which would mis-name the ``nofun`` component.
         decl = plist.children[0]
@@ -93,13 +132,13 @@ def find_named_ancestor(node: Base) -> Optional[NAMED_STMTS_OF_INTEREST_TYPES]:
 def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
     """Path from anc to des, or None if des is not a descendant of anc."""
     if anc is des:
-        return (anc, )
+        return (anc,)
     if not des.parent:
         return None
     lin = lineage(anc, des.parent)
     if not lin:
         return None
-    return lin + (des, )
+    return lin + (des,)
 
 
 def _reparent_children(node: Base) -> None:
@@ -190,17 +229,19 @@ def copy_fparser_node(n: Base) -> Base:
         return deepcopy(n)
 
 
-def get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
-        -> Tuple[
-            Union[f03.Module_Stmt, f03.Program_Stmt],
-            Optional[f03.Specification_Part],
-            Optional[f03.Execution_Part],
-            Optional[f03.Module_Subprogram_Part],
-        ]:
+def get_module_or_program_parts(
+    mod: Union[f03.Module, f03.Main_Program],
+) -> Tuple[
+    Union[f03.Module_Stmt, f03.Program_Stmt],
+    Optional[f03.Specification_Part],
+    Optional[f03.Execution_Part],
+    Optional[f03.Module_Subprogram_Part],
+]:
     """Splits a Module/Main_Program node into (stmt, spec_part, exec_part, subprogram_part)."""
     # A module/program statement must exist.
     stmt = ast_utils.singular(
-        ast_utils.children_of_type(mod, f03.Module_Stmt if isinstance(mod, f03.Module) else f03.Program_Stmt))
+        ast_utils.children_of_type(mod, f03.Module_Stmt if isinstance(mod, f03.Module) else f03.Program_Stmt)
+    )
     specs = list(ast_utils.children_of_type(mod, f03.Specification_Part))
     assert len(specs) <= 1, f"A module/program cannot have more than one specification parts, found {specs} in {mod}"
     exparts = list(ast_utils.children_of_type(mod, f03.Execution_Part))

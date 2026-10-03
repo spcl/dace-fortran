@@ -10,6 +10,7 @@ binding shim allocated and zero-filled: every write through it was dropped silen
 index list cannot be "scalar prefix then triplet" -- the fold has to walk source dims in order.
 A per-element pattern (``i + 100*j``) catches a dropped or transposed index.
 """
+
 from pathlib import Path
 
 import numpy as np

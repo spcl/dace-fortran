@@ -26,11 +26,11 @@ subroutine main(n, src, out)
   deallocate(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n = 8
-    src_arr = np.empty(n, dtype=np.float64, order='F')
+    src_arr = np.empty(n, dtype=np.float64, order="F")
     src_arr[:] = np.arange(1.0, n + 1.0)
-    out = np.zeros(n, order='F', dtype=np.float64)
+    out = np.zeros(n, order="F", dtype=np.float64)
     sdfg(n=n, src=src_arr, out=out)
     np.testing.assert_array_equal(out, src_arr)
 
@@ -49,9 +49,9 @@ subroutine main(n, src, out)
   deallocate(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n = 6
-    src_arr = np.array([10., 20., 30., 40., 50., 60.], dtype=np.float64)
+    src_arr = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0], dtype=np.float64)
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=n, src=src_arr, out=out)
     np.testing.assert_array_equal(out, src_arr)
@@ -71,9 +71,9 @@ subroutine main(n, m, src, out)
   deallocate(x)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     n, m = 3, 4
     src_arr = np.asfortranarray(np.arange(n * m, dtype=np.float64).reshape(n, m))
-    out = np.zeros((n, m), order='F', dtype=np.float64)
+    out = np.zeros((n, m), order="F", dtype=np.float64)
     sdfg(n=n, m=m, src=src_arr, out=out)
     np.testing.assert_array_equal(out, src_arr)

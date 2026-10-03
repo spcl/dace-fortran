@@ -8,6 +8,7 @@ turns ``compiler.command_cache`` off, and ``cmake --build .`` then rebuilds it.
 
 Companion doc: bug5_stale_cmake_cache.md
 """
+
 import os
 import subprocess
 import tempfile
@@ -18,7 +19,7 @@ import dace
 
 def _tiny_sdfg(tmp_path: Path):
     sdfg = dace.SDFG("rebuild_probe")
-    sdfg.add_array("x", (1, ), dace.float64)
+    sdfg.add_array("x", (1,), dace.float64)
     st = sdfg.add_state("s", is_start_block=True)
     t = st.add_tasklet("t", {}, {"o"}, "o = 1.0")
     w = st.add_write("x")
@@ -44,8 +45,9 @@ def test_generated_kernel_is_rebuildable_in_place(tmp_path: Path):
     os.utime(cpps[0], (mtime_before + 10, mtime_before + 10))  # a hand-edit, without waiting a clock tick
 
     res = subprocess.run(["cmake", "--build", "."], cwd=build_dir, capture_output=True, text=True, timeout=300)
-    assert res.returncode == 0, (f"in-place rebuild broken: rc={res.returncode}\n"
-                                 f"stdout: {res.stdout[-400:]}\nstderr: {res.stderr[-400:]}")
+    assert res.returncode == 0, (
+        f"in-place rebuild broken: rc={res.returncode}\nstdout: {res.stdout[-400:]}\nstderr: {res.stderr[-400:]}"
+    )
     assert so.stat().st_mtime > mtime_before, "shared library was not re-linked"
 
 

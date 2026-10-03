@@ -9,7 +9,6 @@ be read-only).
 flang lowers a DATA-statement array to a ``fir.global`` with a dense initialiser
 but NOT marked ``constant``; the bridge extracts that data like a parameter array's.
 """
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -37,9 +36,9 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
-    assert 'c' not in sdfg.arglist(), "a read-only DATA array must bake, not be a kwarg"
-    assert 'c' in getattr(sdfg, 'constants', {}), "expected c in the constant pool"
+    sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    assert "c" not in sdfg.arglist(), "a read-only DATA array must bake, not be a kwarg"
+    assert "c" in getattr(sdfg, "constants", {}), "expected c in the constant pool"
     x = np.ones(3, dtype=np.float32)
     y = np.zeros(1, dtype=np.float32)
     sdfg(x=x, y=y)
@@ -66,9 +65,9 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
-    assert 'c' not in sdfg.arglist(), "a kernel-written const array is an internal transient"
-    assert 'c' not in getattr(sdfg, 'constants', {}), "a written array must not be a constexpr"
+    sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    assert "c" not in sdfg.arglist(), "a kernel-written const array is an internal transient"
+    assert "c" not in getattr(sdfg, "constants", {}), "a written array must not be a constexpr"
     x = np.ones(3, dtype=np.float32)
     y = np.zeros(1, dtype=np.float32)
     sdfg(x=x, y=y)
@@ -94,8 +93,8 @@ contains
   end subroutine extrap
 end module extrap_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name='extrap', entry='extrap').build()
-    assert 'w' not in sdfg.arglist()
+    sdfg = build_sdfg(src, tmp_path, name="extrap", entry="extrap").build()
+    assert "w" not in sdfg.arglist()
     x = np.arange(1, 5, dtype=np.float32)
     y = np.zeros(1, dtype=np.float32)
     sdfg(x=x, y=y)
@@ -119,10 +118,10 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
-    assert 'a' not in sdfg.arglist() and 'a' not in getattr(sdfg, 'constants', {})
+    sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    assert "a" not in sdfg.arglist() and "a" not in getattr(sdfg, "constants", {})
     # Fortran column-major: a(1,1)=1 a(2,1)=2 a(1,2)=3 a(2,2)=4 a(1,3)=5 a(2,3)=6 -> leading stride 1.
-    assert int(sdfg.arrays['a'].strides[0]) == 1, "const array transient must be Fortran (column-major) laid out"
+    assert int(sdfg.arrays["a"].strides[0]) == 1, "const array transient must be Fortran (column-major) laid out"
     for ii, jj, exp in [(1, 2, 103.0), (2, 1, 2.0), (1, 1, 1.0), (2, 3, 6.0), (1, 3, 5.0)]:
         y = np.zeros(1, dtype=np.float32)
         sdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)

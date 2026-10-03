@@ -12,6 +12,7 @@ The pass collapses this into an explicit section designate %parent(lo:lo+N-1:1) 
 section-aware lowering takes over. Tests exercise the pass at the IR level, independent of
 SDFG codegen.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -21,18 +22,21 @@ from _util import build_sdfg, compile_to_hlfir, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
-_PRELUDE = ("lower-fir-select-case,hlfir-inline-all,hlfir-fold-element-aliases,"
-            "hlfir-expand-vector-subscript-gather,hlfir-expand-vector-subscript-scatter,symbol-dce,"
-            "fir-polymorphic-op,hlfir-reject-polymorphism")
+_PRELUDE = (
+    "lower-fir-select-case,hlfir-inline-all,hlfir-fold-element-aliases,"
+    "hlfir-expand-vector-subscript-gather,hlfir-expand-vector-subscript-scatter,symbol-dce,"
+    "fir-polymorphic-op,hlfir-reject-polymorphism"
+)
 _REWRITE = "hlfir-rewrite-sequence-association"
 
 
 def _run(source: str, out_dir: Path, name: str, extra: str = ""):
     from dace_fortran.build_bridge import hb
+
     hlfir = compile_to_hlfir(source, out_dir, name)
     m = hb.HLFIRModule()
     assert m.parse_file(str(hlfir))
-    m.set_entry_symbol('main')
+    m.set_entry_symbol("main")
     m.run_passes(_PRELUDE)
     before = m.dump()
     m.run_passes(_REWRITE + (("," + extra) if extra else ""))
@@ -44,12 +48,12 @@ def _count_seq_adapter(ir: str) -> int:
     """Count rank-0 -> rank-1 ``fir.convert`` adapter shapes in the IR."""
     n = 0
     for line in ir.splitlines():
-        if 'fir.convert' not in line:
+        if "fir.convert" not in line:
             continue
         # Pattern: "(!fir.ref<T>) -> !fir.ref<!fir.array<?xT>>"
-        if 'ref<!fir.array' in line and '!fir.ref<f' in line.split('->')[0]:
+        if "ref<!fir.array" in line and "!fir.ref<f" in line.split("->")[0]:
             n += 1
-        elif 'ref<!fir.array' in line and '!fir.ref<i' in line.split('->')[0]:
+        elif "ref<!fir.array" in line and "!fir.ref<i" in line.split("->")[0]:
             n += 1
     return n
 
@@ -80,9 +84,9 @@ end subroutine main
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
     # Section designate of constant shape <5> appears.
-    assert 'fir.array<5xf32>' in after
+    assert "fir.array<5xf32>" in after
     # Triplet form: lo:hi:1 with hi = 11 + (5 - 1).
-    assert ' (%c11' in after  # lower bound is the original element index
+    assert " (%c11" in after  # lower bound is the original element index
 
 
 def test_pass_is_noop_without_seq_adapter(tmp_path):
@@ -155,7 +159,7 @@ end subroutine main
     before, after = _run(src, tmp_path, "seq_arith")
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
-    assert 'fir.array<7xf32>' in after
+    assert "fir.array<7xf32>" in after
 
 
 def test_module_parameter_constant_extent(tmp_path):
@@ -183,7 +187,7 @@ end subroutine main
     before, after = _run(src, tmp_path, "seq_param")
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
-    assert 'fir.array<8xf32>' in after
+    assert "fir.array<8xf32>" in after
 
 
 def test_runtime_symbolic_extent_emits_dynamic_section(tmp_path):
@@ -209,10 +213,9 @@ end subroutine main
 """
     before, after = _run(src, tmp_path, "seq_symbolic")
     assert _count_seq_adapter(before) >= 1
-    assert _count_seq_adapter(after) == 0, (
-        "runtime-symbolic should still rewrite into a section, not leave the adapter")
+    assert _count_seq_adapter(after) == 0, "runtime-symbolic should still rewrite into a section, not leave the adapter"
     # Triplet section view of unknown extent.
-    assert 'fir.box<!fir.array<?xf32>>' in after
+    assert "fir.box<!fir.array<?xf32>>" in after
 
 
 def test_qe_blas_pattern_2d_element_to_1d_column(tmp_path):
@@ -241,10 +244,10 @@ end subroutine main
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
     # Triplet-on-dim-1 + scalar-on-dim-2: ``(%c1:%c8:%c1, j)``.
-    assert 'fir.array<8xf32>' in after
+    assert "fir.array<8xf32>" in after
     # Both element-form d(1,j) and rewritten section d(1:8:1,j) may appear; we only require
     # a triplet section over the rank-2 parent with a fixed scalar second index.
-    section_lines = [ln for ln in after.splitlines() if 'hlfir.designate' in ln and 'fir.array<8xf32>' in ln]
+    section_lines = [ln for ln in after.splitlines() if "hlfir.designate" in ln and "fir.array<8xf32>" in ln]
     assert section_lines, f"no section designate of array<8xf32>:\n{after}"
 
 
@@ -273,7 +276,7 @@ end subroutine main
     before, after = _run(src, tmp_path, "seq_offset")
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
-    assert 'fir.array<4xf32>' in after
+    assert "fir.array<4xf32>" in after
 
 
 def test_multidim_column_element_access_e2e(tmp_path):
@@ -298,7 +301,7 @@ contains
 end module seqassoc2d_mod
 """
     sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="seqassoc2d_mod::apply").build()
-    a = np.arange(1, 13, dtype=np.float32).reshape(3, 4, order='F').copy(order='F')
+    a = np.arange(1, 13, dtype=np.float32).reshape(3, 4, order="F").copy(order="F")
     out = np.zeros(1, dtype=np.float32)
     sdfg(a=a, out=out)
     # a(1,2) + 2*a(2,2) + 3*a(3,2) -- proves the column section composed right.

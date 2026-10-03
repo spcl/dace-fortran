@@ -12,6 +12,7 @@ the ``_MPI_STUB`` ``module mpi`` and giving ``mo_mpi`` a ``use mpi`` so one
 
 Marked ``long``: builds the 3166-LoC dycore to an SDFG (minutes).
 """
+
 import shutil
 from pathlib import Path
 
@@ -53,8 +54,7 @@ def test_solve_nh_binding_compiles(tmp_path: Path):
     stub.write_text(_MPI_STUB)
 
     # prelude_sources compile left-to-right before the binding -- stub (module mpi) must precede the TU that uses it.
-    lib = build_fortran_library(sdfg,
-                                out_dir=str(tmp_path / "lib"),
-                                prelude_sources=[stub, use_mpi_tu],
-                                bind_c_shim=True)
+    lib = build_fortran_library(
+        sdfg, out_dir=str(tmp_path / "lib"), prelude_sources=[stub, use_mpi_tu], bind_c_shim=True
+    )
     assert Path(lib.so_path).exists(), "binding .so was not produced"

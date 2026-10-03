@@ -21,6 +21,7 @@ independently built bindings instead.
 No specialize: this kernel maps without it. ``scalar_fission`` is no longer a caller knob -- it
 always runs as part of the pipeline.
 """
+
 import copy
 import ctypes
 import shutil
@@ -70,7 +71,8 @@ def binding_entry(sdfg, plan, src_path: Path, out: Path, lib_name: str):
         extra_sources=[vexx._CALLER, driver_path],
         # pruned qvan2 has an implicit-interface COMPLEX->REAL arg-kind mismatch (qg) behind
         # IF(okvan) -- never run on the no-op path.
-        extra_flags=["-fallow-argument-mismatch"])
+        extra_flags=["-fallow-argument-mismatch"],
+    )
 
     fn = lib.load().run_vexx_dace_c
     fn.restype = None
@@ -118,7 +120,8 @@ def test_vexx_pipeline_numerical_e2e(tmp_path, e2e_cpu_args):
 
     # The pipeline reorders statements and forms maps but never reassociates arithmetic, and the
     # e2e flags pin FMA contraction off -- so anything short of bit-identical is a bug.
-    assert np.array_equal(hpsi_dace, hpsi_pre), ("optimize() changed the numerics (must be bit-exact): "
-                                                 f"max|d|={np.abs(hpsi_dace - hpsi_pre).max():.6e}")
+    assert np.array_equal(hpsi_dace, hpsi_pre), (
+        f"optimize() changed the numerics (must be bit-exact): max|d|={np.abs(hpsi_dace - hpsi_pre).max():.6e}"
+    )
 
     np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-11, atol=1e-11)

@@ -3,6 +3,7 @@
 """Build environment for the Fortran-I/O library nodes: compiles the shipped
 ``dace_fortran_io.f90`` wrappers into the program and links ``libgfortran``.
 """
+
 import os
 from typing import ClassVar
 
@@ -15,7 +16,6 @@ LIB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @dace.library.environment
 class FortranIO:
-
     cmake_minimum_version = None
     cmake_packages: ClassVar[list[str]] = []
     cmake_variables: ClassVar[dict[str, str]] = {}

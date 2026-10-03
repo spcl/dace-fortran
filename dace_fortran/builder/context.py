@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class Ctx:
     """Tracks the current state and pending scalar assignments."""
 
-    __slots__ = ('sdfg', 'builder', 'cur', 'pending', 'iter_map', 'mpi_req_posts', 'cond_cache')
+    __slots__ = ("sdfg", "builder", "cur", "pending", "iter_map", "mpi_req_posts", "cond_cache")
 
     sdfg: SDFG
     builder: Any
@@ -57,10 +57,11 @@ class Ctx:
         # Explicit None check: SDFGState/LoopRegion define __len__ returning 0
         # when empty, so ``not self.cur`` would misfire on a fresh state.
         from dace.sdfg.state import SDFGState
+
         if self.cur is None:
             r = self.sdfg if region is None else region
             # First state in an empty region must set start_block, or DaCe's validator errors.
-            is_start = (len(r.nodes()) == 0)
+            is_start = len(r.nodes()) == 0
             self.cur = r.add_state(f"s_{self.builder.nid()}", is_start_block=is_start)
             return
         # Non-SDFGState control-flow block (ConditionalBlock, LoopRegion, ...) needs
@@ -88,10 +89,9 @@ class Ctx:
         self.ensure(region)
         return self.cur
 
-    def new_state(self,
-                  builder: SDFGBuilder,
-                  region: ControlFlowRegion | None = None,
-                  label: str | None = None) -> SDFGState:
+    def new_state(
+        self, builder: SDFGBuilder, region: ControlFlowRegion | None = None, label: str | None = None
+    ) -> SDFGState:
         """Flush pending assignments, then open a fresh successor state."""
         self.flush(builder, region)
         r = self.sdfg if region is None else region

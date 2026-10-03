@@ -13,6 +13,7 @@ explicit reduction loop instead (``buildDdotDynamicSliceNodes``).
 These tests pin (1) the SDFG builds + validates and (2) the lowered loop is
 numerically exact against the gfortran/f2py reference.
 """
+
 import shutil
 import subprocess
 import sys
@@ -50,8 +51,8 @@ def _f2py_ref(tmp_path: Path):
     src = out_dir / "probe_ddot.f90"
     src.write_text(_SRC)
     subprocess.check_call(
-        [sys.executable, "-m", "numpy.f2py", "-c",
-         str(src), "-m", "probe_ddot_ref", "-lblas", "--quiet"], cwd=out_dir)
+        [sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", "probe_ddot_ref", "-lblas", "--quiet"], cwd=out_dir
+    )
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
     __import__("probe_ddot_ref")

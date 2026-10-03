@@ -20,6 +20,7 @@ Scaling to ``velocity_tendencies``: register each derived-type arg with
 pointers verbatim -- the inner's ``bind_c_shim`` already receives per-member slots, so
 the two sides agree by construction without an intermediate shim.
 """
+
 import ctypes
 import shutil
 from pathlib import Path
@@ -120,8 +121,8 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
             OriginalArg(name="a", fortran_type="real(c_double)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
-            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="inout"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n",), intent="in"),
+            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n",), intent="inout"),
         ),
     )
     inner_lib = build_fortran_library(
@@ -144,7 +145,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
             Arg(kind="array", dtype="float64", intent="in"),
             Arg(kind="array", dtype="float64", intent="inout"),
         ),
-        libraries=(str(inner_lib.so_path), ),
+        libraries=(str(inner_lib.so_path),),
     )
     try:
         outer_dir = tmp_path / "outer"

@@ -7,6 +7,7 @@ materialises the reduction into a boolean scalar BEFORE the branch
 inlined into the condition tasklet (which produced a malformed multi-dim
 memlet for QE's ``IF (ALL(odg(:)))``).
 """
+
 import numpy as np
 import pytest
 
@@ -19,12 +20,15 @@ def _libnode_names(sdfg):
     return {type(n).__name__ for st in sdfg.all_states() for n in st.nodes()}
 
 
-@pytest.mark.parametrize("op,x,expected", [
-    ("ALL", [1.0, 2.0, 3.0], True),
-    ("ALL", [1.0, -1.0, 3.0], False),
-    ("ANY", [-1.0, -2.0, -3.0], False),
-    ("ANY", [-1.0, 2.0, -3.0], True),
-])
+@pytest.mark.parametrize(
+    "op,x,expected",
+    [
+        ("ALL", [1.0, 2.0, 3.0], True),
+        ("ALL", [1.0, -1.0, 3.0], False),
+        ("ANY", [-1.0, -2.0, -3.0], False),
+        ("ANY", [-1.0, 2.0, -3.0], True),
+    ],
+)
 def test_allany_assignment_emits_libnode(tmp_path, op, x, expected):
     """``res = ALL/ANY(mask)`` lowers to the AllNode/AnyNode and returns a boolean."""
     src = f"""
@@ -53,12 +57,15 @@ END MODULE s_mod
     assert bool(res[0]) == expected
 
 
-@pytest.mark.parametrize("op,x,expected", [
-    ("ALL", [1.0, 2.0, 3.0], 1),
-    ("ALL", [1.0, -1.0, 3.0], 0),
-    ("ANY", [-1.0, -2.0, -3.0], 0),
-    ("ANY", [-1.0, 2.0, -3.0], 1),
-])
+@pytest.mark.parametrize(
+    "op,x,expected",
+    [
+        ("ALL", [1.0, 2.0, 3.0], 1),
+        ("ALL", [1.0, -1.0, 3.0], 0),
+        ("ANY", [-1.0, -2.0, -3.0], 0),
+        ("ANY", [-1.0, 2.0, -3.0], 1),
+    ],
+)
 def test_allany_in_if_condition(tmp_path, op, x, expected):
     """``IF (ALL/ANY(mask))`` materialises a boolean scalar via the libnode and branches on it."""
     src = f"""

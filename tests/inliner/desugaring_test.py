@@ -61,6 +61,7 @@ def test_interleaved_statement_functions_extract_end_to_end():
     deconstruct into internal FUNCTIONs and the TU is emitted."""
     tu = inline_to_single_tu(sources={"m.f90": _INTERLEAVED_STMT_FN_SRC}, entry="m::stf")
     from pathlib import Path
+
     text = Path(tu).read_text() if not isinstance(tu, str) else tu
     low = text.lower()
     assert "function foedelta" in low and "function foeew" in low
@@ -73,6 +74,7 @@ def test_force_double_precision_collapses_real_kinds():
     (the SC2026 CLOUDSC ``JPRM``/``JPRL`` family) lowers at uniform fp64 -- no
     ``REAL(KIND=4)`` survives while integer kinds are untouched."""
     from pathlib import Path
+
     src = """
 module m
   implicit none
@@ -136,6 +138,7 @@ def test_make_noop_drops_calls_and_prunes_stub():
     import of the f2py reference leg segfaults; CLOUDSC's PERFORMANCE_TIMER
     stubs hit exactly this.)"""
     from pathlib import Path
+
     tu = inline_to_single_tu(sources={"m.f90": _TIMER_LIKE_SRC}, entry="dmod::drv", make_noop=[("tmod", "p_start")])
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     assert "p_start" not in text
@@ -148,6 +151,7 @@ def test_keep_external_stub_keeps_calls():
     those calls are real (an external implementation or the bridge serves
     them).  Only the explicit make_noop path is a droppable no-op."""
     from pathlib import Path
+
     src = """
 module emod
 contains
@@ -168,7 +172,7 @@ subroutine drv2(x)
 end subroutine drv2
 end module dmod2
 """
-    tu = inline_to_single_tu(sources={"m.f90": src}, entry="dmod2::drv2", do_not_emit=("ext_impl", ))
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="dmod2::drv2", do_not_emit=("ext_impl",))
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     assert "call ext_impl" in text
 
@@ -179,6 +183,7 @@ def test_pruned_memberless_type_gets_placeholder():
     questionable Fortran and makes numpy f2py's module wrapper NULL (import
     segfault)."""
     from pathlib import Path
+
     src = """
 module pmod
   implicit none
@@ -194,10 +199,9 @@ subroutine use_holder(x)
 end subroutine use_holder
 end module pmod
 """
-    tu = inline_to_single_tu(sources={"m.f90": src},
-                             entry="pmod::use_holder",
-                             do_not_prune_type_components=False,
-                             f2py_safe=True)
+    tu = inline_to_single_tu(
+        sources={"m.f90": src}, entry="pmod::use_holder", do_not_prune_type_components=False, f2py_safe=True
+    )
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     # Either the type pruned away entirely (no variable left referencing it)
     # or, if it survived, it must not be memberless.
@@ -209,7 +213,9 @@ def test_procedure_replacer():
     """
     Tests that type-bound procedures are correctly replaced with standard subroutine calls.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -245,7 +251,10 @@ subroutine main
   a = s%area_alt(1.0)
   call s%get_area(a)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -299,7 +308,9 @@ def test_procedure_replacer_inherited_type_bound():
     inherited access (``child % member``): an inherited type-bound FUNCTION call
     then crashed component resolution in ``correct_for_function_calls``.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module base_mod
   implicit none
   type :: t_base
@@ -331,7 +342,10 @@ subroutine main(obj, i, out)
   integer, intent(out) :: out
   out = obj%gid(i) + obj%a + obj%b
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     # The pass that crashed pre-fix on the inherited type-bound function call.
     ast = cleanup.correct_for_function_calls(ast)
@@ -350,7 +364,9 @@ def test_procedure_replacer_overrides_inherited_type_bound():
     resolves to the child's own procedure, not the parent's.  Guards the direct
     inherited-access registration against clobbering a member the child declares
     itself."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module base_mod
   implicit none
   type :: t_base
@@ -390,7 +406,10 @@ subroutine main(obj, i, out)
   integer, intent(out) :: out
   out = obj%gid(i)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = cleanup.correct_for_function_calls(ast)
     ast = desugaring.deconstruct_procedure_calls(ast)
@@ -406,7 +425,9 @@ def test_procedure_replacer_nested():
     """
     Tests that nested type-bound procedures are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Value
@@ -444,7 +465,10 @@ subroutine main
   s%side%val = 1.0
   a = s%get_area(1.0)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -491,7 +515,9 @@ def test_procedure_replacer_name_collision_with_exisiting_var():
     """
     Tests that procedure replacement handles name collisions with existing variables.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -517,7 +543,10 @@ subroutine main
   s%side = 1.0
   area = s%area(1.0)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -554,7 +583,9 @@ def test_procedure_replacer_name_collision_with_another_import():
     """
     Tests that procedure replacement handles name collisions with other imports.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib_1
   implicit none
   type Square
@@ -600,7 +631,10 @@ subroutine main
   c%rad = 1.0
   area = c%area(1.0)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -655,7 +689,9 @@ def test_generic_replacer():
     """
     Tests that generic procedures are correctly replaced based on the argument types.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -692,7 +728,10 @@ subroutine main
   a = s%g_area(mr)
   a = s%g_area(mi)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -740,7 +779,9 @@ def test_association_replacer():
     Tests that the `ASSOCIATE` construct is correctly replaced by substituting
     the associated name with the original expression.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -767,7 +808,10 @@ subroutine main
     a = area(s, 1.0)
   end associate
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_associations(ast)
 
@@ -804,7 +848,9 @@ def test_association_replacer_array_access():
     """
     Tests that `ASSOCIATE` constructs with array accesses are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -835,7 +881,10 @@ subroutine main
     a = s%area(1.0)
   end associate
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_enums(ast)
     ast = desugaring.deconstruct_associations(ast)
@@ -878,7 +927,9 @@ def test_association_replacer_array_access_within_array_access():
     Tests that `ASSOCIATE` constructs with array accesses within array accesses
     are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type Square
@@ -909,7 +960,10 @@ subroutine main
     a = s%area(1.0)
   end associate
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_associations(ast)
     ast = desugaring.deconstruct_procedure_calls(ast)
@@ -950,7 +1004,9 @@ def test_enum_bindings_become_constants():
     """
     Tests that `ENUM` bindings are converted to integer constants.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main
   implicit none
   integer, parameter :: k = 42
@@ -964,7 +1020,10 @@ subroutine main
     enumerator :: g = k, h = k, i = k + 1
   end enum
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_enums(ast)
 
@@ -992,7 +1051,9 @@ def test_aliasing_through_module_procedure():
     """
     Tests that aliasing through module procedures is handled correctly.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   interface fun
@@ -1011,7 +1072,10 @@ subroutine main
   real d(4)
   d(2) = fun()
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_associations(ast)
     ast = cleanup.correct_for_function_calls(ast)
@@ -1045,7 +1109,9 @@ def test_interface_replacer_with_module_procedures():
     """
     Tests that interfaces with module procedures are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   interface fun
@@ -1082,7 +1148,10 @@ subroutine main
   call not_fun(d(3))
   d(4) = same_name(2.0)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
 
@@ -1132,7 +1201,9 @@ def test_interface_replacer_with_subroutine_decls():
     """
     Tests that interfaces with subroutine declarations are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   interface
@@ -1155,7 +1226,10 @@ subroutine fun(z)
   real, intent(out) :: z
   z = 1.0
 end subroutine fun
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
 
@@ -1189,7 +1263,9 @@ def test_interface_replacer_with_optional_args():
     """
     Tests that interfaces with optional arguments are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   interface fun
@@ -1220,7 +1296,10 @@ subroutine main
   d(3) = fun(x=4)
   d(4) = fun(x=5.0)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
 
@@ -1264,7 +1343,9 @@ def test_interface_replacer_with_keyworded_args():
     """
     Tests that interfaces with keyworded arguments are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   interface fun
@@ -1293,7 +1374,10 @@ subroutine main
   d(2) = fun(y=1.1, w=3.1)  ! only required ones, keyworded
   d(3) = fun(1.2, 2.2, y=3.2)  ! partially keyworded, last optional omitted.
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
 
@@ -1335,7 +1419,9 @@ def test_generic_replacer_deducing_array_types():
     """
     Tests that generic procedures with array types are correctly replaced.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module lib
   implicit none
   type T
@@ -1381,7 +1467,10 @@ subroutine main
   call s%copy(b(:, :))
   call s%copy(s1%val(:, 1))
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_procedure_calls(ast)
 
@@ -1439,7 +1528,9 @@ def test_convert_data_statements_into_assignments():
     """
     Tests that DATA statements are converted to assignments.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine fun(res)
   implicit none
   real :: val = 0.0
@@ -1456,7 +1547,10 @@ subroutine main(res)
   real, dimension(2) :: res
   call fun(res)
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.convert_data_statements_into_assignments(ast)
 
@@ -1488,7 +1582,9 @@ def test_deconstruct_statement_functions():
     """
     Tests that statement functions are deconstructed into proper functions.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main(d)
   double precision d(3, 4, 5)
   double precision :: ptare, rtt(2), foedelta, foeldcp
@@ -1502,7 +1598,10 @@ subroutine main(d)
   res = foeldcp(3.d0)
   d(1, 1, 2) = res
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_statement_functions(ast)
 
@@ -1544,7 +1643,9 @@ def test_goto_statements():
     Tests that GOTO statements are correctly deconstructed into structured
     control flow, in this case by using boolean flags and IF statements.
     """
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main(d)
   implicit none
   real, intent(inout) :: d
@@ -1570,7 +1671,10 @@ subroutine main(d)
 10002 continue
   d = 7.1*i
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     # Upstream (f2dace-windmill-qe-additions) renamed the typo'd
     # ``deconstuct_goto_statements`` to ``deconstruct_goto_statements`` and
@@ -1626,8 +1730,10 @@ def test_operator_overloading():
     """
     Tests that operator overloading is handled correctly.
     """
-    sources, _ = (SourceCodeBuilder().add_file(
-        """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(
+            """
 module lib
   type cmplx
     real :: r = 1., i = 2.
@@ -1650,8 +1756,11 @@ subroutine main
   b = a + a
 end subroutine main
 """,
-        "main",
-    ).check_with_gfortran().get())
+            "main",
+        )
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
 
     got = ast.tofortran()
@@ -1712,7 +1821,9 @@ def test_generic_resolution_matches_exact_real_kind():
     actual width), so a REAL(8) dummy also matched a REAL(4) actual; with
     first-match resolution an sp argument wrongly bound the dp specific (ICON's
     mixed-precision halo `p_isend(send_buf_sp, ...)` -> p_isend_dp type mismatch)."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module m
   implicit none
   integer, parameter :: sp = 4, dp = 8
@@ -1737,7 +1848,10 @@ contains
     call p_isend(dbuf, n)
   end subroutine
 end module
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
     got = ast.tofortran().lower()
@@ -1753,7 +1867,9 @@ def test_interface_replacer_reverts_unresolvable_generic():
     have its temporary ``<name>_deconiface_tmp`` rename REVERTED, leaving the
     original generic name (valid Fortran resolved by the compiler), not a dangling
     ``_deconiface_tmp`` symbol."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 module ext
   implicit none
   interface op  ! external generic: no candidate to resolve to
@@ -1769,7 +1885,9 @@ contains
     x = op(x)
   end subroutine
 end module use_ext
-""").get())
+""")
+        .get()
+    )
     ast = parse_and_improve(sources)
     ast = desugaring.deconstruct_interface_calls(ast)
     got = ast.tofortran().lower()

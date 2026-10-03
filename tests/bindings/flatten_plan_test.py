@@ -17,8 +17,8 @@ from dace_fortran.bindings import (
 def _real_alias_recipe() -> FlattenRecipe:
     """``fld%a`` -> one flat ``fld_a``, aliased."""
     return FlattenRecipe(
-        flat_names=("fld_a", ),
-        read_exprs=("fld%a($i1, $i2)", ),
+        flat_names=("fld_a",),
+        read_exprs=("fld%a($i1, $i2)",),
         rank=2,
         shape_exprs=("size(fld%a, dim=1)", "size(fld%a, dim=2)"),
         aliasable=True,
@@ -41,12 +41,16 @@ def _complex_split_recipe() -> FlattenRecipe:
 
 
 def test_json_roundtrip_single_recipe(tmp_path: Path):
-    plan = FlattenPlan(entries=(FlattenEntry(
-        outer_expr="fld%a",
-        outer_type="real(c_double)",
-        writeback_intent="",
-        recipe=_real_alias_recipe(),
-    ), ))
+    plan = FlattenPlan(
+        entries=(
+            FlattenEntry(
+                outer_expr="fld%a",
+                outer_type="real(c_double)",
+                writeback_intent="",
+                recipe=_real_alias_recipe(),
+            ),
+        )
+    )
     p = tmp_path / "plan.json"
     plan.to_json(str(p))
     assert FlattenPlan.from_json(str(p)) == plan
@@ -55,18 +59,23 @@ def test_json_roundtrip_single_recipe(tmp_path: Path):
 def test_json_roundtrip_mixed_plan(tmp_path: Path):
     """Alias + complex-split + nested-struct recipes round-trip together."""
     nested_alias = FlattenRecipe(
-        flat_names=("st_a_v", ),
-        read_exprs=("st%a%v($i1, $i2)", ),
+        flat_names=("st_a_v",),
+        read_exprs=("st%a%v($i1, $i2)",),
         rank=2,
         shape_exprs=("size(st%a%v, dim=1)", "size(st%a%v, dim=2)"),
         aliasable=True,
     )
-    plan = FlattenPlan(entries=(
-        FlattenEntry(outer_expr="st%a%v", outer_type="real(c_double)", writeback_intent="", recipe=nested_alias),
-        FlattenEntry(
-            outer_expr="st%z", outer_type="complex(c_double)", writeback_intent="inout",
-            recipe=_complex_split_recipe()),
-    ))
+    plan = FlattenPlan(
+        entries=(
+            FlattenEntry(outer_expr="st%a%v", outer_type="real(c_double)", writeback_intent="", recipe=nested_alias),
+            FlattenEntry(
+                outer_expr="st%z",
+                outer_type="complex(c_double)",
+                writeback_intent="inout",
+                recipe=_complex_split_recipe(),
+            ),
+        )
+    )
     p = tmp_path / "plan.json"
     plan.to_json(str(p))
     assert FlattenPlan.from_json(str(p)) == plan
@@ -100,8 +109,7 @@ def test_strip_index_args_non_indexed_passthrough():
     """A recipe read_expr that's already a plain path shouldn't be
     mangled (used for symbols or scalars that get aliased as-is)."""
     assert strip_index_args("fld%a") == "fld%a"
-    assert strip_index_args("real(st%z($i1,$i2), kind=c_double)") == \
-           "real(st%z($i1,$i2), kind=c_double)"
+    assert strip_index_args("real(st%z($i1,$i2), kind=c_double)") == "real(st%z($i1,$i2), kind=c_double)"
 
 
 def test_empty_plan_roundtrip(tmp_path: Path):

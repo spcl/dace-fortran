@@ -26,10 +26,15 @@ class _ExponentIntegerizer(ast.NodeTransformer):
     def _as_int_constant(node: ast.expr) -> Optional[ast.expr]:
         """Int-valued replacement for a float ``**`` exponent (``2.0`` or
         ``-2.0``), or ``None`` if not integer-valued. Sign folds into the int."""
-        if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
-                and isinstance(node.operand.value, float) and node.operand.value.is_integer()):
+        if (
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, float)
+            and node.operand.value.is_integer()
+        ):
             return ast.copy_location(ast.Constant(value=-int(node.operand.value)), node)
-        if (isinstance(node, ast.Constant) and isinstance(node.value, float) and node.value.is_integer()):
+        if isinstance(node, ast.Constant) and isinstance(node.value, float) and node.value.is_integer():
             return ast.copy_location(ast.Constant(value=int(node.value)), node)
         return None
 

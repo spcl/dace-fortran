@@ -62,8 +62,7 @@ def test_explicit_shape_offsets_not_poisoned(tmp_path: Path):
     offsets = {k: int(v) for k, v in consts.items() if k.startswith("offset_")}
     assert offsets, "expected per-dim offset constants"
     bad = {k: v for k, v in offsets.items() if v != 1}
-    assert not bad, (f"explicit-shape arrays must have offset 1 in every dim; "
-                     f"poisoned offsets: {bad}")
+    assert not bad, f"explicit-shape arrays must have offset 1 in every dim; poisoned offsets: {bad}"
 
     ref = f2py_compile(_SRC, ref_dir, "mixed_idx_ref")
 

@@ -34,7 +34,9 @@ subroutine unused_helper(x, n)
     x(i) = x(i) + 1.0d0
   end do
 end subroutine
-""", tmp_path / "a.hlfir")
+""",
+        tmp_path / "a.hlfir",
+    )
     _hlfir(
         """
 subroutine kernel(x, n)
@@ -45,13 +47,14 @@ subroutine kernel(x, n)
     x(i) = dble(i)
   end do
 end subroutine
-""", tmp_path / "b.hlfir")
+""",
+        tmp_path / "b.hlfir",
+    )
 
     b = SDFGBuilder.from_files([str(tmp_path / "a.hlfir"), str(tmp_path / "b.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
     # list_functions reports mangled flang IR symbols; only entry= is plain.
-    assert remaining == ["_QPkernel"], \
-        f"symbol-dce should have dropped unused_helper; got {remaining}"
+    assert remaining == ["_QPkernel"], f"symbol-dce should have dropped unused_helper; got {remaining}"
     sdfg = b.build()
     assert sdfg.name == "kernel"
     assert "x" in sdfg.arrays
@@ -74,7 +77,9 @@ subroutine caller(x, n)
   end interface
   call external_helper(x, n)
 end subroutine
-""", tmp_path / "caller.hlfir")
+""",
+        tmp_path / "caller.hlfir",
+    )
     with pytest.raises(RuntimeError, match="pipeline failed"):
         SDFGBuilder.from_files([str(tmp_path / "caller.hlfir")], entry="caller")
 
@@ -89,7 +94,9 @@ subroutine foo(x, n)
   real(8), intent(inout) :: x(n)
   x(1) = 0.0d0
 end subroutine
-""", tmp_path / "foo.hlfir")
+""",
+        tmp_path / "foo.hlfir",
+    )
     with pytest.raises(RuntimeError, match="no Fortran procedure|not found|dropped"):
         SDFGBuilder.from_files([str(tmp_path / "foo.hlfir")], entry="nonexistent")
 
@@ -107,7 +114,9 @@ subroutine helper(x, n)
     x(i) = x(i) * 2.0d0
   end do
 end subroutine
-""", tmp_path / "helper.hlfir")
+""",
+        tmp_path / "helper.hlfir",
+    )
     _hlfir(
         """
 subroutine kernel(x, n)
@@ -125,14 +134,15 @@ subroutine kernel(x, n)
   end do
   call helper(x, n)
 end subroutine
-""", tmp_path / "kernel.hlfir")
+""",
+        tmp_path / "kernel.hlfir",
+    )
 
     b = SDFGBuilder.from_files([str(tmp_path / "kernel.hlfir"), str(tmp_path / "helper.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
     assert remaining == ["_QPkernel"], f"helper should have inlined + dce'd; got {remaining}"
     dump = b.module.dump()
-    assert "2.000000e+00" in dump, \
-        "helper's x(i) * 2.0d0 should appear inlined inside kernel"
+    assert "2.000000e+00" in dump, "helper's x(i) * 2.0d0 should appear inlined inside kernel"
 
 
 def test_parse_files_declaration_loses_to_definition(tmp_path: Path):
@@ -152,7 +162,9 @@ subroutine kernel(x, n)
   end interface
   call shared(x, n)
 end subroutine
-""", tmp_path / "caller.hlfir")
+""",
+        tmp_path / "caller.hlfir",
+    )
     _hlfir(
         """
 subroutine shared(x, n)
@@ -160,7 +172,9 @@ subroutine shared(x, n)
   real(8), intent(inout) :: x(n)
   x(1) = 99.0d0
 end subroutine
-""", tmp_path / "shared.hlfir")
+""",
+        tmp_path / "shared.hlfir",
+    )
     b = SDFGBuilder.from_files([str(tmp_path / "caller.hlfir"), str(tmp_path / "shared.hlfir")], entry="kernel")
     # Definition wins: inline-all folds shared into kernel, symbol-dce drops helper.
     # 99.0 proves the real definition was used (else verify-no-unresolved-calls would error).

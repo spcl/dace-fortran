@@ -1,6 +1,7 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Type aliases for DaCe call signatures whose declared parameter types are invariant containers."""
+
 from __future__ import annotations
 
 from typing import Any, Callable, Iterable, TypeAlias, TypeVar, cast

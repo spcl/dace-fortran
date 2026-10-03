@@ -10,6 +10,7 @@ the LHS root aliases the RHS gather root -- the root must be the DATA array
 Repro: a rotate (idx_w=[2,3,4,1], idx_r=[1,2,3,4]).  Without the temp the
 sequential writes cascade the first value into every slot.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,7 @@ subroutine rot(a, idx_w, idx_r)
   a(idx_w) = a(idx_r)
 end subroutine rot
 """
-    sdfg = build_sdfg(src, tmp_path, name='rot').build()
+    sdfg = build_sdfg(src, tmp_path, name="rot").build()
     a = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64)
     idx_w = np.array([2, 3, 4, 1], dtype=np.int32)
     idx_r = np.array([1, 2, 3, 4], dtype=np.int32)
@@ -51,7 +52,7 @@ subroutine rev(a, idx_w, idx_r)
   a(idx_w) = a(idx_r)
 end subroutine rev
 """
-    sdfg = build_sdfg(src, tmp_path, name='rev').build()
+    sdfg = build_sdfg(src, tmp_path, name="rev").build()
     a = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64)
     idx_w = np.array([4, 3, 2, 1], dtype=np.int32)
     idx_r = np.array([1, 2, 3, 4], dtype=np.int32)

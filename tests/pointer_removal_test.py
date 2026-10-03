@@ -27,12 +27,12 @@ SUBROUTINE type_in_call_test_function(d)
     d(2,1) = max(1.0, tmp)
 END SUBROUTINE type_in_call_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="type_in_call_test_function").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 13)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 13
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_ptr_assignment_removal_array(tmp_path):
@@ -54,12 +54,12 @@ SUBROUTINE type_in_call_test_function(d)
     d(2,1) = max(1.0, tmp(1,1,1))
 END SUBROUTINE type_in_call_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="type_in_call_test_function").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42
 
 
 def test_fortran_frontend_ptr_assignment_removal_array_assumed(tmp_path):
@@ -90,12 +90,12 @@ SUBROUTINE type_in_call_test_function(d)
 
 END SUBROUTINE type_in_call_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function', entry='type_in_call_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="type_in_call_test_function", entry="type_in_call_test_function").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 1410)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 1410
 
 
 def test_fortran_frontend_ptr_assignment_removal_array_nested(tmp_path):
@@ -121,9 +121,9 @@ SUBROUTINE type_in_call_test_function(d)
     d(2,1) = tmp(1,1,1)
 END SUBROUTINE type_in_call_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="type_in_call_test_function").build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 11)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 11
+    assert a[2, 0] == 42

@@ -21,29 +21,25 @@ Fortran body on a deep clone and reports bit-exact differences per call
 All work happens under a configurable scratch root; the ICON source tree is
 restored to pristine on exit so the live submodule is not left patched.
 """
+
 import argparse
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional
 
 import netCDF4
 import numpy as np
 
+from tests.icon.full._icon_solve_nh_patch import write_patched_solve_nh
+
 _HERE = Path(__file__).resolve().parent
 _DACE_FORTRAN = _HERE.parent
 _TESTS_ICON_FULL = _DACE_FORTRAN / "tests" / "icon" / "full"
 
-sys.path.insert(0, str(_DACE_FORTRAN / "tests"))
-from icon.full._icon_solve_nh_patch import (
-    SOLVE_NH_WRAPPER_NAME,
-    write_patched_solve_nh,
-)
-from icon.full._icon_build import ensure_icon_built
 
 #: Default experiment from the ICON source tree.
 _EXP = "exclaim_ape_R02B04"
@@ -74,15 +70,17 @@ def _stage_runscript_helpers(icon_src: Path, build_dir: Path):
             dst.symlink_to(entry)
 
 
-def _build_icon(label: str,
-                icon_src: Path,
-                build_dir: Path,
-                dace_libs_dir: Optional[Path] = None,
-                patched: bool = False,
-                dace_only: bool = True,
-                fresh: bool = False,
-                jobs: int = 1,
-                reuse: bool = False):
+def _build_icon(
+    label: str,
+    icon_src: Path,
+    build_dir: Path,
+    dace_libs_dir: Optional[Path] = None,
+    patched: bool = False,
+    dace_only: bool = True,
+    fresh: bool = False,
+    jobs: int = 1,
+    reuse: bool = False,
+):
     """Configure + build ICON; ``patched`` applies the solve_nh patch first."""
     solve_nh_f90 = icon_src / "src" / "atm_dyn_iconam" / "mo_solve_nonhydro.f90"
     solve_nh_bak = solve_nh_f90.with_suffix(".f90.bak")
@@ -92,9 +90,9 @@ def _build_icon(label: str,
             shutil.copy2(solve_nh_f90, solve_nh_bak)
         else:
             shutil.copy2(solve_nh_bak, solve_nh_f90)
-        write_patched_solve_nh(solve_nh_bak if solve_nh_bak.is_file() else solve_nh_f90,
-                               solve_nh_f90,
-                               dace_only=dace_only)
+        write_patched_solve_nh(
+            solve_nh_bak if solve_nh_bak.is_file() else solve_nh_f90, solve_nh_f90, dace_only=dace_only
+        )
         print(f"[build_icon:{label}] patched {solve_nh_f90}", flush=True)
 
     if reuse and (build_dir / "bin" / f"icon.{label}").is_file():
@@ -133,30 +131,30 @@ def _make_experiment(icon_src: Path, build_dir: Path, exp_name: str, grid_dir: P
     # Point the experiment at the local grid cache.  ``atmo_dyn_grid`` is
     # expressed in terms of ``input_folder`` in the EXCLAIM template, so updating
     # ``input_folder`` is sufficient.
-    text = re.sub(r'^input_folder=.*', f'input_folder="{grid_dir}"', text, flags=re.M)
+    text = re.sub(r"^input_folder=.*", f'input_folder="{grid_dir}"', text, flags=re.M)
     # Short run + frequent output so the test finishes quickly and has dumps.
-    text = re.sub(r'^end_date=.*', 'end_date="2000-01-01T00:00:10Z"', text, flags=re.M)
-    text = re.sub(r'^start_output=.*', 'start_output="2000-01-01T00:00:02Z"', text, flags=re.M)
-    text = re.sub(r'^atm_file_interval=.*', 'atm_file_interval="PT2S"', text, flags=re.M)
-    text = re.sub(r'^atm_output_interval=.*', 'atm_output_interval="PT2S"', text, flags=re.M)
+    text = re.sub(r"^end_date=.*", 'end_date="2000-01-01T00:00:10Z"', text, flags=re.M)
+    text = re.sub(r"^start_output=.*", 'start_output="2000-01-01T00:00:02Z"', text, flags=re.M)
+    text = re.sub(r"^atm_file_interval=.*", 'atm_file_interval="PT2S"', text, flags=re.M)
+    text = re.sub(r"^atm_output_interval=.*", 'atm_output_interval="PT2S"', text, flags=re.M)
     # pinit_seed guard: force 0 to avoid the unallocated soil-temp perturbation segfault.
-    text = re.sub(r'pinit_seed\s*=\s*[-]?[0-9]+', 'pinit_seed = 0', text, flags=re.M)
-    text = re.sub(r'init_seed\s*=\s*[-]?[0-9]+', 'init_seed = 0', text, flags=re.M)
-    text = re.sub(r'seed\s*=\s*[-]?[0-9]+', 'seed = 0', text, flags=re.M)
+    text = re.sub(r"pinit_seed\s*=\s*[-]?[0-9]+", "pinit_seed = 0", text, flags=re.M)
+    text = re.sub(r"init_seed\s*=\s*[-]?[0-9]+", "init_seed = 0", text, flags=re.M)
+    text = re.sub(r"seed\s*=\s*[-]?[0-9]+", "seed = 0", text, flags=re.M)
     # Pure compute run so the halo exchange is exercised at low rank count.
-    text = re.sub(r'num_io_procs\s*=\s*[0-9]+', 'num_io_procs = 0', text, flags=re.M)
+    text = re.sub(r"num_io_procs\s*=\s*[0-9]+", "num_io_procs = 0", text, flags=re.M)
     # The default EXCLAIM APE experiment selects ecRad (inwp_radiation=4), but the
     # CPU-only ICON build in this lane does not include ECRAD.  Disable radiation so
     # the run reaches the dycore without aborting in mo_nwp_phy_init.
-    text = re.sub(r'inwp_radiation\s*=\s*[0-9]+', 'inwp_radiation = 0', text, flags=re.M)
+    text = re.sub(r"inwp_radiation\s*=\s*[0-9]+", "inwp_radiation = 0", text, flags=re.M)
     # EXCLAIM aquaplanet template does not contain pinit_seed / num_io_procs; append
     # them to the experiment section so the namelist still sees them.
-    if 'pinit_seed' not in text:
-        text += '\npinit_seed = 0\n'
-    if 'num_io_procs' not in text:
-        text += '\nnum_io_procs = 0\n'
-    if 'inwp_radiation' not in text:
-        text += '\ninwp_radiation = 0\n'
+    if "pinit_seed" not in text:
+        text += "\npinit_seed = 0\n"
+    if "num_io_procs" not in text:
+        text += "\nnum_io_procs = 0\n"
+    if "inwp_radiation" not in text:
+        text += "\ninwp_radiation = 0\n"
     exp_dst.write_text(text)
     return exp_dst
 
@@ -200,7 +198,8 @@ def _run_icon(label: str, build_dir: Path, icon_src: Path, exp_name: str, nranks
     # The generated script names ${basedir}/bin/icon; point it at the labelled
     # binary so we never overwrite a running executable (text file busy).
     run_script.write_text(
-        re.sub(r'^export MODEL=.*bin/icon".*$', f'export MODEL="{icon_bin}"', run_script.read_text(), flags=re.M))
+        re.sub(r'^export MODEL=.*bin/icon".*$', f'export MODEL="{icon_bin}"', run_script.read_text(), flags=re.M)
+    )
     log = build_dir / f"icon_run.{label}.log"
 
     # The run script itself calls the MPI launcher via $START; do not wrap it
@@ -282,45 +281,55 @@ def _compare_output_files(stock_dir: Path, dace_dir: Path) -> tuple[int, int]:
                     mismatches += 1
                     print(f"  MISMATCH: {name}:{var} max_abs_diff={max_diff:.6e}", flush=True)
     print(
-        f"[compare_outputs] compared {compared} variable(s) across {len(common)} file(s), "
-        f"{mismatches} mismatched",
-        flush=True)
+        f"[compare_outputs] compared {compared} variable(s) across {len(common)} file(s), {mismatches} mismatched",
+        flush=True,
+    )
     return compared, mismatches
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--icon-src",
-                    type=Path,
-                    default=_TESTS_ICON_FULL / "icon-model",
-                    help="ICON source tree (checked-out submodule).")
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--icon-src",
+        type=Path,
+        default=_TESTS_ICON_FULL / "icon-model",
+        help="ICON source tree (checked-out submodule).",
+    )
     ap.add_argument("--work-dir", type=Path, required=True, help="Scratch root for builds, grids, and artifacts.")
     ap.add_argument("--grid-dir", type=Path, default=None, help="R02B04 grid cache directory.")
     ap.add_argument("--exp", type=str, default=_EXP, help="Base experiment name under icon-model/run/.")
     ap.add_argument("--nranks", type=int, default=2, help="MPI rank count for both runs.")
     ap.add_argument("--jobs", type=int, default=1, help="Parallel make jobs for ICON builds.")
-    ap.add_argument("--release",
-                    action="store_true",
-                    help="Use -O3 for the solve_nh binding (default -O0 for bit-exactness).")
-    ap.add_argument("--skip-stock",
-                    action="store_true",
-                    help="Skip the stock reference run (use existing stock binary).")
-    ap.add_argument("--skip-dace-build",
-                    action="store_true",
-                    help="Skip the solve_nh SDFG + binding build (use existing DACE_LIBS_DIR).")
-    ap.add_argument("--reuse-build",
-                    action="store_true",
-                    help="Skip ICON configure/make if bin/icon.<label> already exists.")
-    ap.add_argument("--diff-driver",
-                    action="store_true",
-                    help=("Use the expensive differential driver (runs original + SDFG in one binary and "
-                          "compares per-call).  Default compares model output files after separate runs."))
+    ap.add_argument(
+        "--release", action="store_true", help="Use -O3 for the solve_nh binding (default -O0 for bit-exactness)."
+    )
+    ap.add_argument(
+        "--skip-stock", action="store_true", help="Skip the stock reference run (use existing stock binary)."
+    )
+    ap.add_argument(
+        "--skip-dace-build",
+        action="store_true",
+        help="Skip the solve_nh SDFG + binding build (use existing DACE_LIBS_DIR).",
+    )
+    ap.add_argument(
+        "--reuse-build", action="store_true", help="Skip ICON configure/make if bin/icon.<label> already exists."
+    )
+    ap.add_argument(
+        "--diff-driver",
+        action="store_true",
+        help=(
+            "Use the expensive differential driver (runs original + SDFG in one binary and "
+            "compares per-call).  Default compares model output files after separate runs."
+        ),
+    )
     ap.add_argument(
         "--dace-libs-dir",
         type=Path,
         default=None,
-        help="Directory with an existing libsolve_nh.so + .mod files.  Overrides the default work-dir location.")
+        help="Directory with an existing libsolve_nh.so + .mod files.  Overrides the default work-dir location.",
+    )
     args = ap.parse_args()
 
     icon_src = args.icon_src.resolve()
@@ -337,42 +346,49 @@ def main() -> int:
     try:
         # 1. Stock ICON build (also produces the .mod files the DaCe binding needs).
         if not args.skip_stock:
-            _build_icon("stock",
-                        icon_src,
-                        stock_build,
-                        dace_libs_dir=None,
-                        patched=False,
-                        jobs=args.jobs,
-                        reuse=args.reuse_build)
+            _build_icon(
+                "stock",
+                icon_src,
+                stock_build,
+                dace_libs_dir=None,
+                patched=False,
+                jobs=args.jobs,
+                reuse=args.reuse_build,
+            )
         else:
             print("[main] skipping stock build", flush=True)
 
         # 2. Build the solve_nh SDFG + binding from the pristine source.
         if not args.skip_dace_build:
-            _run([
-                sys.executable,
-                "-m",
-                "scripts.build_icon_solve_nh_libs",
-                "--icon-src",
-                str(icon_src),
-                "--icon-build",
-                str(stock_build),
-                "--out-dir",
-                str(dace_libs_dir),
-            ] + (["--release"] if args.release else []),
-                 cwd=_DACE_FORTRAN)
+            _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.build_icon_solve_nh_libs",
+                    "--icon-src",
+                    str(icon_src),
+                    "--icon-build",
+                    str(stock_build),
+                    "--out-dir",
+                    str(dace_libs_dir),
+                ]
+                + (["--release"] if args.release else []),
+                cwd=_DACE_FORTRAN,
+            )
         else:
             print("[main] skipping DaCe solve_nh build", flush=True)
 
         # 3. Patched ICON build linking the DaCe solve_nh library.
-        _build_icon("dace",
-                    icon_src,
-                    dace_build,
-                    dace_libs_dir=dace_libs_dir,
-                    patched=True,
-                    dace_only=not args.diff_driver,
-                    jobs=args.jobs,
-                    reuse=args.reuse_build)
+        _build_icon(
+            "dace",
+            icon_src,
+            dace_build,
+            dace_libs_dir=dace_libs_dir,
+            patched=True,
+            dace_only=not args.diff_driver,
+            jobs=args.jobs,
+            reuse=args.reuse_build,
+        )
 
         # 4. Fetch / cache the R02B04 grid.
         grid_dir.mkdir(parents=True, exist_ok=True)
@@ -389,15 +405,17 @@ def main() -> int:
         _make_experiment(icon_src, dace_build, args.exp, grid_dir)
 
         # 6. Run both binaries.
-        stock_log = _run_icon("stock", stock_build, icon_src, args.exp, args.nranks)
+        _run_icon("stock", stock_build, icon_src, args.exp, args.nranks)
         dace_log = _run_icon("dace", dace_build, icon_src, args.exp, args.nranks)
 
         # 7. Verify the patched run matches the stock run.
         if args.diff_driver:
             calls, bad = _check_diff_log(dace_log)
             if calls == 0:
-                print("ERROR: no solve_nh differential calls observed -- did the patched run reach solve_nh?",
-                      file=sys.stderr)
+                print(
+                    "ERROR: no solve_nh differential calls observed -- did the patched run reach solve_nh?",
+                    file=sys.stderr,
+                )
                 return 1
             if bad:
                 print(f"ERROR: {bad} solve_nh call(s) diverged from stock", file=sys.stderr)
@@ -407,8 +425,10 @@ def main() -> int:
             dace_exp_dir = dace_build / "experiments" / f"{args.exp}.dace"
             compared, bad = _compare_output_files(stock_exp_dir, dace_exp_dir)
             if compared == 0:
-                print("ERROR: no comparable output variables found -- did both runs produce NetCDF output?",
-                      file=sys.stderr)
+                print(
+                    "ERROR: no comparable output variables found -- did both runs produce NetCDF output?",
+                    file=sys.stderr,
+                )
                 return 1
             if bad:
                 print(f"ERROR: {bad} compared variable(s) diverged from stock", file=sys.stderr)

@@ -14,6 +14,7 @@ free even without a sanitizer, and ASan pinpoints the write
 (see ``scripts/lint_generated_kernel.py``). Correctness is oracle'd against f2py,
 not hand literals.
 """
+
 from pathlib import Path
 
 import numpy as np

@@ -14,6 +14,7 @@ CLI::
 
 Exit code 0 iff every compared field is bit-exact.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,13 +64,15 @@ def compare_files(ref_path, test_path):
             a = _load(ref_vars[name])
             b = _load(test_vars[name])
             if a.shape != b.shape:
-                rows.append({
-                    "var": name,
-                    "status": "SHAPE",
-                    "max_abs": None,
-                    "max_rel": None,
-                    "detail": f"{a.shape} vs {b.shape}"
-                })
+                rows.append(
+                    {
+                        "var": name,
+                        "status": "SHAPE",
+                        "max_abs": None,
+                        "max_rel": None,
+                        "detail": f"{a.shape} vs {b.shape}",
+                    }
+                )
                 continue
             if _bit_exact(a, b):
                 rows.append({"var": name, "status": "EXACT", "max_abs": 0.0, "max_rel": 0.0})
@@ -145,8 +148,7 @@ def main(argv=None):
     if body:
         print(body)
     verdict = "BIT-EXACT" if all_exact else "DIVERGENT"
-    print(f"\n{verdict}: {n_files} files, {n_vars} fields compared "
-          f"({args.ref_dir} vs {args.test_dir})")
+    print(f"\n{verdict}: {n_files} files, {n_vars} fields compared ({args.ref_dir} vs {args.test_dir})")
     return 0 if all_exact else 1
 
 

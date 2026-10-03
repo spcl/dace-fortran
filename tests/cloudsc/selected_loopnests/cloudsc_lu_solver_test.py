@@ -13,6 +13,7 @@ JN/JM sequential-dependency contract.
 
 E2e against an f2py-compiled reference of the same source.
 """
+
 import dace
 import numpy as np
 import pytest
@@ -76,10 +77,10 @@ ENDDO
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'cloudsc_lu_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "cloudsc_lu_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='cloudsc_lu', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_lu", entry="driver").build()
 
     klon, nclv, nblocks = 1, 5, 4
     rng = np.random.default_rng(11)
@@ -105,48 +106,49 @@ END MODULE kernel_mod
     np.testing.assert_allclose(zqlhs, zqlhs_ref, rtol=1e-12, atol=1e-12)
 
 
-_PY_KLON = dace.symbol('_PY_KLON')
-_PY_NCLV = dace.symbol('_PY_NCLV')
+_PY_KLON = dace.symbol("_PY_KLON")
+_PY_NCLV = dace.symbol("_PY_NCLV")
 
 
 @dace.program
-def _py_lu_solver(zqlhs: dace.float64[_PY_KLON + 1, _PY_NCLV + 1, _PY_NCLV + 1], zqxn: dace.float64[_PY_KLON + 1,
-                                                                                                    _PY_NCLV + 1]):
+def _py_lu_solver(
+    zqlhs: dace.float64[_PY_KLON + 1, _PY_NCLV + 1, _PY_NCLV + 1], zqxn: dace.float64[_PY_KLON + 1, _PY_NCLV + 1]
+):
     """Same LU solve as the Fortran kernel, in the DaCe Python frontend with
     1-indexed sequential loops + 1-indexed dace.map on the parallel JL dim.
 
     Module scope so @dace.program's annotation resolution sees _PY_KLON/_PY_NCLV as module-level symbols."""
     for jn in range(1, _PY_NCLV):
         for jm in range(jn + 1, _PY_NCLV + 1):
-            for jl in dace.map[1:_PY_KLON + 1]:
+            for jl in dace.map[1 : _PY_KLON + 1]:
                 a = zqlhs[jl, jm, jn]
                 b = zqlhs[jl, jn, jn]
                 zqlhs[jl, jm, jn] = a / b
             for ik in range(jn + 1, _PY_NCLV + 1):
-                for jl in dace.map[1:_PY_KLON + 1]:
+                for jl in dace.map[1 : _PY_KLON + 1]:
                     a = zqlhs[jl, jm, ik]
                     b = zqlhs[jl, jm, jn]
                     c = zqlhs[jl, jn, ik]
                     zqlhs[jl, jm, ik] = a - b * c
     for jn in range(2, _PY_NCLV + 1):
         for jm in range(1, jn):
-            for jl in dace.map[1:_PY_KLON + 1]:
+            for jl in dace.map[1 : _PY_KLON + 1]:
                 a = zqxn[jl, jn]
                 b = zqlhs[jl, jn, jm]
                 c = zqxn[jl, jm]
                 zqxn[jl, jn] = a - b * c
-    for jl in dace.map[1:_PY_KLON + 1]:
+    for jl in dace.map[1 : _PY_KLON + 1]:
         a = zqxn[jl, _PY_NCLV]
         b = zqlhs[jl, _PY_NCLV, _PY_NCLV]
         zqxn[jl, _PY_NCLV] = a / b
     for jn in range(_PY_NCLV - 1, 0, -1):
         for jm in range(jn + 1, _PY_NCLV + 1):
-            for jl in dace.map[1:_PY_KLON + 1]:
+            for jl in dace.map[1 : _PY_KLON + 1]:
                 a = zqxn[jl, jn]
                 b = zqlhs[jl, jn, jm]
                 c = zqxn[jl, jm]
                 zqxn[jl, jn] = a - b * c
-        for jl in dace.map[1:_PY_KLON + 1]:
+        for jl in dace.map[1 : _PY_KLON + 1]:
             a = zqxn[jl, jn]
             b = zqlhs[jl, jn, jn]
             zqxn[jl, jn] = a / b

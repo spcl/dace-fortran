@@ -10,6 +10,7 @@ Pinned contract: fp32-in-fp32 stays fp32 (bit-exact to ``numpy.float32``); fp32
 assigned to fp64 widens through convert (wrap must not block it); fp64 constants
 (``1.4d0``) get no ``dace.float32`` wrap at all.
 """
+
 import numpy as np
 import pytest
 
@@ -32,7 +33,7 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f32_const", entry="m::f32_const").build()
-    out = np.zeros((1, ), dtype=np.float32, order='F')
+    out = np.zeros((1,), dtype=np.float32, order="F")
     sdfg(out=out)
     expected = np.float32(1.4) * np.float32(2.0)
     assert out[0] == expected, f"fp32 product mismatch: got {out[0]} expected {expected}"
@@ -52,7 +53,7 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f64_const", entry="m::f64_const").build()
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(out=out)
     expected = np.float64(1.4) * np.float64(2.0)
     assert out[0] == expected, f"fp64 product mismatch: got {out[0]} expected {expected}"
@@ -74,7 +75,7 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="widen", entry="m::widen").build()
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(out=out)
     expected = np.float64(np.float32(1.4)) * np.float64(2.0)
     assert out[0] == expected, f"widened fp32 parameter mismatch: got {out[0]} expected {expected}"
@@ -95,7 +96,7 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="fp64param", entry="m::fp64param").build()
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(out=out)
     expected = np.float64(1.4) * np.float64(2.0)
     assert out[0] == expected, f"fp64 param mismatch: got {out[0]} expected {expected}"

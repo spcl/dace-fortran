@@ -146,8 +146,7 @@ class Arg:
             return "aos_struct_ptr"
         if self.kind == "comm":
             return "value"
-        raise ValueError(f"external Arg: unknown kind {self.kind!r}; "
-                         f"expected one of array / scalar / aos / comm")
+        raise ValueError(f"external Arg: unknown kind {self.kind!r}; expected one of array / scalar / aos / comm")
 
     def c_decl_type(self) -> str:
         """C parameter type for this arg's ``extern "C"`` declaration.
@@ -172,13 +171,12 @@ class Arg:
                 # from the marshal-expansion groups; nothing
                 # single-parameter to surface here.
                 return ""
-            raise ValueError(f"external Arg(kind='aos'): unsupported "
-                             f"c_abi {abi!r}; expected aos_struct_ptr "
-                             f"or per_member_soa")
+            raise ValueError(
+                f"external Arg(kind='aos'): unsupported c_abi {abi!r}; expected aos_struct_ptr or per_member_soa"
+            )
         base = _C_TYPES.get(self.dtype)
         if base is None:
-            raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; "
-                             f"known: {sorted(_C_TYPES)}")
+            raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; known: {sorted(_C_TYPES)}")
         return f"{base} *" if self.kind == "array" else base
 
 
@@ -299,7 +297,7 @@ def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
     """
     so_paths = [Path(lib).resolve() for lib in libraries]
     rpath_dirs = list(dict.fromkeys(p.parent for p in so_paths))
-    return (["-Wl,--no-as-needed"] + [str(p) for p in so_paths] + [f"-Wl,-rpath,{d}" for d in rpath_dirs])
+    return ["-Wl,--no-as-needed"] + [str(p) for p in so_paths] + [f"-Wl,-rpath,{d}" for d in rpath_dirs]
 
 
 def _apply_linker_config() -> None:
@@ -347,7 +345,7 @@ def keep_external(
     stub: bool = False,
     dynamic_extents_abi: bool = False,
     module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = (),
-    callee_ptr_scalar_members: frozenset = frozenset()
+    callee_ptr_scalar_members: frozenset = frozenset(),
 ) -> None:
     """Mark ``name`` to be left external -- the bridge emits an
     :class:`ExternalCall` library node for every ``CALL name(...)``
@@ -399,17 +397,21 @@ def keep_external(
     """
     register_external(
         name,
-        ExternalSignature(c_name=c_name or name,
-                          args=tuple(args),
-                          libraries=tuple(libraries),
-                          stub=stub,
-                          dynamic_extents_abi=dynamic_extents_abi,
-                          module_symbol_forward=tuple(module_symbol_forward),
-                          callee_ptr_scalar_members=frozenset(callee_ptr_scalar_members)))
+        ExternalSignature(
+            c_name=c_name or name,
+            args=tuple(args),
+            libraries=tuple(libraries),
+            stub=stub,
+            dynamic_extents_abi=dynamic_extents_abi,
+            module_symbol_forward=tuple(module_symbol_forward),
+            callee_ptr_scalar_members=frozenset(callee_ptr_scalar_members),
+        ),
+    )
 
 
-def apply_external_functions(external_functions: Iterable["ExternalFunction"] = (),
-                             do_not_emit: Iterable[str] = ()) -> None:
+def apply_external_functions(
+    external_functions: Iterable["ExternalFunction"] = (), do_not_emit: Iterable[str] = ()
+) -> None:
     """Register the bridge half of the unified external-function policy.
 
     This is the bridge-side mirror of the inliner's
@@ -444,7 +446,7 @@ def apply_external_functions(external_functions: Iterable["ExternalFunction"] = 
     do_not_emit = list(do_not_emit)
     validate(external_functions, do_not_emit)
     for f in external_functions:
-        keep_external(f.name, c_name=f.symbol, libraries=(f.library, ) if f.library else ())
+        keep_external(f.name, c_name=f.symbol, libraries=(f.library,) if f.library else ())
     for name in do_not_emit:
         keep_external(name, stub=True)
 
@@ -472,7 +474,7 @@ def registered_names() -> List[str]:
     return list(_STATE.signatures)
 
 
-def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> int:
+def inline_external(sdfg: "dace.SDFG", name: str, callee_sdfg: "dace.SDFG") -> int:
     """Swap every ``ExternalCall`` library node for ``name`` in ``sdfg``
     with a :class:`dace.sdfg.nodes.NestedSDFG` wrapping ``callee_sdfg``.
 
@@ -495,11 +497,10 @@ def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> i
     :param callee_sdfg: The callee's pre-built SDFG.
     :returns: The number of ExternalCall sites replaced.
     """
-    from dace.sdfg.nodes import NestedSDFG
+
     sig = lookup_external(name)
     if sig is None:
-        raise ValueError(f"inline_external: {name!r} is not registered "
-                         f"as an external")
+        raise ValueError(f"inline_external: {name!r} is not registered as an external")
     target_c_name = sig.c_name
     replaced = 0
     # Walk every state for ExternalCall nodes; we mutate as we go but
@@ -507,7 +508,7 @@ def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> i
     targets = []
     for state in sdfg.all_states():
         for node in list(state.nodes()):
-            if (isinstance(node, ExternalCall) and node.c_name == target_c_name):
+            if isinstance(node, ExternalCall) and node.c_name == target_c_name:
                 targets.append((state, node))
     if not targets:
         return 0
@@ -525,7 +526,7 @@ def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> i
         for e in out_edges:
             # ``_a{i}_o`` -> strip ``_a`` prefix and the trailing ``_o``.
             tail = e.src_conn[2:]
-            if tail.endswith('_o'):
+            if tail.endswith("_o"):
                 tail = tail[:-2]
             i = int(tail)
             out_map.setdefault(callee_args[i], e)
@@ -556,6 +557,7 @@ def clear_external_registry() -> None:
     _STATE.signatures.clear()
     if _STATE.orig_linker_args is not None:
         import dace
+
         dace.Config.set("compiler", "linker", "args", value=_STATE.orig_linker_args)
         _STATE.orig_linker_args = None
 
@@ -574,17 +576,20 @@ class ExpandExternalCallPure(ExpandTransformation):
     environments: ClassVar[list[type]] = []
 
     @staticmethod
-    def expansion(node: LibraryNode, parent_state: SDFGState, parent_sdfg: dace.SDFG, *args: Any,
-                  **kwargs: Any) -> dace.nodes.Tasklet:
+    def expansion(
+        node: LibraryNode, parent_state: SDFGState, parent_sdfg: dace.SDFG, *args: Any, **kwargs: Any
+    ) -> dace.nodes.Tasklet:
         assert isinstance(node, ExternalCall)
         if node.c_decl:
             parent_sdfg.append_global_code(node.c_decl)
-        tasklet = dace.sdfg.nodes.Tasklet(node.label,
-                                          dict(node.in_connectors),
-                                          dict(node.out_connectors),
-                                          node.body,
-                                          language=dace.dtypes.Language.CPP,
-                                          side_effects=True)
+        tasklet = dace.sdfg.nodes.Tasklet(
+            node.label,
+            dict(node.in_connectors),
+            dict(node.out_connectors),
+            node.body,
+            language=dace.dtypes.Language.CPP,
+            side_effects=True,
+        )
         return tasklet
 
 
@@ -621,16 +626,18 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
     #: undeclared symbol.
     symbol_deps = dace.properties.ListProperty(element_type=str, default=[])
 
-    def __init__(self,
-                 name: str,
-                 *,
-                 c_name: str = "",
-                 c_decl: str = "",
-                 body: str = "",
-                 symbol_deps: Iterable[str] | None = None,
-                 inputs: Collection[str] | Mapping[str, Any] | None = None,
-                 outputs: Collection[str] | Mapping[str, Any] | None = None,
-                 **kwargs: Any) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        c_name: str = "",
+        c_decl: str = "",
+        body: str = "",
+        symbol_deps: Iterable[str] | None = None,
+        inputs: Collection[str] | Mapping[str, Any] | None = None,
+        outputs: Collection[str] | Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(name=name, inputs=inputs or set(), outputs=outputs or set(), **kwargs)
         self.c_name = c_name
         self.c_decl = c_decl
@@ -655,5 +662,4 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
         connector: an ``inout`` array's read connector intentionally aliases
         its write connector, and only the writable one appears in the body.)"""
         if not re.search(r"\b" + re.escape(self.c_name) + r"\s*\(", self.body):
-            raise ValueError(f"ExternalCall {self.label!r}: body {self.body!r} does not "
-                             f"call {self.c_name!r}")
+            raise ValueError(f"ExternalCall {self.label!r}: body {self.body!r} does not call {self.c_name!r}")

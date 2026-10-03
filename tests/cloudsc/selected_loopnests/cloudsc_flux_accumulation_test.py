@@ -5,6 +5,7 @@
 sequence state order correctly or an iteration's update overwrites a stale carry.
 E2e against an f2py-compiled reference.
 """
+
 import numpy as np
 import pytest
 
@@ -86,10 +87,10 @@ ENDDO
 END SUBROUTINE driver
 END MODULE kernel_mod
 """
-    ref = f2py(src, tmp_path / 'ref', 'cloudsc_flux_ref')
-    sdfg_dir = tmp_path / 'sdfg'
+    ref = f2py(src, tmp_path / "ref", "cloudsc_flux_ref")
+    sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='cloudsc_flux', entry='driver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_flux", entry="driver").build()
 
     klon, klev, nclv, nblocks = 1, 137, 5, 4
     ncldql, ncldqi, ncldqr, ncldqs = 1, 2, 3, 4
@@ -114,52 +115,56 @@ END MODULE kernel_mod
     pfsqrf = np.asfortranarray(pfsqrf_ref.copy())
     pfsqsf = np.asfortranarray(pfsqsf_ref.copy())
 
-    ref.kernel_mod.driver(pfsqlf=pfsqlf_ref,
-                          pfsqif=pfsqif_ref,
-                          pfsqrf=pfsqrf_ref,
-                          pfsqsf=pfsqsf_ref,
-                          zqxn2d=zqxn2d,
-                          zqx0=zqx0,
-                          pvfl=pvfl,
-                          pvfi=pvfi,
-                          plude=plude,
-                          zfoealfa=zfoealfa,
-                          paph=paph,
-                          ptsphy=ptsphy,
-                          zqtmst=zqtmst,
-                          zrg_r=zrg_r,
-                          ncldql=ncldql,
-                          ncldqi=ncldqi,
-                          ncldqr=ncldqr,
-                          ncldqs=ncldqs)
+    ref.kernel_mod.driver(
+        pfsqlf=pfsqlf_ref,
+        pfsqif=pfsqif_ref,
+        pfsqrf=pfsqrf_ref,
+        pfsqsf=pfsqsf_ref,
+        zqxn2d=zqxn2d,
+        zqx0=zqx0,
+        pvfl=pvfl,
+        pvfi=pvfi,
+        plude=plude,
+        zfoealfa=zfoealfa,
+        paph=paph,
+        ptsphy=ptsphy,
+        zqtmst=zqtmst,
+        zrg_r=zrg_r,
+        ncldql=ncldql,
+        ncldqi=ncldqi,
+        ncldqr=ncldqr,
+        ncldqs=ncldqs,
+    )
 
     from dace.data import Scalar
 
     def _route(name, val, dtype):
         return val if isinstance(sdfg.arglist().get(name), Scalar) else np.array([val], dtype=dtype)
 
-    sdfg(pfsqlf=pfsqlf,
-         pfsqif=pfsqif,
-         pfsqrf=pfsqrf,
-         pfsqsf=pfsqsf,
-         zqxn2d=zqxn2d,
-         zqx0=zqx0,
-         pvfl=pvfl,
-         pvfi=pvfi,
-         plude=plude,
-         zfoealfa=zfoealfa,
-         paph=paph,
-         ptsphy=_route('ptsphy', ptsphy, np.float64),
-         zqtmst=_route('zqtmst', zqtmst, np.float64),
-         zrg_r=_route('zrg_r', zrg_r, np.float64),
-         klon=klon,
-         klev=klev,
-         nclv=nclv,
-         nblocks=nblocks,
-         ncldql=ncldql,
-         ncldqi=ncldqi,
-         ncldqr=ncldqr,
-         ncldqs=ncldqs)
+    sdfg(
+        pfsqlf=pfsqlf,
+        pfsqif=pfsqif,
+        pfsqrf=pfsqrf,
+        pfsqsf=pfsqsf,
+        zqxn2d=zqxn2d,
+        zqx0=zqx0,
+        pvfl=pvfl,
+        pvfi=pvfi,
+        plude=plude,
+        zfoealfa=zfoealfa,
+        paph=paph,
+        ptsphy=_route("ptsphy", ptsphy, np.float64),
+        zqtmst=_route("zqtmst", zqtmst, np.float64),
+        zrg_r=_route("zrg_r", zrg_r, np.float64),
+        klon=klon,
+        klev=klev,
+        nclv=nclv,
+        nblocks=nblocks,
+        ncldql=ncldql,
+        ncldqi=ncldqi,
+        ncldqr=ncldqr,
+        ncldqs=ncldqs,
+    )
 
     np.testing.assert_allclose(pfsqlf, pfsqlf_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(pfsqif, pfsqif_ref, rtol=1e-12, atol=1e-12)

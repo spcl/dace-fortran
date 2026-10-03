@@ -68,8 +68,7 @@ def _f2py_build(srcs: list[str], out_dir: Path, mod_name: str):
     combined = out_dir / f"{mod_name}.f90"
     combined.write_text("\n".join(srcs))
     subprocess.check_call(
-        [sys.executable, "-m", "numpy.f2py", "-c",
-         str(combined), "-m", mod_name, "--quiet"],
+        [sys.executable, "-m", "numpy.f2py", "-c", str(combined), "-m", mod_name, "--quiet"],
         cwd=out_dir,
     )
     if str(out_dir) not in sys.path:
@@ -96,8 +95,7 @@ def test_inlined_hlfir_has_assumed_shape_alias_declare(tmp_path: Path):
     # Outer declare: shape_shift with lbound=-2 on the caller's x.
     assert "shape_shift" in dump and "-2" in dump
     # Inlined alias declare: uniq_name _QFcalleeEarr, memref is a fir.convert (extent erasure).
-    assert '_QFcalleeEarr' in dump, \
-        "expected the inlined callee's alias declare to survive inline+dce"
+    assert "_QFcalleeEarr" in dump, "expected the inlined callee's alias declare to survive inline+dce"
     # fir.convert box<array<5xi32>> -> box<array<?xi32>> is the assumed-shape-alias signature to fold.
     assert "fir.convert" in dump
 

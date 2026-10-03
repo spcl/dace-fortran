@@ -6,6 +6,7 @@ original body preserved as ``solve_nh_ref``.  Pins the transform structurally AN
 checks the emitted module compiles (``gfortran -fsyntax-only``) against minimal
 stand-in types -- catches a Fortran error in the driver without a full ICON build.
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -85,5 +86,6 @@ def test_solve_nh_patch_structure_and_compiles(tmp_path: Path):
         ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "types.f90", "mo_solve_nh_diff.f90", "patched.f90"],
         cwd=str(tmp_path),
         capture_output=True,
-        text=True)
+        text=True,
+    )
     assert r.returncode == 0, f"patched solve_nh did not compile:\n{r.stderr}"

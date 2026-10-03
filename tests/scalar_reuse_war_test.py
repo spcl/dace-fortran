@@ -39,7 +39,7 @@ def _run(tmp_path, body, name, n=8, seed=11, nvars=1):
     sdfg = build_sdfg(src, sdfg_dir, name=name, entry="driver").build()
 
     rng = np.random.default_rng(seed)
-    shape = (n, ) if nvars == 1 else (nvars, n)
+    shape = (n,) if nvars == 1 else (nvars, n)
     a = np.asfortranarray(rng.random(shape) + 0.5)
     b = np.asfortranarray(rng.random(shape) + 0.5)
     c0 = np.zeros(shape, dtype=np.float64, order="F")
@@ -49,11 +49,9 @@ def _run(tmp_path, body, name, n=8, seed=11, nvars=1):
 
     a_s, b_s, c_s = (x.copy(order="F") for x in (a, b, c0))
     sdfg(a=a_s, b=b_s, c=c_s, n=n)
-    np.testing.assert_allclose(c_s,
-                               c_ref,
-                               rtol=1e-12,
-                               atol=1e-12,
-                               err_msg=f"{name}: SDFG diverged from gfortran reference")
+    np.testing.assert_allclose(
+        c_s, c_ref, rtol=1e-12, atol=1e-12, err_msg=f"{name}: SDFG diverged from gfortran reference"
+    )
 
 
 def test_scalar_reuse_minimal(tmp_path):
@@ -61,7 +59,8 @@ def test_scalar_reuse_minimal(tmp_path):
 
     Correct: c(i) = a(i)*b(i) - a(i-1)*b(i-1). Bugged: c(i) = a(i-1)*b(i) - a(i-1)*b(i-1) (x read the second tmp)."""
     _run(
-        tmp_path, """
+        tmp_path,
+        """
 SUBROUTINE driver(a, b, c, n)
 integer, intent(in) :: n
 double precision, intent(in) :: a(n), b(n)
@@ -76,13 +75,16 @@ DO i = 2, n
     c(i) = x - y
 ENDDO
 END SUBROUTINE driver
-""", "scalar_reuse_minimal")
+""",
+        "scalar_reuse_minimal",
+    )
 
 
 def test_scalar_reuse_multicomponent(tmp_path):
     """NPB-LU shape: one scalar ``tmp`` feeds five ``*i`` reads, is re-written, then feeds five ``*im1`` reads -- five separate clobbered values."""
-    _run(tmp_path,
-         """
+    _run(
+        tmp_path,
+        """
 SUBROUTINE driver(a, b, c, n)
 integer, intent(in) :: n
 double precision, intent(in) :: a(5,n), b(5,n)
@@ -111,14 +113,16 @@ DO i = 2, n
 ENDDO
 END SUBROUTINE driver
 """,
-         "scalar_reuse_multicomp",
-         nvars=5)
+        "scalar_reuse_multicomp",
+        nvars=5,
+    )
 
 
 def test_scalar_reuse_three_writes(tmp_path):
     """Three re-writes of the same scalar in one iteration: two splits."""
     _run(
-        tmp_path, """
+        tmp_path,
+        """
 SUBROUTINE driver(a, b, c, n)
 integer, intent(in) :: n
 double precision, intent(in) :: a(n), b(n)
@@ -135,13 +139,16 @@ DO i = 1, n
     c(i) = x + y + z
 ENDDO
 END SUBROUTINE driver
-""", "scalar_reuse_three")
+""",
+        "scalar_reuse_three",
+    )
 
 
 def test_scalar_reuse_in_if(tmp_path):
     """Re-write inside an IF body -- exercises ``emit_assign``'s realised-graph guard (the has_structured path), not the loop batch path."""
     _run(
-        tmp_path, """
+        tmp_path,
+        """
 SUBROUTINE driver(a, b, c, n)
 integer, intent(in) :: n
 double precision, intent(in) :: a(n), b(n)
@@ -158,14 +165,17 @@ DO i = 2, n
     ENDIF
 ENDDO
 END SUBROUTINE driver
-""", "scalar_reuse_in_if")
+""",
+        "scalar_reuse_in_if",
+    )
 
 
 def test_loop_carried_scalar_preserved(tmp_path):
     """A loop-CARRIED scalar accumulator must NOT be broken by the split: ``s`` reads its
     previous-iteration value, so it stays one scalar. Guards against over-eager splitting."""
     _run(
-        tmp_path, """
+        tmp_path,
+        """
 SUBROUTINE driver(a, b, c, n)
 integer, intent(in) :: n
 double precision, intent(in) :: a(n), b(n)
@@ -178,4 +188,6 @@ DO i = 1, n
     c(i) = s
 ENDDO
 END SUBROUTINE driver
-""", "loop_carried_scalar")
+""",
+        "loop_carried_scalar",
+    )

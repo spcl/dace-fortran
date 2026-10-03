@@ -117,9 +117,9 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
             for ac in c.accesses or []:
                 for expr in ac.index_exprs or []:
                     if isinstance(expr, str):
-                        for m in re.finditer(r'([A-Za-z_]\w*)\[', expr):
+                        for m in re.finditer(r"([A-Za-z_]\w*)\[", expr):
                             n = m.group(1)
-                            if n not in known and '_' in n:
+                            if n not in known and "_" in n:
                                 unresolved.add(n)
             walk(c.children)
             walk(c.else_children)
@@ -132,10 +132,10 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
     prefix_suffixes: dict[str, set[str]] = {}
     for name in unresolved:
         for i, ch in enumerate(name):
-            if ch != '_':
+            if ch != "_":
                 continue
             prefix = name[:i]
-            suffix = name[i + 1:]
+            suffix = name[i + 1 :]
             if not prefix or not suffix:
                 continue
             prefix_suffixes.setdefault(prefix, set()).add(suffix)
@@ -148,7 +148,7 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
         # A real prefix must supply every suffix the phantom prefix reads.
         candidate_prefixes: set[str] | None = None
         for suffix in suffixes:
-            cands = {r[:-(len(suffix) + 1)] for r in real_names if r.endswith('_' + suffix)}
+            cands = {r[: -(len(suffix) + 1)] for r in real_names if r.endswith("_" + suffix)}
             if candidate_prefixes is None:
                 candidate_prefixes = cands
             else:
@@ -159,7 +159,7 @@ def _infer_component_aliases(builder: SDFGBuilder) -> tuple[dict[str, str], dict
             continue
         real_prefix = next(iter(candidate_prefixes))
         # The phantom prefix must not itself host any real arrays.
-        if any(r.startswith(prefix + '_') for r in real_names):
+        if any(r.startswith(prefix + "_") for r in real_names):
             continue
         aliases[prefix] = real_prefix
     return aliases, prefix_suffixes
@@ -175,9 +175,9 @@ def _synth_view_alias(src: VarLike, fortran_name: str) -> SyntheticVar:
     """
     return SyntheticVar(
         fortran_name=fortran_name,
-        role='view_alias',
+        role="view_alias",
         view_source=src.fortran_name,
-        view_subset=[''],
+        view_subset=[""],
         dtype=src.dtype,
         rank=src.rank,
         shape_symbols=list(src.shape_symbols),
@@ -187,7 +187,7 @@ def _synth_view_alias(src: VarLike, fortran_name: str) -> SyntheticVar:
     )
 
 
-_POINTER_ASSOC_RE = re.compile(r'(?<!\w)([A-Za-z_]\w*)\s*=>\s*([A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)*)', re.IGNORECASE)
+_POINTER_ASSOC_RE = re.compile(r"(?<!\w)([A-Za-z_]\w*)\s*=>\s*([A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)*)", re.IGNORECASE)
 
 
 def _pointer_aliases_from_source(builder: SDFGBuilder, source: str) -> dict[str, str]:
@@ -203,8 +203,8 @@ def _pointer_aliases_from_source(builder: SDFGBuilder, source: str) -> dict[str,
     if not source:
         return {}
     # Strip comments and join line continuations to keep the RHS on one line.
-    cleaned = re.sub(r'!.*', '', source)
-    cleaned = re.sub(r'&\s*\n\s*&?', ' ', cleaned)
+    cleaned = re.sub(r"!.*", "", source)
+    cleaned = re.sub(r"&\s*\n\s*&?", " ", cleaned)
     out: dict[str, str] = {}
     real_names = set(builder.arrays)
     for left, right in _POINTER_ASSOC_RE.findall(cleaned):
@@ -214,17 +214,17 @@ def _pointer_aliases_from_source(builder: SDFGBuilder, source: str) -> dict[str,
             continue
         # Only component-chain or bare identifier RHS; arithmetic indicates
         # a data assignment, not a pointer association.
-        if any(op in right for op in '+-*/()'):
+        if any(op in right for op in "+-*/()"):
             continue
-        flat = re.sub(r'\s+', '', right).replace('%', '_')
+        flat = re.sub(r"\s+", "", right).replace("%", "_")
         if not flat.isidentifier():
             continue
         # The alias must be useful: real arrays live under the flattened
         # component prefix, and the alias prefix must not itself host real
         # arrays (otherwise we would be renaming an existing descriptor).
-        if not any(a.startswith(flat + '_') for a in real_names):
+        if not any(a.startswith(flat + "_") for a in real_names):
             continue
-        if any(a.startswith(left + '_') for a in real_names):
+        if any(a.startswith(left + "_") for a in real_names):
             continue
         out[left] = flat
     return out
@@ -270,12 +270,12 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
 
     def collect_reads(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
-            for a in (c.accesses or []):
+            for a in c.accesses or []:
                 if a.is_read and a.array_name:
                     read_names.add(a.array_name)
             if c.reduce_src:
                 read_names.add(c.reduce_src)
-            for arg in (c.call_args or []):
+            for arg in c.call_args or []:
                 read_names.add(str(arg).split("[", 1)[0].strip())
             collect_reads(c.children)
             collect_reads(c.else_children)
@@ -284,8 +284,12 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
 
     def visit(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
-            if c.kind == "assign" and not c.target_is_array and c.target not in known \
-                    and not _is_synth_scalar(c.target):
+            if (
+                c.kind == "assign"
+                and not c.target_is_array
+                and c.target not in known
+                and not _is_synth_scalar(c.target)
+            ):
                 # A SCALAR store into a name with no descriptor is a candidate
                 # opaque-struct-member sink (a write into an object the flatten
                 # pass never materialised); classified below.  Array-target
@@ -364,7 +368,7 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
         recipe = e.get("recipe") or {}
         for flat in recipe.get("flat_names") or []:
             if flat.startswith(root + "_"):
-                per_member.setdefault(flat[len(root) + 1:], set()).add(flat)
+                per_member.setdefault(flat[len(root) + 1 :], set()).add(flat)
     flat_members = {m: next(iter(s)) for m, s in per_member.items() if len(s) == 1}
 
     # Recover aliases dissolved by inlining (e.g. ``p_pat_fn2 => p_patch%comm_pat_c``)
@@ -388,14 +392,26 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
     # Collect every bare identifier token used in the AST so we only synthesise
     # the phantom members that are actually referenced.
     used_tokens: set[str] = set()
-    _ident_re = re.compile(r'\b[A-Za-z_]\w*\b')
+    _ident_re = re.compile(r"\b[A-Za-z_]\w*\b")
 
     def _collect_tokens(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
             # Scan every string attribute of the AST node (loop bounds,
             # conditions, expressions, ...) plus nested AccessInfo strings.
-            for val in (c.kind, c.loop_iter, c.loop_bound, c.loop_lower_expr, c.loop_step_expr, c.target, c.expr,
-                        c.condition, c.callee, c.reduce_src, c.reduce_wcr, c.reduce_identity):
+            for val in (
+                c.kind,
+                c.loop_iter,
+                c.loop_bound,
+                c.loop_lower_expr,
+                c.loop_step_expr,
+                c.target,
+                c.expr,
+                c.condition,
+                c.callee,
+                c.reduce_src,
+                c.reduce_wcr,
+                c.reduce_identity,
+            ):
                 used_tokens.update(_ident_re.findall(val))
             for ac in c.accesses or []:
                 for expr in ac.index_exprs or []:
@@ -419,9 +435,9 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
     # are immutable nanobind properties.
     for prefix, real_prefix in all_aliases.items():
         for real_name in list(builder.arrays):
-            if not real_name.startswith(real_prefix + '_'):
+            if not real_name.startswith(real_prefix + "_"):
                 continue
-            suffix = real_name[len(real_prefix) + 1:]
+            suffix = real_name[len(real_prefix) + 1 :]
             phantom = f"{prefix}_{suffix}"
             if phantom in builder.arrays or phantom in builder.scalars or phantom in builder.symbols:
                 continue
@@ -441,6 +457,7 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
     # missing NUMERIC descriptor still surfaces loudly at emit rather than being
     # silently swallowed here.
     from dace_fortran.builder.access import resolve_object_member
+
     sinks = {t for t in non_desc_targets if "_" in t and resolve_object_member(builder, t) is None}
     prefix_sinks: dict = {}
     for t in sinks:
@@ -461,20 +478,20 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
 
 
 DTYPE = {
-    'float64': dace.float64,
-    'float32': dace.float32,
-    'int8': dace.int8,
-    'int16': dace.int16,
-    'int32': dace.int32,
-    'int64': dace.int64,
+    "float64": dace.float64,
+    "float32": dace.float32,
+    "int8": dace.int8,
+    "int16": dace.int16,
+    "int32": dace.int32,
+    "int64": dace.int64,
     # MLIR ``index`` (pointer-width integer) backs array extents and the
     # AoS-allocatable ``cap_<base>_<member>`` symbol; it is an integer,
     # not the ``float64`` default.
-    'index': dace.int64,
-    'bool': dace.bool_,
-    'uint8': dace.uint8,
-    'complex64': dace.complex64,
-    'complex128': dace.complex128,
+    "index": dace.int64,
+    "bool": dace.bool_,
+    "uint8": dace.uint8,
+    "complex64": dace.complex64,
+    "complex128": dace.complex128,
     # RAW MLIR type spellings.  Most bridge paths emit the canonical names
     # above, but the flattened-struct-member path (``extract_vars.cpp``
     # ``dtypeFor`` on the innermost element type) emits the verbatim
@@ -483,20 +500,20 @@ DTYPE = {
     # the ``float64`` default, producing a ``double`` symbol that can't be
     # a ``new[]`` extent / memlet subscript.  Recognise every MLIR scalar
     # spelling so both forms map to the same DaCe typeclass.
-    'i1': dace.bool_,
-    'i8': dace.int8,
-    'i16': dace.int16,
-    'i32': dace.int32,
-    'i64': dace.int64,
-    'ui8': dace.uint8,
-    'ui16': dace.uint16,
-    'ui32': dace.uint32,
-    'ui64': dace.uint64,
-    'f16': dace.float16,
-    'f32': dace.float32,
-    'f64': dace.float64,
-    'complex<f32>': dace.complex64,
-    'complex<f64>': dace.complex128,
+    "i1": dace.bool_,
+    "i8": dace.int8,
+    "i16": dace.int16,
+    "i32": dace.int32,
+    "i64": dace.int64,
+    "ui8": dace.uint8,
+    "ui16": dace.uint16,
+    "ui32": dace.uint32,
+    "ui64": dace.uint64,
+    "f16": dace.float16,
+    "f32": dace.float32,
+    "f64": dace.float64,
+    "complex<f32>": dace.complex64,
+    "complex<f64>": dace.complex128,
 }
 
 
@@ -528,8 +545,8 @@ def sdfg_name(builder: SDFGBuilder) -> str:
             return proc
     for v in builder.arrays.values():
         mn = v.mangled_name
-        if '_QF' in mn and 'E' in mn:
-            return mn.split('_QF')[1].split('E')[0]
+        if "_QF" in mn and "E" in mn:
+            return mn.split("_QF")[1].split("E")[0]
     return "sdfg"
 
 
@@ -614,7 +631,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # writes a real, caller-bound array whose extent symbols are used
             # elsewhere; inheriting a source shape onto it would orphan those.
             # Gate on the pointer-association form so only true rebinds inherit.
-            if c.kind == 'assign' and not c.target_is_array and c.target in builder.arrays:
+            if c.kind == "assign" and not c.target_is_array and c.target in builder.arrays:
                 src = str(c.expr).strip()
                 if src.isidentifier() and src in builder.arrays:
                     rebind_srcs.setdefault(c.target, set()).add(src)
@@ -637,8 +654,12 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         # bridge began minting ``p_d0`` placeholders for the deferred dims
         # -- they are no longer literal ``?`` -- leaving ``p`` with an
         # unbound free symbol instead of the source extent.)
-        if (v.role == 'view_alias' and list(v.view_subset) == [''] and v.view_source in builder.arrays
-                and len(syms) == len(builder.arrays[v.view_source].shape_symbols)):
+        if (
+            v.role == "view_alias"
+            and list(v.view_subset) == [""]
+            and v.view_source in builder.arrays
+            and len(syms) == len(builder.arrays[v.view_source].shape_symbols)
+        ):
             syms = list(builder.arrays[v.view_source].shape_symbols)
         # Plain (non-view) ``ptr => derived%pointer_member`` rebind target left
         # deferred by the bridge: inherit the source's bound shape symbols (see
@@ -646,9 +667,11 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         # no real shape -- every dim is a synthetic placeholder (``?`` or the
         # bridge-minted ``<name>_d<i>``), which is what marks it as a rebind
         # target rather than a genuine concrete-shape array copied whole.
-        elif (v.fortran_name in ptr_rebind_src
-              and all(s == "?" or s == f"{v.fortran_name}_d{i}" for i, s in enumerate(syms))
-              and len(syms) == len(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)):
+        elif (
+            v.fortran_name in ptr_rebind_src
+            and all(s == "?" or s == f"{v.fortran_name}_d{i}" for i, s in enumerate(syms))
+            and len(syms) == len(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)
+        ):
             syms = list(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)
         for dim, s in enumerate(syms):
             if s == "?":
@@ -679,7 +702,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
     # 1, 0)"``).  Detect by presence of arithmetic operators or
     # parentheses -- a bare symbol/literal won't contain any of those.
     def _is_expr(s: str) -> bool:
-        return any(c in s for c in '+-*/()')
+        return any(c in s for c in "+-*/()")
 
     # Synthetic symbols for dims that stayed unresolved after passes.
     # Literal-integer dimensions (e.g. the "3" in ``edge_idx(nc, 3)``) stay
@@ -690,13 +713,13 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
     known = {v.fortran_name for v in builder.variables}
     for v in builder.arrays.values():
         for s in shape_syms[v.fortran_name]:
-            if s.lstrip('-').isdigit() or _is_expr(s):
+            if s.lstrip("-").isdigit() or _is_expr(s):
                 continue
             if s not in known and s not in sdfg.symbols:
                 sdfg.add_symbol(s, dace.int64)
 
     def _dim(s: str) -> Any:
-        if s.lstrip('-').isdigit():
+        if s.lstrip("-").isdigit():
             return int(s)
         if _is_expr(s):
             return dace.symbolic.pystr_to_symbolic(s)
@@ -734,7 +757,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # (no bindings emitter) default it to the Fortran 1-based lower
             # bound in ``auto_dim_symbols``.
             return None
-        if s.lstrip('-').isdigit():
+        if s.lstrip("-").isdigit():
             return int(s)
         # Symbolic lb (e.g. caller-supplied ``arrsize``).  If the symbol
         # is already declared on the SDFG (a known dummy / Fortran sym),
@@ -757,6 +780,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # memlet (``acc`` / ``ensure_view_writeback_link``) carries the
             # slab; ``qg(c, i)`` lowers to ``re/im(qg[i-1])`` in emit.
             from dace_fortran.builder.access import cc_alias_view_spec
+
             spec = cc_alias_view_spec(builder, v.fortran_name)
             vdims = [_dim(s) for s in spec.shape]
             sdfg.add_view(
@@ -772,7 +796,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
                 lb = spec.lower_bounds[d] if d < len(spec.lower_bounds) else "1"
                 builder.offset_values[sym_name] = _offset_value(lb)
             continue
-        if v.role == 'section_alias':
+        if v.role == "section_alias":
             # Trivial section slice  --  no SDFG descriptor, no offset
             # symbols.  Accesses through the inlined-body dummy rewrite
             # to source-array memlets via ``view_dim_map`` in
@@ -828,7 +852,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             #    matching the rank-reinterpretation view-alias path
             #    for dummy reshapes (see access.py / extract_vars
             #    asAssumedShapeAlias rank-mismatch refusal).
-            same_rank = (len(dims) == 1)
+            same_rank = len(dims) == 1
             if same_rank:
                 extent_str = v.bounds_remap_total_extent
                 if not extent_str:
@@ -849,7 +873,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
                     dtype=dt(v.dtype),
                     strides=view_strides,
                 )
-        elif v.role == 'view_alias':
+        elif v.role == "view_alias":
             # Pointer alias of ``v.view_source``  --  no separate storage.
             # ``sdfg.add_view`` registers a static reference that DaCe
             # codegen lowers to a typed pointer into the source's
@@ -866,8 +890,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # collapsed to a scalar are dropped.  Section ``a(i, :)``
             # has shape ``(10,)`` stride ``(100,)``.
             src_v = builder.arrays.get(v.view_source)
-            src_dims = (shape_syms.get(v.view_source) if src_v is not None else None)
-            src_strides = (_fortran_strides([_dim(s) for s in src_dims]) if src_dims and len(src_dims) > 1 else None)
+            src_dims = shape_syms.get(v.view_source) if src_v is not None else None
+            src_strides = _fortran_strides([_dim(s) for s in src_dims]) if src_dims and len(src_dims) > 1 else None
             view_strides = []
             # Whole-array rank reinterpretation -- ssor's ``tv(N)``
             # 1D passed unmodified to buts's ``tv(5, M, K)`` 3D.
@@ -879,9 +903,9 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
                 view_strides = _fortran_strides(dims) if len(dims) > 1 else [1]
             elif src_strides is not None and len(v.view_subset) == len(src_strides):
                 for src_d, sub in enumerate(v.view_subset):
-                    if ':' not in sub:
+                    if ":" not in sub:
                         continue  # scalar dim  --  drops out of the view
-                    parts = sub.split(':')
+                    parts = sub.split(":")
                     sec_stride = int(parts[2]) if len(parts) >= 3 else 1
                     view_strides.append(src_strides[src_d] * sec_stride)
             # Only honour the derived strides if their length matches
@@ -917,7 +941,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # intent-empty global is a caller kwarg (non-transient
             # (1,)-Array surfacing on the SDFG signature).
             from dace_fortran.builder import global_is_baked_constant
-            transient = (v.intent == '' and global_is_baked_constant(v))
+
+            transient = v.intent == "" and global_is_baked_constant(v)
             # An inlined-callee dummy bound to an unrepresentable struct-
             # component section (AoS-global ``becxx(ikq)%k``) is the kernel's
             # OWN internal data, never a true external input -- register it as a
@@ -970,8 +995,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
     # ``ConvertLengthOneArraysToScalars`` pass skips view-sources, so the
     # length-1 Array survives the later scalar-folding cleanup.
     scalar_view_sources = {
-        a.view_source
-        for a in builder.arrays.values() if a.role == 'view_alias' and a.view_source in builder.scalars
+        a.view_source for a in builder.arrays.values() if a.role == "view_alias" and a.view_source in builder.scalars
     }
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
@@ -979,7 +1003,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         if v.fortran_name in scalar_view_sources and v.fortran_name not in sdfg.arrays:
             # length-1 Array view source (see note above).  Local target ->
             # transient; a dummy target keeps the caller-visible buffer.
-            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=(v.intent == ''))
+            sdfg.add_array(v.fortran_name, shape=(1,), dtype=dt(v.dtype), transient=(v.intent == ""))
             continue
         # Cross-role collision guard.  When ``hlfir-inline-all`` splices
         # multiple callees into the entry, the bridge's collector can
@@ -997,7 +1021,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         # whose name collides with a shape symbol).
         if v.fortran_name in sdfg.arrays or v.fortran_name in sdfg.symbols:
             continue
-        if v.intent == '':
+        if v.intent == "":
             # Local transient scalar.  It is declared WITHOUT an initializer, exactly like the Fortran local:
             # the frontend emits a read only where the source reads it.  gcc's ``-Wmaybe-uninitialized`` can
             # still fire for a local the source assigns under one condition and reads under a correlated one
@@ -1006,13 +1030,13 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # are false positives of the flow analysis, not a read before a definite write, so the warnings are
             # left visible rather than masked by a zero-init that would hide a genuine source-level bug.
             sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)
-        elif v.intent in ('out', 'inout'):
+        elif v.intent in ("out", "inout"):
             # Scalar OUTPUT must remain a length-1 array on the SDFG
             # signature -- the runtime needs a writable buffer the
             # caller hands in (Python ``float`` would be pass-by-value
             # so updates wouldn't surface on the caller side).
-            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=False)
-        elif v.dtype in ('complex64', 'complex128'):
+            sdfg.add_array(v.fortran_name, shape=(1,), dtype=dt(v.dtype), transient=False)
+        elif v.dtype in ("complex64", "complex128"):
             # Scalar INPUT of COMPLEX type.  DaCe's ctypes interop
             # mis-handles a by-value complex scalar argument:
             # ``complex128.as_ctypes()`` returns ``c_longdouble`` (a
@@ -1027,7 +1051,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # complex array.  (A by-value fix would require correcting
             # DaCe core's complex ``as_ctypes`` + the SysV 2-SSE-reg
             # complex ABI, which is out of scope here.)
-            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=False)
+            sdfg.add_array(v.fortran_name, shape=(1,), dtype=dt(v.dtype), transient=False)
         else:
             # Scalar INPUT (``intent(in)`` or ``REAL(8), VALUE :: x``).
             # Register as a true Scalar -- DaCe accepts plain Python
@@ -1057,7 +1081,7 @@ def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], d
             dims.append(s)
             continue
         s_str = str(s).strip()
-        if s_str.lstrip('-').isdigit():
+        if s_str.lstrip("-").isdigit():
             dims.append(int(s_str))
             continue
         # Compound shape expression (e.g. QE's bridge-derived
@@ -1068,7 +1092,7 @@ def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], d
         # (which DaCe rejects with NameError).  Mirrors the
         # ``_dim``/``_is_expr`` path used for non-synth arrays a few
         # screens up.
-        if any(c in s_str for c in '+-*/()'):
+        if any(c in s_str for c in "+-*/()"):
             sym_expr = dace.symbolic.pystr_to_symbolic(s_str)
             for leaf in sym_expr.free_symbols:
                 leaf_name = str(leaf)
@@ -1097,9 +1121,9 @@ def declare_synth_array(builder: SDFGBuilder, name: str, shape: Sequence[Any], d
         fortran_name=name,
         dtype=dtype,
         rank=len(shape),
-        role='array',
+        role="array",
         shape_symbols=[str(s) for s in shape],
-        lower_bounds=['1'] * len(shape),
+        lower_bounds=["1"] * len(shape),
     )
     # Per-axis offset symbols + values (always 1 for bridge-synthesised
     # transients  --  they're allocated fresh with Fortran's default lb).
@@ -1130,7 +1154,7 @@ def emit_declare_transient(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: 
     resolved = []
     for entry in shape:
         s = str(entry)
-        m = re.fullmatch(r'([A-Za-z_][A-Za-z_0-9]*)_d(\d+)', s)
+        m = re.fullmatch(r"([A-Za-z_][A-Za-z_0-9]*)_d(\d+)", s)
         if m:
             src, dim = m.group(1), int(m.group(2))
             if src in ctx.sdfg.arrays:
@@ -1174,7 +1198,7 @@ def auto_declare_synth(builder: SDFGBuilder, name: str, ctx: Ctx) -> None:
     # that a scalar reads correctly on a ConditionalBlock branch /
     # interstate edge in d-face 2.0.0a3 -- no length-1 array needed; the
     # earlier "scalar = free-symbol 0 on the edge" belief was wrong).
-    v = SyntheticVar(fortran_name=name, dtype='int32', role='symbol' if is_sym else 'scalar')
+    v = SyntheticVar(fortran_name=name, dtype="int32", role="symbol" if is_sym else "scalar")
     if is_sym:
         builder.symbols[name] = v
         if name not in ctx.sdfg.symbols:

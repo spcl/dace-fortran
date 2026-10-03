@@ -20,7 +20,6 @@
     ``offset_<arr>_d<i>`` free on purpose for dummy ALLOC/POINTER bounds the
     bindings emitter fills via ``lbound``, e.g. ICON's ``end_block(min_rl:)``).
 """
-from pathlib import Path
 
 import numpy as np
 import pytest

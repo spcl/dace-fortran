@@ -12,6 +12,7 @@ so both sides read identical state). ``inject_use_mpi`` lets the inlined
 
 ``@pytest.mark.long``: builds the full driver to an SDFG (minutes).
 """
+
 import shutil
 from pathlib import Path
 

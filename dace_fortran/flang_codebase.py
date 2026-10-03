@@ -118,7 +118,7 @@ def mpi_stub_source() -> str:
 
 # Not vendored (4 MB, updates yearly): fetched from upstream on first use
 # and cached, same layout as the bridge's own build (~/.cache/dace-fortran).
-_NETCDF_FORTRAN_URL = ("https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v{version}.tar.gz")
+_NETCDF_FORTRAN_URL = "https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v{version}.tar.gz"
 _NETCDF_FORTRAN_DEFAULT_VERSION = "4.6.2"
 
 
@@ -150,8 +150,7 @@ def vendor_netcdf_fortran(cache_dir: Path, version: str = _NETCDF_FORTRAN_DEFAUL
         # it rejects absolute/parent paths, links out of the tree, and device nodes.
         t.extractall(cache_dir, filter="data")
     if not fortran_dir.is_dir():
-        raise RuntimeError(f"netcdf-fortran tarball did not extract a fortran/ "
-                           f"subdirectory under {target}")
+        raise RuntimeError(f"netcdf-fortran tarball did not extract a fortran/ subdirectory under {target}")
     return fortran_dir
 
 
@@ -166,7 +165,7 @@ def netcdf_stub_source(fortran_dir: Path) -> str:
         :func:`vendor_netcdf_fortran` (or an equivalent local copy).
     """
     fortran_dir = Path(fortran_dir)
-    return ((fortran_dir / "module_typesizes.F90").read_text() + "\n" + (fortran_dir / "netcdf4.F90").read_text())
+    return (fortran_dir / "module_typesizes.F90").read_text() + "\n" + (fortran_dir / "netcdf4.F90").read_text()
 
 
 # Registry: name -> (stub source provider, include-path provider).  The
@@ -177,6 +176,7 @@ class LibraryStub:
     """A pluggable wrapper for an upstream Fortran library that ships
     only binary ``.mod`` files.  See :data:`LIBRARY_STUBS` for the
     built-in set."""
+
     name: str
     #: Returns Fortran source defining the library's module(s).
     source: Callable[..., str]
@@ -189,9 +189,11 @@ def _mpi_flags(openmpi_include: Optional[str] = None, **_: Any) -> List[str]:
     install when ``openmpi_include`` isn't passed."""
     inc = openmpi_include or find_openmpi_include()
     if inc is None:
-        raise RuntimeError("MPI stub needs OpenMPI's include directory (with "
-                           "mpif-config.h).  Pass openmpi_include=... or install "
-                           "libopenmpi-dev.")
+        raise RuntimeError(
+            "MPI stub needs OpenMPI's include directory (with "
+            "mpif-config.h).  Pass openmpi_include=... or install "
+            "libopenmpi-dev."
+        )
     return [f"-I{inc}"]
 
 
@@ -199,8 +201,7 @@ def _netcdf_source(cache_dir: Optional[Path] = None, **_: Any) -> str:
     """Source for the netcdf stub.  Requires ``cache_dir`` to vendor
     the upstream tarball."""
     if cache_dir is None:
-        raise ValueError("netcdf stub needs cache_dir for the vendored "
-                         "netcdf-fortran source.")
+        raise ValueError("netcdf stub needs cache_dir for the vendored netcdf-fortran source.")
     return netcdf_stub_source(vendor_netcdf_fortran(cache_dir))
 
 
@@ -227,7 +228,9 @@ LIBRARY_STUBS: Dict[str, LibraryStub] = {
 # type, which is statically known, so we substitute the constant.
 _MPI_SIZEOF_RE = re.compile(
     r"(\s*)CALL\s+MPI_SIZEOF\s*\(\s*([A-Za-z_]\w*)\s*,\s*"
-    r"([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)", re.IGNORECASE)
+    r"([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)",
+    re.IGNORECASE,
+)
 
 
 def patch_mpi_sizeof(source: str) -> str:
@@ -242,8 +245,7 @@ def patch_mpi_sizeof(source: str) -> str:
         indent, arg, sz, err = m.group(1), m.group(2), m.group(3), m.group(4)
         small = any(k in arg.lower() for k in ("i4", "sp"))
         sz_val = 4 if small else 8
-        return (f"{indent}{sz} = {sz_val}; {err} = 0  "
-                f"! flang-21 stub for MPI_SIZEOF({arg})")
+        return f"{indent}{sz} = {sz_val}; {err} = 0  ! flang-21 stub for MPI_SIZEOF({arg})"
 
     return _MPI_SIZEOF_RE.sub(_replace, source)
 
@@ -292,10 +294,9 @@ def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str
     artefact = makefile_dir / target
     if artefact.is_file():
         artefact.unlink()
-    out = subprocess.check_output([make_program, "-n", target],
-                                  cwd=str(makefile_dir),
-                                  stderr=subprocess.STDOUT,
-                                  text=True)
+    out = subprocess.check_output(
+        [make_program, "-n", target], cwd=str(makefile_dir), stderr=subprocess.STDOUT, text=True
+    )
     # Pick the first line that mentions a Fortran source -- ICON's
     # ``mpifort -c ... mo_velocity_advection.f90`` style.
     compile_line = None
@@ -310,8 +311,9 @@ def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str
                 compile_line = ln
                 break
     if compile_line is None:
-        raise RuntimeError(f"could not find a Fortran compile line for {target!r} in the "
-                           f"output of `{make_program} -n -B`")
+        raise RuntimeError(
+            f"could not find a Fortran compile line for {target!r} in the output of `{make_program} -n -B`"
+        )
     defines = sorted(set(_DEFINE_RE.findall(compile_line)))
     include_dirs = [Path(p) for p in _INCLUDE_RE.findall(compile_line)]
     src_match = _FORTRAN_SOURCE_RE.search(compile_line)
@@ -335,7 +337,7 @@ def prepare_flang_translation_unit(
     *,
     search_dirs: Sequence[Path] = (),
     library_stubs: Sequence[str] = (),
-    patches: Sequence[str] = ("mpi_sizeof", ),
+    patches: Sequence[str] = ("mpi_sizeof",),
     defines: Sequence[str] = (),
     include_dirs: Sequence[Path] = (),
     cache_dir: Optional[Path] = None,
@@ -387,8 +389,7 @@ def prepare_flang_translation_unit(
         try:
             stub = LIBRARY_STUBS[name]
         except KeyError as e:
-            raise KeyError(f"unknown library stub {name!r}; available: "
-                           f"{sorted(LIBRARY_STUBS)}") from e
+            raise KeyError(f"unknown library stub {name!r}; available: {sorted(LIBRARY_STUBS)}") from e
         pieces.append(stub.source(cache_dir=cache_dir, openmpi_include=openmpi_include))
         flags.extend(stub.flags(cache_dir=cache_dir, openmpi_include=openmpi_include))
 
@@ -399,8 +400,7 @@ def prepare_flang_translation_unit(
         try:
             source = FLANG_BUG_PATCHES[name](source)
         except KeyError as e:
-            raise KeyError(f"unknown flang patch {name!r}; available: "
-                           f"{sorted(FLANG_BUG_PATCHES)}") from e
+            raise KeyError(f"unknown flang patch {name!r}; available: {sorted(FLANG_BUG_PATCHES)}") from e
 
     return source, flags
 
@@ -411,18 +411,18 @@ def prepare_flang_translation_unit(
 
 
 def emit_hlfir_from_codebase(
-        entry_source: str,
-        out_path: Path,
-        *,
-        search_dirs: Sequence[Path] = (),
-        library_stubs: Sequence[str] = (),
-        patches: Sequence[str] = ("mpi_sizeof", ),
-        defines: Sequence[str] = (),
-        include_dirs: Sequence[Path] = (),
-        cache_dir: Optional[Path] = None,
-        openmpi_include: Optional[str] = None,
-        flang_program: Optional[str] = None,
-        extra_flang_flags: Sequence[str] = (),
+    entry_source: str,
+    out_path: Path,
+    *,
+    search_dirs: Sequence[Path] = (),
+    library_stubs: Sequence[str] = (),
+    patches: Sequence[str] = ("mpi_sizeof",),
+    defines: Sequence[str] = (),
+    include_dirs: Sequence[Path] = (),
+    cache_dir: Optional[Path] = None,
+    openmpi_include: Optional[str] = None,
+    flang_program: Optional[str] = None,
+    extra_flang_flags: Sequence[str] = (),
 ) -> Path:
     """Compose a translation unit for ``entry_source`` via
     :func:`prepare_flang_translation_unit`, write it next to
@@ -459,18 +459,20 @@ def emit_hlfir_from_codebase(
     # test runs.  Flang's ``.mod`` format is incompatible with
     # gfortran's; a chance collision surfaces as ``Cannot use module
     # file for module X``.
-    subprocess.check_call([
-        flang_program or require_flang(),
-        "-fc1",
-        "-cpp",
-        "-U_OPENMP",
-        "-U_OPENACC",
-        *flang_flags,
-        *extra_flang_flags,
-        "-emit-hlfir",
-        str(tu_path),
-        "-o",
-        str(out_path),
-    ],
-                          cwd=str(out_path.parent))
+    subprocess.check_call(
+        [
+            flang_program or require_flang(),
+            "-fc1",
+            "-cpp",
+            "-U_OPENMP",
+            "-U_OPENACC",
+            *flang_flags,
+            *extra_flang_flags,
+            "-emit-hlfir",
+            str(tu_path),
+            "-o",
+            str(out_path),
+        ],
+        cwd=str(out_path.parent),
+    )
     return out_path

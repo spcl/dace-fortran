@@ -14,6 +14,7 @@ The ICON binding-swap integration runs stock ``solve_nh`` and SDFG
 ``free_*_clone`` full release is checked under valgrind when available. Uses
 minimal stand-in types (:file:`_solve_nh_min_types.py`), so needs only gfortran.
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -205,14 +206,22 @@ def diff_exe(tmp_path_factory) -> Path:
     shutil.copy(_DIFF_F90, build / "mo_solve_nh_diff.f90")
 
     exe = build / "test_diff"
-    compile = subprocess.run([
-        "gfortran", "-ffree-line-length-none", "-fcheck=all", "-g", "min_types.f90", "mo_solve_nh_diff.f90",
-        "driver.f90", "-o",
-        str(exe)
-    ],
-                             cwd=str(build),
-                             capture_output=True,
-                             text=True)
+    compile = subprocess.run(
+        [
+            "gfortran",
+            "-ffree-line-length-none",
+            "-fcheck=all",
+            "-g",
+            "min_types.f90",
+            "mo_solve_nh_diff.f90",
+            "driver.f90",
+            "-o",
+            str(exe),
+        ],
+        cwd=str(build),
+        capture_output=True,
+        text=True,
+    )
     assert compile.returncode == 0, f"mo_solve_nh_diff.f90 did not compile:\n{compile.stderr}"
     return exe
 
@@ -221,18 +230,20 @@ def test_solve_nh_diff_deepcopy_and_compare(diff_exe: Path):
     """Clone independence (both directions), scalar preservation, exact
     bit-level diff counts across prog / diag / prep_adv."""
     run = subprocess.run([str(diff_exe)], cwd=str(diff_exe.parent), capture_output=True, text=True)
-    assert run.returncode == 0 and "PASS" in run.stdout, \
+    assert run.returncode == 0 and "PASS" in run.stdout, (
         f"differential helper driver failed:\nstdout={run.stdout}\nstderr={run.stderr}"
+    )
 
 
 @pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not on PATH")
 def test_solve_nh_diff_frees_cleanly(diff_exe: Path):
     """free_state_clone/free_prepadv_clone leak-free under valgrind (definite leaks only -- gfortran's I/O buffers stay reachable)."""
     run = subprocess.run(
-        ["valgrind", "--error-exitcode=42", "--leak-check=full", "--errors-for-leak-kinds=definite",
-         str(diff_exe)],
+        ["valgrind", "--error-exitcode=42", "--leak-check=full", "--errors-for-leak-kinds=definite", str(diff_exe)],
         cwd=str(diff_exe.parent),
         capture_output=True,
-        text=True)
-    assert run.returncode == 0 and "PASS" in run.stdout, \
+        text=True,
+    )
+    assert run.returncode == 0 and "PASS" in run.stdout, (
         f"driver leaked or corrupted memory under valgrind:\nstdout={run.stdout}\nstderr={run.stderr}"
+    )

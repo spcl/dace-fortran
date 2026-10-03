@@ -11,6 +11,7 @@ counts so downstream shape and branch folding have literals. ``scalar_fission`` 
 unconditionally in the pipeline; it is what splits the scalar-carried loop bodies so CLOUDSC's
 block loop can map at all.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -54,11 +55,13 @@ def _split_specialize(sdfg):
 @pytest.fixture(scope="module")
 def _f2py_ref(tmp_path_factory):
     """The untouched gfortran reference, built once (see cloudsc/full/test_cloudsc_full)."""
-    return f2py_compile(_SRC.read_text(),
-                        tmp_path_factory.mktemp("cloudsc_e2e_ref"),
-                        "cloudsc_ref",
-                        extra_f90flags=CLOUDSC_F90FLAGS,
-                        only=("cloudscouter", ))
+    return f2py_compile(
+        _SRC.read_text(),
+        tmp_path_factory.mktemp("cloudsc_e2e_ref"),
+        "cloudsc_ref",
+        extra_f90flags=CLOUDSC_F90FLAGS,
+        only=("cloudscouter",),
+    )
 
 
 def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
@@ -76,12 +79,9 @@ def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
         optimize(sdfg, symbols=syms, scalars=scalars)
         maps["n"] = num_maps(sdfg)
 
-    outputs_sdfg, outputs_ref = run_cloudsc(_SRC.read_text(),
-                                            "cloudsc",
-                                            _f2py_ref,
-                                            tmp_path / "sdfg",
-                                            transform=transform,
-                                            verify_preopt=True)
+    outputs_sdfg, outputs_ref = run_cloudsc(
+        _SRC.read_text(), "cloudsc", _f2py_ref, tmp_path / "sdfg", transform=transform, verify_preopt=True
+    )
 
     assert maps["n"] > 0, "pipeline produced no maps -- nothing was parallelized"
 
@@ -92,6 +92,7 @@ def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
         b = np.asarray(outputs_ref[name.lower()])
         bad = ~np.isclose(a, b, rtol=rtol, atol=atol, equal_nan=True)
         if bad.any():
-            report.append(f"{name}: {int(bad.sum())} cell(s) exceed rtol={rtol} "
-                          f"(max |Δ|={np.abs(a - b)[bad].max():.3e})")
+            report.append(
+                f"{name}: {int(bad.sum())} cell(s) exceed rtol={rtol} (max |Δ|={np.abs(a - b)[bad].max():.3e})"
+            )
     assert not report, "cloudsc pipeline numerical mismatch:\n" + "\n".join(report)

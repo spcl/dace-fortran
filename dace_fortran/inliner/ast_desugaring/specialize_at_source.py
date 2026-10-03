@@ -28,6 +28,7 @@ passes to handle -- never silently miscompiled.
 Entry point: :func:`specialize_at_source` (runs the subprogram-call + function-ref
 inliners to a fixpoint).
 """
+
 import re
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
@@ -107,8 +108,8 @@ def _subst(text: str, mapping: Dict[str, str]) -> str:
     pat = re.compile(_IDENT.format(names="|".join(re.escape(k) for k in lower)), re.IGNORECASE)
 
     def repl(m: "re.Match") -> str:
-        before = text[max(0, m.start() - 16):m.start()]
-        if _KW_BEFORE.search(before) and _KW_AFTER.match(text[m.end():m.end() + 4]):
+        before = text[max(0, m.start() - 16) : m.start()]
+        if _KW_BEFORE.search(before) and _KW_AFTER.match(text[m.end() : m.end() + 4]):
             return m.group(1)  # keyword-argument name: preserve verbatim
         if _COMP_BEFORE.search(before):
             return m.group(1)  # struct component / type-bound name after ``%``
@@ -143,8 +144,9 @@ def _optional_dummy_names(callee_spec: Optional[f03.Base], dummies: Set[str]) ->
     return opt
 
 
-def _bind_actuals_to_dummies(call: f03.Call_Stmt, dummies: List[str],
-                             optionals: Set[str]) -> Optional[Tuple[Dict[str, str], Set[str]]]:
+def _bind_actuals_to_dummies(
+    call: f03.Call_Stmt, dummies: List[str], optionals: Set[str]
+) -> Optional[Tuple[Dict[str, str], Set[str]]]:
     """Map each dummy to its actual argument text at ``call``, classifying omitted
     optionals as ABSENT.
 
@@ -181,8 +183,9 @@ def _bind_actuals_to_dummies(call: f03.Call_Stmt, dummies: List[str],
     return present, absent
 
 
-def _statically_present(bound: Dict[str, str], caller_sub: Optional[f03.Base],
-                        caller_spec: Optional[f03.Base]) -> Set[str]:
+def _statically_present(
+    bound: Dict[str, str], caller_sub: Optional[f03.Base], caller_spec: Optional[f03.Base]
+) -> Set[str]:
     """Of the supplied dummies in ``bound``, those whose ``PRESENT`` is statically
     ``.TRUE.`` at this call -- i.e. all of them EXCEPT any bound to a bare reference
     to one of the CALLER's own OPTIONAL dummies.
@@ -337,7 +340,8 @@ def _fold_logical_literal_locals(exec_text: str) -> str:
     if not const:
         return exec_text
     kept = [
-        line for line in exec_text.splitlines()
+        line
+        for line in exec_text.splitlines()
         if not ((assign := _LOGICAL_LIT_ASSIGN.match(line)) and assign.group(1).lower() in const)
     ]
     return _subst("\n".join(kept), const)
@@ -365,7 +369,7 @@ def _reparse_fragment(uses: List[str], decls: List[str], exec_text: str) -> Tupl
     text = f"module zz_inl_m\ncontains\nsubroutine zz_inl_s\n{head}\n{exec_text}\nend subroutine\nend module\n"
     prog = parse_program(text)
     pruning.prune_branches(prog, alias_map={})
-    sub = next(iter(walk(prog, (f03.Subroutine_Subprogram, ))))
+    sub = next(iter(walk(prog, (f03.Subroutine_Subprogram,))))
     spec = next(iter(children_of_type(sub, f03.Specification_Part)), None)
     expart = next(iter(children_of_type(sub, f03.Execution_Part)), None)
     spec_children = list(spec.children) if spec is not None else []
@@ -421,7 +425,7 @@ def _merge_into_caller_spec(caller_spec: f03.Base, frag_spec: List[f03.Base]) ->
 def _inline_one_call(call: f03.Call_Stmt, callee_sub: f03.Base, counter: int) -> bool:
     """Splice ``callee_sub``'s body into ``call``'s site with the actuals bound.
     Returns True on success, False when the call shape is left untouched."""
-    callee_stmt = next(iter(children_of_type(callee_sub, (f03.Subroutine_Stmt, ))), None)
+    callee_stmt = next(iter(children_of_type(callee_sub, (f03.Subroutine_Stmt,))), None)
     if callee_stmt is None:
         return False
     dummies = _dummy_arg_names(callee_stmt)
@@ -434,7 +438,8 @@ def _inline_one_call(call: f03.Call_Stmt, callee_sub: f03.Base, counter: int) ->
 
     caller_sub = call
     while caller_sub is not None and not isinstance(
-            caller_sub, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)):
+        caller_sub, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)
+    ):
         caller_sub = caller_sub.parent
     if caller_sub is None:
         return False
@@ -523,7 +528,7 @@ def _inline_one_funcref(ref: f03.Base, callee_sub: f03.Base, counter: int) -> bo
     is bound and the ladder folds, the reference becomes a single-source rebind in
     the caller.
     """
-    func_stmt = next(iter(children_of_type(callee_sub, (f03.Function_Stmt, ))), None)
+    func_stmt = next(iter(children_of_type(callee_sub, (f03.Function_Stmt,))), None)
     if func_stmt is None:
         return False
     dummies = _dummy_arg_names(func_stmt)
@@ -543,7 +548,8 @@ def _inline_one_funcref(ref: f03.Base, callee_sub: f03.Base, counter: int) -> bo
     exec_part = enclosing.parent
     caller_sub = enclosing
     while caller_sub is not None and not isinstance(
-            caller_sub, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)):
+        caller_sub, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)
+    ):
         caller_sub = caller_sub.parent
     caller_spec = next(iter(children_of_type(caller_sub, f03.Specification_Part)), None) if caller_sub else None
     if caller_spec is None:
@@ -609,9 +615,13 @@ def _target_defs(ast: f03.Program, want: Set[str], stmt_type: Union[type, Tuple[
     return out
 
 
-def _resolve_target_callee(procname: f03.Name, alias_map: types.SPEC_TABLE, want: Set[str],
-                           target_defs: Dict[str, f03.Base], stmt_type: Union[type, Tuple[type,
-                                                                                          ...]]) -> Optional[f03.Base]:
+def _resolve_target_callee(
+    procname: f03.Name,
+    alias_map: types.SPEC_TABLE,
+    want: Set[str],
+    target_defs: Dict[str, f03.Base],
+    stmt_type: Union[type, Tuple[type, ...]],
+) -> Optional[f03.Base]:
     """Resolve a call/reference name to a TARGET subprogram definition: first via the
     caller's local alias scope (handles USE-renamed ``deconiface`` specifics), then
     by direct target-name match (handles a forwarded call that landed cross-module)."""
@@ -708,12 +718,15 @@ def specialize_at_source(ast: f03.Program, targets: Iterable[str]) -> Tuple[int,
     # -- e.g. an absent-optional shape the splice could not express -- and will
     # carry its runtime-selected construct into the bridge, where it fails to lower.
     want = {t.lower() for t in targets}
-    survivors = sorted({
-        c.children[0].string.lower()
-        for c in walk(ast, f03.Call_Stmt)
-        if isinstance(c.children[0], f03.Name) and c.children[0].string.lower() in want
-    })
+    survivors = sorted(
+        {
+            c.children[0].string.lower()
+            for c in walk(ast, f03.Call_Stmt)
+            if isinstance(c.children[0], f03.Name) and c.children[0].string.lower() in want
+        }
+    )
     if survivors:
-        logger.warning("specialize_at_source: %d TARGET call(s) NOT inlined (will block lowering): %s", len(survivors),
-                       survivors)
+        logger.warning(
+            "specialize_at_source: %d TARGET call(s) NOT inlined (will block lowering): %s", len(survivors), survivors
+        )
     return n_sub, n_fun

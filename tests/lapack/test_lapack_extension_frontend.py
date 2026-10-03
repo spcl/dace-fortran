@@ -1,5 +1,6 @@
 """E2E tests for the LAPACK routines beyond ``getrf``/``potrf``: ``potrs``, ``geqrf`` and ``orgqr`` have no
 library node and are rejected as unsupported library calls."""
+
 from pathlib import Path
 
 import pytest

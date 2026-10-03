@@ -22,7 +22,7 @@ subroutine main(a, res)
   res = 1.0 - transpose(a)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.empty((5, 4), order="F", dtype=np.float64)
     a[:] = np.arange(20).reshape(5, 4)
     res = np.zeros((4, 5), order="F", dtype=np.float64)
@@ -40,7 +40,7 @@ subroutine main(a, b, res)
   res = 2.0 - matmul(a, b)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.empty((5, 3), order="F", dtype=np.float64)
     a[:] = np.arange(15).reshape(5, 3)
     b = np.empty((3, 7), order="F", dtype=np.float64)

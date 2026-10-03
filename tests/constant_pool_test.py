@@ -64,7 +64,7 @@ end subroutine
     out_ref = np.asarray(mod.main(), dtype=np.float64)
 
     sdfg = _build(src, tmp_path)
-    out = np.zeros(3, order='F', dtype=np.float64)
+    out = np.zeros(3, order="F", dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
     np.testing.assert_array_equal(out, [3.0, 4.0, 5.0])
@@ -88,7 +88,7 @@ end subroutine
     out_ref = np.asarray(mod.main(), dtype=np.int32)
 
     sdfg = _build(src, tmp_path)
-    out = np.zeros(3, order='F', dtype=np.int32)
+    out = np.zeros(3, order="F", dtype=np.int32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
     np.testing.assert_array_equal(out, [20, 40, 60])
@@ -189,7 +189,7 @@ end subroutine
     mod = f2py_compile(src, tmp_path / "ref", "indirect_sym_struct_idx_ref")
     out_ref = np.asarray(mod.main(3), dtype=np.float64)
 
-    sdfg = _build(src, tmp_path, entry='main')
+    sdfg = _build(src, tmp_path, entry="main")
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out, j=3)
     np.testing.assert_array_equal(out, out_ref)
@@ -215,7 +215,7 @@ end subroutine
     out_ref = np.asarray(mod.main(), dtype=np.float64)
 
     sdfg = _build(src, tmp_path)
-    out = np.zeros(3, order='F', dtype=np.float64)
+    out = np.zeros(3, order="F", dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
     np.testing.assert_array_equal(out, [11.0, 22.0, 33.0])

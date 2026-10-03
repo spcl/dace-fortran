@@ -9,9 +9,8 @@ matches a gfortran/f2py reference numerically.
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-from dace_fortran.external import (Arg, apply_external_functions, clear_external_registry, inline_external,
-                                   keep_external)
+from _util import build_sdfg, have_flang
+from dace_fortran.external import Arg, apply_external_functions, clear_external_registry, inline_external, keep_external
 from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
@@ -71,12 +70,14 @@ end module caller_mod
 
     # Pre-condition: the caller SDFG carries an ExternalCall library node for add_one.
     from dace_fortran.external import ExternalCall
+
     ext_sites = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, ExternalCall) and n.c_name == "add_one"
     ]
-    assert len(ext_sites) == 1, (f"expected exactly one ExternalCall for add_one before inline, "
-                                 f"got {len(ext_sites)}")
+    assert len(ext_sites) == 1, f"expected exactly one ExternalCall for add_one before inline, got {len(ext_sites)}"
 
     # Re-declare so the lookup inside inline_external resolves (only c_name
     # matters -- connector order comes from the callee SDFG's arglist, not args).
@@ -89,20 +90,25 @@ end module caller_mod
 
     # Post-condition: the ExternalCall is gone and a NestedSDFG wraps the callee SDFG.
     ext_sites_after = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, ExternalCall) and n.c_name == "add_one"
     ]
     assert ext_sites_after == []
     from dace.sdfg.nodes import NestedSDFG
+
     nested_sites = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, NestedSDFG) and n.sdfg is callee_sdfg
     ]
     assert len(nested_sites) == 1
 
     # Functional: the inlined caller should match gfortran on the same source.
-    arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
-    arr_sdfg = arr.copy(order='F')
+    arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
+    arr_sdfg = arr.copy(order="F")
     caller_sdfg.validate()
     caller_sdfg(arr=arr_sdfg, n=np.int32(4))
     np.testing.assert_allclose(arr_sdfg, arr + 1.0, rtol=0, atol=0)
@@ -159,14 +165,17 @@ end module caller_mod
     caller_dir.mkdir(parents=True, exist_ok=True)
     (caller_dir / "aos_mod.f90").write_text(callee_src)
     try:
-        keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"), ))
+        keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"),))
         caller_sdfg = build_sdfg(caller_src, caller_dir, name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
 
     from dace_fortran.external import ExternalCall
+
     ext_sites = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, ExternalCall) and n.c_name == callee_ext_name
     ]
     assert len(ext_sites) == 1
@@ -177,10 +186,9 @@ end module caller_mod
 
     # Confirm callee SDFG flattened to the same two leaves so the arglist matches by position.
     callee_args = list(callee_sdfg.arglist().keys())
-    assert len(callee_args) == 2, (f"callee expected to flatten its struct dummy to 2 leaves, got "
-                                   f"{callee_args}")
+    assert len(callee_args) == 2, f"callee expected to flatten its struct dummy to 2 leaves, got {callee_args}"
 
-    keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"), ))
+    keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"),))
     try:
         replaced = inline_external(caller_sdfg, callee_ext_name, callee_sdfg=callee_sdfg)
     finally:
@@ -188,23 +196,28 @@ end module caller_mod
     assert replaced == 1
 
     ext_after = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, ExternalCall) and n.c_name == callee_ext_name
     ]
     assert ext_after == []
     from dace.sdfg.nodes import NestedSDFG
+
     nested_after = [
-        n for state in caller_sdfg.all_states() for n in state.nodes()
+        n
+        for state in caller_sdfg.all_states()
+        for n in state.nodes()
         if isinstance(n, NestedSDFG) and n.sdfg is callee_sdfg
     ]
     assert len(nested_after) == 1
 
     caller_sdfg.validate()
-    u = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
-    v = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64, order='F')
+    u = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
+    v = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64, order="F")
     expected = u + v
-    u_sdfg = u.copy(order='F')
-    v_sdfg = v.copy(order='F')
+    u_sdfg = u.copy(order="F")
+    v_sdfg = v.copy(order="F")
     caller_sdfg(s_u=u_sdfg, s_v=v_sdfg)
     np.testing.assert_allclose(u_sdfg, expected, rtol=0, atol=0)
     np.testing.assert_allclose(v_sdfg, v, rtol=0, atol=0)

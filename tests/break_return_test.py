@@ -14,6 +14,7 @@ import pytest
 @dataclass
 class _Node:
     """Minimal stand-in for the nanobind ASTNode."""
+
     kind: str
     target: str = ""
     expr: str = ""
@@ -48,9 +49,10 @@ def test_return_block_wired_at_top_level(tmp_path):
     builder.init_emit_state()
     sdfg = SDFG("early_ret")
     sdfg.add_symbol("n", dace.int64)
-    sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
+    sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
 
     from dace_fortran.hlfir_to_sdfg import Ctx
+
     ctx = Ctx(sdfg, builder)
 
     ast = [_Node(kind="return")]
@@ -83,14 +85,12 @@ def test_break_block_inside_loop_region(tmp_path):
     sdfg = SDFG("early_break")
     sdfg.add_symbol("i", dace.int64)
     sdfg.add_symbol("n", dace.int64)
-    sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
+    sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
 
     # Manually wires: LoopRegion(i=1..n) { ConditionalBlock: break-arm if a[i-1]>100, else no-op body }
-    loop = LoopRegion(label="loop_0",
-                      condition_expr="i < n + 1",
-                      loop_var="i",
-                      initialize_expr="i = 1",
-                      update_expr="i = i + 1")
+    loop = LoopRegion(
+        label="loop_0", condition_expr="i < n + 1", loop_var="i", initialize_expr="i = 1", update_expr="i = i + 1"
+    )
     sdfg.add_node(loop)
 
     cond_block = ConditionalBlock("if_exit")

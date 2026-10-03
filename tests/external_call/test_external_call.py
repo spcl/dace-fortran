@@ -4,6 +4,7 @@ once; the bridge derives the arg plan (array->inout pointer, scalar->by-value) f
 HLFIR call site and lowers to a CPP tasklet calling ``extern "C" foo``, no re-authored
 signature. SDFG ``.so`` links ``libfoo.so`` via rpath (no LD_PRELOAD). Contract: target must
 be ``bind(c)`` -- the only portable way to call Fortran from generated C++."""
+
 import shutil
 import subprocess
 from pathlib import Path

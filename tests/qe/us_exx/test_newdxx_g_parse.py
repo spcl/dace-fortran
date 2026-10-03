@@ -35,6 +35,7 @@ node's conjugate flag; every other part of the 'c' path lowers correctly
 correctly), so ``test_newdxx_g_numerical_correctness`` passes.
 See ``newdxx_g_caller.f90`` for the C-callable driver harness.
 """
+
 from pathlib import Path
 
 import pytest
@@ -114,19 +115,24 @@ def test_newdxx_g_flang_parses(tmp_path):
     checkpoint's parseability independently of the bridge.
     """
     import subprocess
+
     out = tmp_path / "qe.hlfir"
-    result = subprocess.run([
-        flang_binary(), "-fc1", "-fintrinsic-modules-path",
-        flang_intrinsic_modules_path(), "-emit-hlfir",
-        str(_SRC), "-o",
-        str(out)
-    ],
-                            capture_output=True,
-                            text=True)
-    assert result.returncode == 0, \
-        f"flang rejected the checkpoint:\n{result.stderr[:2000]}"
-    assert out.exists() and out.stat().st_size > 0, \
-        "flang did not produce a HLFIR output"
+    result = subprocess.run(
+        [
+            flang_binary(),
+            "-fc1",
+            "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(),
+            "-emit-hlfir",
+            str(_SRC),
+            "-o",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"flang rejected the checkpoint:\n{result.stderr[:2000]}"
+    assert out.exists() and out.stat().st_size > 0, "flang did not produce a HLFIR output"
 
 
 def test_newdxx_g_parses(tmp_path):
@@ -138,8 +144,7 @@ def test_newdxx_g_parses(tmp_path):
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="newdxx_g")
     sdfg.validate()
     assert sdfg is not None
-    assert any('newdxx_g' in name for name in sdfg.arrays) or \
-        'newdxx_g' in str(sdfg.label)
+    assert any("newdxx_g" in name for name in sdfg.arrays) or "newdxx_g" in str(sdfg.label)
 
 
 def _compile_reference(tmp_path):
@@ -170,13 +175,22 @@ def _compile_reference(tmp_path):
     src_path = tmp_path / "qe_ref.f90"
     src_path.write_text(_SRC.read_text())
     libpath = tmp_path / "libnewdxx_ref.so"
-    subprocess.check_call([
-        "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
-        str(src_path),
-        str(_CALLER), "-o",
-        str(libpath)
-    ],
-                          cwd=str(tmp_path))
+    subprocess.check_call(
+        [
+            "gfortran",
+            "-shared",
+            "-fPIC",
+            "-O0",
+            "-fno-fast-math",
+            "-ffp-contract=off",
+            "-ffree-line-length-none",
+            str(src_path),
+            str(_CALLER),
+            "-o",
+            str(libpath),
+        ],
+        cwd=str(tmp_path),
+    )
     lib = ctypes.CDLL(str(libpath))
 
     init = lib.init_newdxx_g_state_c
@@ -198,6 +212,7 @@ def _make_random_inputs(*, seed=0):
     draw order.  The caller copies ``deexx`` to keep a pre-call snapshot.
     """
     import numpy as np
+
     rng = np.random.default_rng(seed)
     vc = np.asfortranarray(rng.standard_normal(_NNR) + 1j * rng.standard_normal(_NNR), dtype=np.complex128)
     deexx = np.asfortranarray(rng.standard_normal(_NKB) + 1j * rng.standard_normal(_NKB), dtype=np.complex128)
@@ -223,6 +238,7 @@ def _expected_deexx_c(vc, deexx_in, becphi_c):
     in lockstep with the caller's hardcoded state.
     """
     import numpy as np
+
     omega = 2.0
     tpi = 2.0 * np.pi
     tau = np.array([0.5, 0.6, 0.7])
@@ -236,7 +252,9 @@ def _expected_deexx_c(vc, deexx_in, becphi_c):
     qgm = np.zeros((_NGMS, 4), dtype=np.complex128)
     for col in range(1, 5):
         qgm[:, col - 1] = (0.10 * ig + 0.01 * col) + 1j * (0.02 * ig - 0.03 * col)
-    ijtoh = lambda ih, jh: (ih - 1) * 2 + jh
+
+    def ijtoh(ih, jh):
+        return (ih - 1) * 2 + jh
 
     auxvc = vc.copy()  # add_complex: auxvc(ig) = vc(nl(ig)) = vc(ig)
     aux2 = np.conj(auxvc) * eigqts * eigts1 * eigts2 * eigts3
@@ -264,6 +282,7 @@ def test_newdxx_g_reference_runs(tmp_path):
     augmentation math, independently of the SDFG build.
     """
     import numpy as np
+
     _, init, run = _compile_reference(tmp_path)
     init()
     vc, deexx_in, becphi_c = _make_random_inputs()
@@ -324,13 +343,15 @@ def test_newdxx_g_numerical_correctness(tmp_path):
     driver_path = tmp_path / "driver.f90"
     driver_path.write_text(_SDFG_DRIVER)
 
-    lib = build_fortran_library(sdfg,
-                                iface,
-                                plan,
-                                str(tmp_path / "lib"),
-                                name="newdxx_lib",
-                                prelude_sources=[src_path],
-                                extra_sources=[_CALLER, driver_path])
+    lib = build_fortran_library(
+        sdfg,
+        iface,
+        plan,
+        str(tmp_path / "lib"),
+        name="newdxx_lib",
+        prelude_sources=[src_path],
+        extra_sources=[_CALLER, driver_path],
+    )
     dace_lib = lib.load()
 
     fn = dace_lib.run_newdxx_g_dace_c

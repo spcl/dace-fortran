@@ -55,25 +55,35 @@ def test_linalg_ops_numerical(tmp_path):
     at_ref = np.zeros((m, n), order="F")
     w_ref = np.zeros(n, order="F")
     s_ref = np.zeros(1, order="F")
-    mod.linalg_ops(np.asfortranarray(a), np.asfortranarray(b), c_ref, at_ref, np.asfortranarray(v), w_ref,
-                   np.asfortranarray(u), s_ref)
+    mod.linalg_ops(
+        np.asfortranarray(a),
+        np.asfortranarray(b),
+        c_ref,
+        at_ref,
+        np.asfortranarray(v),
+        w_ref,
+        np.asfortranarray(u),
+        s_ref,
+    )
 
     # SDFG: frontend emits Fortran-order strides for rank>1 descriptors; pass F-order arrays to match.
     c_sdfg = np.zeros((n, k), dtype=np.float64, order="F")
     at_sdfg = np.zeros((m, n), dtype=np.float64, order="F")
     w_sdfg = np.zeros(n, dtype=np.float64)
     s_sdfg = np.zeros(1, dtype=np.float64)
-    sdfg(a=np.asfortranarray(a),
-         b=np.asfortranarray(b),
-         c=c_sdfg,
-         at=at_sdfg,
-         v=np.asfortranarray(v),
-         w=w_sdfg,
-         u=np.asfortranarray(u),
-         s=s_sdfg,
-         n=n,
-         m=m,
-         k=k)
+    sdfg(
+        a=np.asfortranarray(a),
+        b=np.asfortranarray(b),
+        c=c_sdfg,
+        at=at_sdfg,
+        v=np.asfortranarray(v),
+        w=w_sdfg,
+        u=np.asfortranarray(u),
+        s=s_sdfg,
+        n=n,
+        m=m,
+        k=k,
+    )
 
     np.testing.assert_allclose(c_sdfg, c_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(at_sdfg, at_ref, rtol=1e-12, atol=1e-12)

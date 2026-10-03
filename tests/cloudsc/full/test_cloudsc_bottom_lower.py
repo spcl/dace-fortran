@@ -4,6 +4,7 @@ Expect PASS at rtol=atol=1e-14. Bisection chain: top_half PASS, bottom_half FAIL
 bottom_upper FAIL, bottom_upper_a PASS (bug in 4.5 EVAP), bottom_lower PASS -> bug not in
 solvers/flux/tendency.
 """
+
 from pathlib import Path
 import numpy as np
 import pytest
@@ -25,7 +26,8 @@ def _f2py_lo(tmp_path_factory):
         "cloudsc_bottom_lower_ref",
         # -ffree-line-length-none is gfortran-only (parser necessity for long lines); flang has no line limit. FP set is otherwise flang-portable.
         extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter", ))
+        only=("cloudscouter",),
+    )
 
 
 def test_cloudsc_bottom_lower_numerical(tmp_path, _f2py_lo, _strict_fp_cpu_args):
@@ -34,8 +36,10 @@ def test_cloudsc_bottom_lower_numerical(tmp_path, _f2py_lo, _strict_fp_cpu_args)
 
     # PASS at strict tolerance; compares every program_output (solvers+flux+tendency writes them all).
     for name in program_outputs:
-        np.testing.assert_allclose(outputs_sdfg[name.lower()],
-                                   outputs_ref[name.lower()],
-                                   rtol=1e-14,
-                                   atol=1e-14,
-                                   err_msg=f"PCOVPTOT mismatch in bottom-lower (solvers/flux/tendency only): {name}")
+        np.testing.assert_allclose(
+            outputs_sdfg[name.lower()],
+            outputs_ref[name.lower()],
+            rtol=1e-14,
+            atol=1e-14,
+            err_msg=f"PCOVPTOT mismatch in bottom-lower (solvers/flux/tendency only): {name}",
+        )

@@ -2,11 +2,12 @@ name: Format Check
 
 on:
   push:
-    branches: [main, ci-fix]
+    branches: [main]
   pull_request:
-    branches: [main, ci-fix]
+    branches: [main]
   merge_group:
-    branches: [main, ci-fix]
+    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: format-${{ github.ref }}
@@ -14,45 +15,19 @@ concurrency:
 
 jobs:
   format:
-    # Skip on the no-ci label, mirroring the test workflow.
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: false
-        # Full history so a PR can be diffed against its base commit.
-        fetch-depth: 0
 
     - uses: astral-sh/setup-uv@v7
       with:
         python-version: '3.12'
         enable-cache: true
 
-    - name: Install formatters (pinned to match the local toolchain)
+    - name: Lint (pre-commit, every file)
       run: |
-        # The linting group pins yapf and clang-format to the versions the code was written against, so the
-        # check never disagrees with a local ``pre-commit run``.
-        uv sync --frozen --only-group linting
-        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Check formatting of CHANGED files
-      run: |
-        # pre-commit reformats in place and exits non-zero if any hook changed a
-        # file -- i.e. the file was not correctly formatted.  Only files changed in
-        # this PR / push are checked (matching "all changed files follow the rules"),
-        # so legacy not-yet-reformatted files never fail CI until they are touched.
-        # --show-diff-on-failure prints exactly what is mis-formatted.
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          FROM="${{ github.event.pull_request.base.sha }}"
-        else
-          FROM="${{ github.event.before }}"
-        fi
-        TO="${{ github.sha }}"
-        # New branch / force-push / shallow base: ``before`` may be unset or absent;
-        # fall back to the parent commit.
-        if [ -z "$FROM" ] || ! git cat-file -e "${FROM}^{commit}" 2>/dev/null; then
-          FROM="$(git rev-parse 'HEAD~1' 2>/dev/null || echo HEAD)"
-        fi
-        echo "Checking files changed in ${FROM}..${TO}"
-        pre-commit run --show-diff-on-failure --color=always --from-ref "$FROM" --to-ref "$TO"
+        # The project's locked environment: the package and dace for mypy / pyright, the pinned linters.
+        uv sync --frozen --no-default-groups --group linting
+        uv run --no-sync pre-commit run --all-files --show-diff-on-failure --color=always

@@ -55,7 +55,8 @@ def _f2py(src: Path, out_dir: Path, mod_name: str):
         (-1, 500),
         (-50, 500),
         (7, 0),
-    ])
+    ],
+)
 def test_select_case_all_shapes(tmp_path, x, expected):
     mod = _f2py(_SRC_PATH, tmp_path / "ref", "sel_all_ref")
     sdfg_dir = tmp_path / "sdfg"

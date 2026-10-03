@@ -2,6 +2,7 @@
 
 Locates gfortran / flang-new / nvfortran (PATH + standard NVHPC prefix) and exposes ``FORTRAN_COMPILERS`` for ``@pytest.mark.parametrize``; the iso_c wrappers + solve_nh patch must parse cleanly under all three ICON-shipped compilers.
 """
+
 import os
 import shutil
 import subprocess
@@ -88,9 +89,11 @@ def _make_params() -> List:
     found = discover_fortran_compilers()
     if not found:
         return [
-            pytest.param(("gfortran", "gfortran"),
-                         id="gfortran",
-                         marks=[pytest.mark.skip(reason="no Fortran compiler found on the host")])
+            pytest.param(
+                ("gfortran", "gfortran"),
+                id="gfortran",
+                marks=[pytest.mark.skip(reason="no Fortran compiler found on the host")],
+            )
         ]
     return [pytest.param((name, str(path)), id=name) for name, path in found.items()]
 
@@ -152,8 +155,10 @@ def env_with_flang_runtime(fc_name: str) -> dict:
 
 
 #: pytest.skip reason for tests needing a full flang link but no runtime found.
-FLANG_RT_HINT = ("flang-new-21 needs ``libflang_rt.runtime.a`` for a full link; "
-                 "build it locally with the recipe at the top of the README's "
-                 "Fortran-compiler matrix section, or symlink ROCm's "
-                 "/opt/rocm-7.2.0/...x86_64-unknown-linux-gnu/libflang_rt.runtime.a "
-                 "into a $LIBRARY_PATH directory.")
+FLANG_RT_HINT = (
+    "flang-new-21 needs ``libflang_rt.runtime.a`` for a full link; "
+    "build it locally with the recipe at the top of the README's "
+    "Fortran-compiler matrix section, or symlink ROCm's "
+    "/opt/rocm-7.2.0/...x86_64-unknown-linux-gnu/libflang_rt.runtime.a "
+    "into a $LIBRARY_PATH directory."
+)

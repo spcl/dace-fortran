@@ -15,6 +15,7 @@ communicator is still a local ``MPI_COMM_WORLD`` ``parameter``, which flang
 lowers to a synthetic scalar the bridge treats as a (non-default) runtime
 communicator -- so every collective gets a threaded ``_comm`` connector.
 """
+
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,9 @@ module mpiops
 end module
 """
 
-_COLLECTIVES = _MPI_OP_MODULE + """
+_COLLECTIVES = (
+    _MPI_OP_MODULE
+    + """
 subroutine collectives(buf, rbuf, n, root)
   use mpiops
   implicit none
@@ -57,12 +60,15 @@ subroutine collectives(buf, rbuf, n, root)
   call MPI_Bcast(buf, n, MPI_DOUBLE_PRECISION, root, MPI_COMM_WORLD, ierr)
 end subroutine collectives
 """
+)
 
 
 def _allreduce_src(op_ref: str) -> str:
     """Single-``MPI_Allreduce`` kernel whose reduction op is ``op_ref`` (a
     ``use mpi``-style module handle)."""
-    return _MPI_OP_MODULE + f"""
+    return (
+        _MPI_OP_MODULE
+        + f"""
 subroutine areduce(buf, rbuf, n)
   use mpiops
   implicit none
@@ -76,6 +82,7 @@ subroutine areduce(buf, rbuf, n)
   call MPI_Allreduce(buf, rbuf, n, MPI_DOUBLE_PRECISION, {op_ref}, MPI_COMM_WORLD, ierr)
 end subroutine areduce
 """
+    )
 
 
 def _first(sdfg, cls):
@@ -110,11 +117,11 @@ def test_collectives_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg = build_sdfg(_COLLECTIVES, sdfg_dir, name="collectives", entry="collectives").build()
 
     nodes = {
-        cls: [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls)]
-        for cls in (Barrier, Allreduce, Bcast)
+        cls: [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls)] for cls in (Barrier, Allreduce, Bcast)
     }
-    assert len(nodes[Barrier]) == 1 and len(nodes[Allreduce]) == 1 and len(nodes[Bcast]) == 1, \
+    assert len(nodes[Barrier]) == 1 and len(nodes[Allreduce]) == 1 and len(nodes[Bcast]) == 1, (
         f"expected one of each collective, got { {c.__name__: len(v) for c, v in nodes.items()} }"
+    )
 
     assert nodes[Allreduce][0].op == "MPI_SUM"
     # The Fortran communicator is threaded into every collective via a CommF2c

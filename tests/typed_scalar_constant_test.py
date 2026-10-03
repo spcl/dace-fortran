@@ -7,8 +7,6 @@ PARAMETER constants stay baked in the constant pool (same dtype rule),
 exercised separately by
 ``module_global_vs_constant_test.py::test_parameter_is_baked_constant``.
 """
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest

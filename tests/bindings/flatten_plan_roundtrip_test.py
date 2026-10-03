@@ -36,7 +36,9 @@ subroutine kernel(x, n)
     x(i) = dble(i)
   end do
 end subroutine
-""", tmp_path)
+""",
+        tmp_path,
+    )
     assert plan.entries == ()
 
 
@@ -67,17 +69,19 @@ subroutine kernel(st)
     end do
   end do
 end subroutine
-""", tmp_path)
+""",
+        tmp_path,
+    )
     assert len(plan.entries) == 2
     e_u, e_v = plan.entries
     assert e_u.outer_expr == "st%u"
     assert e_v.outer_expr == "st%v"
     assert e_u.writeback_intent == "inout"
     assert e_v.writeback_intent == "inout"
-    assert e_u.recipe.flat_names == ("st_u", )
-    assert e_v.recipe.flat_names == ("st_v", )
-    assert e_u.recipe.read_exprs == ("st%u($i1, $i2)", )
-    assert e_v.recipe.read_exprs == ("st%v($i1, $i2)", )
+    assert e_u.recipe.flat_names == ("st_u",)
+    assert e_v.recipe.flat_names == ("st_v",)
+    assert e_u.recipe.read_exprs == ("st%u($i1, $i2)",)
+    assert e_v.recipe.read_exprs == ("st%v($i1, $i2)",)
     for r in (e_u.recipe, e_v.recipe):
         assert r.rank == 2
         assert r.aliasable is True
@@ -114,7 +118,9 @@ subroutine sink(ro, acc)
     end do
   end do
 end subroutine
-""", tmp_path)
+""",
+        tmp_path,
+    )
     assert len(plan.entries) == 2
     assert all(e.writeback_intent == "in" for e in plan.entries)
 
@@ -145,7 +151,9 @@ subroutine kernel(A, n, m, out)
   end do
   out = A(1)%w(1)
 end subroutine
-""", tmp_path)
+""",
+        tmp_path,
+    )
     # one entry (allocatable member only); flang lowercases identifiers,
     # so outer name is `a`, flat companion `a_w`.
     assert len(plan.entries) == 1
@@ -155,11 +163,11 @@ end subroutine
     r = e.recipe
     assert r.aos_alloc is True
     assert r.aliasable is False
-    assert r.flat_names == ("a_w", )
+    assert r.flat_names == ("a_w",)
     assert r.cap_symbol == "cap_a_w"
     assert r.rank == 2
     assert r.shape_exprs == ("size(a, dim=1)", "cap_a_w")
-    assert r.read_exprs == ("a($i1)%w($i2)", )
+    assert r.read_exprs == ("a($i1)%w($i2)",)
     assert r.scratch_dtype == "float64"
 
 
@@ -192,15 +200,17 @@ subroutine kernel(A, n, m, out)
   end do
   out = A(1)%w(1)
 end subroutine
-""", tmp_path)
+""",
+        tmp_path,
+    )
     # two entries: aos_alloc for w, regular for tag; flang lowercases -> a_w / a_tag
     aos_entries = [e for e in plan.entries if e.recipe.aos_alloc]
     plain_entries = [e for e in plan.entries if not e.recipe.aos_alloc]
     assert len(aos_entries) == 1
     assert len(plain_entries) == 1
     aos = aos_entries[0].recipe
-    assert aos.flat_names == ("a_w", )
+    assert aos.flat_names == ("a_w",)
     assert aos.cap_symbol == "cap_a_w"
     plain = plain_entries[0].recipe
-    assert plain.flat_names == ("a_tag", )
+    assert plain.flat_names == ("a_tag",)
     assert "tag" in plain.read_exprs[0]

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import dace
 import dace_fortran
 from dace_fortran.bindings import emit_bindings, FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface

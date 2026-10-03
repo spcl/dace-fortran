@@ -11,6 +11,7 @@ parent.
 These probes pin the contract; MODULE-LEVEL struct fields newly progress past
 resolution but hit a separate, clean "not registered as SDFG data" gap downstream.
 """
+
 import numpy as np
 import pytest
 
@@ -40,9 +41,9 @@ end module
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_get", entry="m::vcut_get").build()
     # Flatten pass produces vcut_a/vcut_cutoff as top-level SDFG arrays/scalars; the struct base is gone.
     assert "vcut_a" in sdfg.arrays, f"expected vcut_a in arrays: {sorted(sdfg.arrays.keys())}"
-    assert "vcut" not in sdfg.arrays, f"struct base should be flattened away"
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
-    res = np.zeros(3, dtype=np.float64, order='F')
-    sdfg(vcut_a=A, vcut_cutoff=np.zeros((1, ), dtype=np.float64, order='F'), q=q, res=res)
+    assert "vcut" not in sdfg.arrays, "struct base should be flattened away"
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    res = np.zeros(3, dtype=np.float64, order="F")
+    sdfg(vcut_a=A, vcut_cutoff=np.zeros((1,), dtype=np.float64, order="F"), q=q, res=res)
     np.testing.assert_allclose(res, A.T @ q)

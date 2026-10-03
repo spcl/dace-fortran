@@ -8,6 +8,7 @@ pins one; otherwise the first one actually installed wins.  Stdlib-only on purpo
 :mod:`dace_fortran.emit_hlfir` and :mod:`dace_fortran.flang_codebase` import this
 without dragging in the compiled bridge.
 """
+
 import os
 import re
 import shutil
@@ -32,7 +33,7 @@ def requested_version() -> str:
 def candidate_versions() -> Sequence[str]:
     """Majors to probe, in order: the pinned one alone, else all supported ones."""
     pinned = requested_version()
-    return (pinned, ) if pinned else SUPPORTED_LLVM_VERSIONS
+    return (pinned,) if pinned else SUPPORTED_LLVM_VERSIONS
 
 
 def flang_names(version: Optional[str] = None) -> List[str]:
@@ -84,9 +85,11 @@ def require_flang(version: Optional[str] = None) -> str:
     found = find_flang(version)
     if found is None:
         majors = "/".join([version] if version else list(candidate_versions()))
-        raise RuntimeError(f"No LLVM flang for LLVM {majors} on PATH (tried "
-                           f"{', '.join(flang_names(version))}); install LLVM/Flang "
-                           f"{majors} to use the HLFIR frontend, or point $FC at one.")
+        raise RuntimeError(
+            f"No LLVM flang for LLVM {majors} on PATH (tried "
+            f"{', '.join(flang_names(version))}); install LLVM/Flang "
+            f"{majors} to use the HLFIR frontend, or point $FC at one."
+        )
     return found
 
 

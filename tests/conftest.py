@@ -1,4 +1,5 @@
 """Puts the HLFIR test dir on sys.path (``from _util import ...``) and isolates DaCe's build cache per pytest-xdist worker so parallel runs don't race on shared ``.dacecache/<sdfg_name>/build`` (most tests reuse SDFG name ``main``)."""
+
 import os
 import sys
 from pathlib import Path
@@ -30,6 +31,7 @@ os.environ.setdefault("PMIX_MCA_gds", "hash")
 # pre-pipeline IR walks run on the main thread (not the bridge's 2GB-stack worker thread).
 try:
     import resource
+
     _soft, _hard = resource.getrlimit(resource.RLIMIT_STACK)
     if _hard != resource.RLIM_INFINITY and (_soft == resource.RLIM_INFINITY or _soft < _hard):
         resource.setrlimit(resource.RLIMIT_STACK, (_hard, _hard))
@@ -93,8 +95,9 @@ def compile_and_check_generated_code(self, *args, **kwargs):
         ln for ln in diagnostics if ln not in critical and not any(f"[-W{n}]" in ln for n in NONCRITICAL_NOISE)
     ]
     if informational:
-        print(f"[codegen-check] '{self.name}' non-critical warnings ({len(informational)}):\n" +
-              "\n".join(informational))
+        print(
+            f"[codegen-check] '{self.name}' non-critical warnings ({len(informational)}):\n" + "\n".join(informational)
+        )
     if critical:
         raise AssertionError(f"generated C++ for SDFG '{self.name}' emits critical warnings:\n" + "\n".join(critical))
     return result
@@ -155,9 +158,11 @@ def icon_build():
     here = Path(__file__).resolve().parent
     icon_src = Path(os.environ.get("ICON_SRC", str(here / "icon" / "full" / "icon-model")))
     if not (icon_src / "configure").is_file():
-        pytest.skip("icon-model submodule not checked out (run "
-                    "`git submodule update --init tests/icon/full/icon-model`)")
+        pytest.skip(
+            "icon-model submodule not checked out (run `git submodule update --init tests/icon/full/icon-model`)"
+        )
     from icon.full._icon_build import ensure_icon_built, default_build_dir
+
     # builds into TMP by default (no repo-tree pollution); ICON_BUILD overrides to a persistent location
     icon_build_dir = default_build_dir()
     build = ensure_icon_built(icon_src, icon_build_dir)
@@ -218,6 +223,7 @@ def pytest_unconfigure(config):
     if any(k in os.environ for k in ("OMPI_COMM_WORLD_SIZE", "PMIX_RANK")):
         try:
             from mpi4py import MPI
+
             if MPI.Is_initialized() and not MPI.Is_finalized():
                 MPI.Finalize()
         except Exception:

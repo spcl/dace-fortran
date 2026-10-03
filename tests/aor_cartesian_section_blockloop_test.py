@@ -6,6 +6,7 @@ bare free symbol. Blocks Mode-1 ocean solve_free_sfc_ab_mimetic; fix needs a
 section-peel hop in both walkers (mint side: extract_vars.cpp; access side:
 elementals.cpp). Companion arg name/shape unconfirmed pending a bridge build.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -75,18 +76,20 @@ def test_aor_cartesian_section_blockloop_threads_block_index(tmp_path: Path):
     pvn_x = np.asfortranarray(rng.random((nc, nl, nblk, 3)))
     out = np.asfortranarray(np.zeros((nc, nl, 3, nblk)))
 
-    sdfg(fld_p_vn_x=pvn_x,
-         out=out,
-         nc=np.int32(nc),
-         nl=np.int32(nl),
-         nblk=np.int32(nblk),
-         fld_p_vn_x_d0=nc,
-         fld_p_vn_x_d1=nl,
-         fld_p_vn_x_d2=nblk,
-         out_d0=nc,
-         out_d1=nl,
-         out_d2=3,
-         out_d3=nblk)
+    sdfg(
+        fld_p_vn_x=pvn_x,
+        out=out,
+        nc=np.int32(nc),
+        nl=np.int32(nl),
+        nblk=np.int32(nblk),
+        fld_p_vn_x_d0=nc,
+        fld_p_vn_x_d1=nl,
+        fld_p_vn_x_d2=nblk,
+        out_d0=nc,
+        out_d1=nl,
+        out_d2=3,
+        out_d3=nblk,
+    )
 
     # out(jc,jk,k,jb) = p_vn(jc,jk,jb)%x(k)*2+k; SoA pvn_x[jc,jk,jb,k] moves k ahead of block.
     k_off = np.arange(1, 4, dtype=np.float64)[None, None, :, None]

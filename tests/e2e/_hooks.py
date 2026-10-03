@@ -7,6 +7,7 @@ over as a callable -- it goes through ``OCEAN_E2E_SDFG_HOOK="module:func"``, whi
 imports and runs on the DUT SDFG before compile. ``tests/`` is on the child's PYTHONPATH
 (``_ocean_e2e`` puts it there), so this module resolves as ``e2e._hooks``.
 """
+
 from dace_fortran.bindings.frozen_signature import refreeze
 from dace_fortran.pipelines import num_maps, optimize
 

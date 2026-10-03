@@ -292,7 +292,10 @@ def test_icon_loopnest2_f90_bindings_e2e(tmp_path: Path):
         f.restype = None
         f.argtypes = [ctypes.POINTER(ctypes.c_double)] * 5 + [ctypes.c_int] * 8
         z = np.zeros((nproma, nlev, nblks_e), dtype=np.float64, order="F")
-        dp = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+        def dp(a):
+            return a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
         f(dp(vn), dp(vt), dp(ddxn), dp(ddxt), dp(z), nproma, nlev, nblks_e, nflatlev, isb, ieb, isi, iei)
         return z
 
@@ -415,17 +418,45 @@ def test_icon_loopnest1_f90_bindings_e2e(tmp_path: Path):
     ividx = _idx((nproma, nblks_e, 2), nproma)
     ivblk = _idx((nproma, nblks_e, 2), nblks_v)
 
-    dp = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-    ip = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+    def dp(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+    def ip(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
 
     def _call(lib, fn):
         f = getattr(lib, fn)
         f.restype = None
-        f.argtypes = ([ctypes.POINTER(ctypes.c_double)] * 7 + [ctypes.POINTER(ctypes.c_int)] * 4 +
-                      [ctypes.POINTER(ctypes.c_double)] + [ctypes.c_int] * 9)
+        f.argtypes = (
+            [ctypes.POINTER(ctypes.c_double)] * 7
+            + [ctypes.POINTER(ctypes.c_int)] * 4
+            + [ctypes.POINTER(ctypes.c_double)]
+            + [ctypes.c_int] * 9
+        )
         z = np.zeros((nproma, nlev, nblks_e), dtype=np.float64, order="F")
-        f(dp(vn_ie), dp(inv_dual), dp(inv_primal), dp(tangent), dp(w), dp(z_vt_ie), dp(z_w_v), ip(icidx), ip(icblk),
-          ip(ividx), ip(ivblk), dp(z), nproma, nlev, nblks_e, nblks_c, nblks_v, isb, ieb, isi, iei)
+        f(
+            dp(vn_ie),
+            dp(inv_dual),
+            dp(inv_primal),
+            dp(tangent),
+            dp(w),
+            dp(z_vt_ie),
+            dp(z_w_v),
+            ip(icidx),
+            ip(icblk),
+            ip(ividx),
+            ip(ivblk),
+            dp(z),
+            nproma,
+            nlev,
+            nblks_e,
+            nblks_c,
+            nblks_v,
+            isb,
+            ieb,
+            isi,
+            iei,
+        )
         return z
 
     z_sdfg = _call(sdfg_lib, "run_ln1")
@@ -445,8 +476,8 @@ _LN3_IFACE = OriginalInterface(
         _arg_real("z_vt_ie", 3, ("nproma", "nlev", "nblks_e"), "in"),
         _arg_real("ft_e", 2, ("nproma", "nblks_e"), "in"),
         _arg_real("fn_e", 2, ("nproma", "nblks_e"), "in"),
-        _arg_real("gradh", 1, ("nlev", ), "in"),
-        _arg_real("invr", 1, ("nlev", ), "in"),
+        _arg_real("gradh", 1, ("nlev",), "in"),
+        _arg_real("invr", 1, ("nlev",), "in"),
         _arg_real("z_v_grad_w", 3, ("nproma", "nlev", "nblks_e"), "inout"),
         _arg_int("nproma"),
         _arg_int("nlev"),
@@ -513,19 +544,34 @@ def test_icon_loopnest3_f90_bindings_e2e(tmp_path: Path):
     z_vt_ie = _f((nproma, nlev, nblks_e))
     ft_e = _f((nproma, nblks_e))
     fn_e = _f((nproma, nblks_e))
-    gradh = _f((nlev, ))
-    invr = _f((nlev, ))
+    gradh = _f((nlev,))
+    invr = _f((nlev,))
     z_init = _f((nproma, nlev, nblks_e))
 
-    dp = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+    def dp(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
 
     def _call(lib, fn):
         f = getattr(lib, fn)
         f.restype = None
         f.argtypes = [ctypes.POINTER(ctypes.c_double)] * 7 + [ctypes.c_int] * 7
         z = np.array(z_init, order="F")
-        f(dp(vn_ie), dp(z_vt_ie), dp(ft_e), dp(fn_e), dp(gradh), dp(invr), dp(z), nproma, nlev, nblks_e, isb, ieb, isi,
-          iei)
+        f(
+            dp(vn_ie),
+            dp(z_vt_ie),
+            dp(ft_e),
+            dp(fn_e),
+            dp(gradh),
+            dp(invr),
+            dp(z),
+            nproma,
+            nlev,
+            nblks_e,
+            isb,
+            ieb,
+            isi,
+            iei,
+        )
         return z
 
     z_sdfg = _call(sdfg_lib, "run_ln3")
@@ -665,18 +711,50 @@ def test_icon_loopnest4_f90_bindings_e2e(tmp_path: Path):
     ividx = _idx((nproma, nblks_e, 2), nproma)
     ivblk = _idx((nproma, nblks_e, 2), nblks_v)
 
-    dp = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-    ip = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+    def dp(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+    def ip(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
 
     def _call(lib, fn):
         f = getattr(lib, fn)
         f.restype = None
-        f.argtypes = ([ctypes.POINTER(ctypes.c_double)] * 10 + [ctypes.POINTER(ctypes.c_int)] * 4 +
-                      [ctypes.POINTER(ctypes.c_double)] + [ctypes.c_int] * 11)
+        f.argtypes = (
+            [ctypes.POINTER(ctypes.c_double)] * 10
+            + [ctypes.POINTER(ctypes.c_int)] * 4
+            + [ctypes.POINTER(ctypes.c_double)]
+            + [ctypes.c_int] * 11
+        )
         ddt = np.zeros((nproma, nlev, nblks_e, nproma_tnd), dtype=np.float64, order="F")
-        f(dp(vt), dp(vn_ie), dp(f_e), dp(coeff_gradekin), dp(c_lin_e), dp(ddqz), dp(z_kin_hor_e), dp(z_ekinh), dp(zeta),
-          dp(z_w_con_c_full), ip(icidx), ip(icblk), ip(ividx), ip(ivblk), dp(ddt), ntnd, nproma, nlev, nblks_e, nblks_c,
-          nblks_v, nproma_tnd, isb, ieb, isi, iei)
+        f(
+            dp(vt),
+            dp(vn_ie),
+            dp(f_e),
+            dp(coeff_gradekin),
+            dp(c_lin_e),
+            dp(ddqz),
+            dp(z_kin_hor_e),
+            dp(z_ekinh),
+            dp(zeta),
+            dp(z_w_con_c_full),
+            ip(icidx),
+            ip(icblk),
+            ip(ividx),
+            ip(ivblk),
+            dp(ddt),
+            ntnd,
+            nproma,
+            nlev,
+            nblks_e,
+            nblks_c,
+            nblks_v,
+            nproma_tnd,
+            isb,
+            ieb,
+            isi,
+            iei,
+        )
         return ddt
 
     ddt_sdfg = _call(sdfg_lib, "run_ln4")
@@ -764,7 +842,8 @@ def test_icon_loopnest5_f90_bindings_e2e(tmp_path: Path):
     vt = np.asfortranarray(rng.random((nproma, nlev, nblks_e)))
     wgtfacqe = np.asfortranarray(rng.random((nproma, 3, nblks_e)))
 
-    dp = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+    def dp(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
 
     def _call(lib, fn):
         f = getattr(lib, fn)
@@ -792,7 +871,7 @@ _LN6_IFACE = OriginalInterface(
     entry="kernel_flat",
     args=(
         _arg_logical("levmask", 2, ("nblks_c", "nlev"), "in"),
-        _arg_logical("levelmask", 1, ("nlev", ), "inout"),
+        _arg_logical("levelmask", 1, ("nlev",), "inout"),
         _arg_int("nlev"),
         _arg_int("nblks_c"),
         _arg_int("jk_start"),
@@ -851,7 +930,8 @@ def test_icon_loopnest6_f90_bindings_e2e(tmp_path: Path):
     # output buffers compare exactly.
     levmask = np.asfortranarray((rng.random((nblks_c, nlev)) > 0.7).astype(np.int32))
 
-    ip = lambda a: a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+    def ip(a):
+        return a.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
 
     def _call(lib, fn):
         f = getattr(lib, fn)

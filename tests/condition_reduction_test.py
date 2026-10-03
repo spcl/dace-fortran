@@ -6,6 +6,7 @@ Pins both STRUCTURE (Reduce lib-node + scalar condition) and end-to-end correctn
 loops and loop conditions, with loop bodies touching only in-bounds memory so a miscompile
 shows as a wrong result, not an OOB crash.
 """
+
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ _needs_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PAT
 
 def _reduce_nodes(sdfg):
     from dace.libraries.standard.nodes import Reduce
+
     return [n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, Reduce)]
 
 
@@ -145,6 +147,7 @@ end module driver_mod
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1, "MINVAL of a row section should be a Reduce lib-node"
     from dace.data import View
+
     assert any(isinstance(d, View) for d in sdfg.arrays.values()), "row section should become a View"
     nr, nc = 3, 4
     m = np.asfortranarray(
@@ -152,9 +155,11 @@ end module driver_mod
             [
                 [0.6, 0.7, 0.8, 0.9],  # row min 0.6 > 0.5 -> hit
                 [0.1, 0.9, 0.9, 0.9],  # row min 0.1 -> no
-                [0.51, 0.52, 0.53, 0.54]
+                [0.51, 0.52, 0.53, 0.54],
             ],
-            dtype=np.float64))  # min 0.51 -> hit
+            dtype=np.float64,
+        )
+    )  # min 0.51 -> hit
     cnt = np.zeros(nr, dtype=np.int32)
     sdfg(m=m, cnt=cnt, nr=np.int32(nr), nc=np.int32(nc))
     assert cnt.tolist() == [1, 0, 1]
@@ -185,10 +190,12 @@ end module driver_mod
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1
     from dace.data import View
+
     assert any(isinstance(d, View) for d in sdfg.arrays.values()), "col section should become a View"
     nr, nc = 3, 4
-    m = np.asfortranarray(np.array([[0.6, 0.1, 0.0, 0.9], [0.7, 0.2, 0.0, 0.9], [0.8, 0.3, 0.0, 0.9]],
-                                   dtype=np.float64))
+    m = np.asfortranarray(
+        np.array([[0.6, 0.1, 0.0, 0.9], [0.7, 0.2, 0.0, 0.9], [0.8, 0.3, 0.0, 0.9]], dtype=np.float64)
+    )
     # col maxes: 0.8, 0.3, 0.0, 0.9 -> >0.5: cols 0 and 3
     cnt = np.zeros(nc, dtype=np.int32)
     sdfg(m=m, cnt=cnt, nr=np.int32(nr), nc=np.int32(nc))

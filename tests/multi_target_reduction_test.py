@@ -27,7 +27,7 @@ subroutine main(d, res)
   res(2) = MINVAL(d(:))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.array([3.0, 1.0, 5.0, 2.0, 4.0, 7.0, 6.0], dtype=np.float64)
     res = np.zeros(2, dtype=np.float64)
     sdfg(d=d, res=res)
@@ -45,7 +45,7 @@ subroutine main(d, res)
   res(2) = SUM(d(:))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.array([3.0, 1.0, 5.0, 2.0, 4.0, 7.0, 6.0], dtype=np.float64)
     res = np.zeros(2, dtype=np.float64)
     sdfg(d=d, res=res)
@@ -63,7 +63,7 @@ subroutine main(d, res)
   res(3) = PRODUCT(d(5:6))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.array([2, 3, 4, 5, 6, 7], dtype=np.int32)
     res = np.zeros(3, dtype=np.int32)
     sdfg(d=d, res=res)
@@ -81,7 +81,7 @@ subroutine main(d, res)
   res(2) = MAXVAL(d)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     d = np.array([3.0, 1.0, 5.0, 2.0, 4.0, 7.0, 6.0], dtype=np.float64)
     res = np.zeros(2, dtype=np.float64)
     sdfg(d=d, res=res)

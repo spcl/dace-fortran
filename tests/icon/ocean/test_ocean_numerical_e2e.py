@@ -8,6 +8,7 @@ namelist init -- else automatic locals size to zero -> OOB. ``int_fill`` pins a
 degenerate in-bounds mesh for veloc_adv, whose composite indices exceed a random
 mesh's bounds; coriolis_pv/ppm_vflux run on the random mesh directly.
 """
+
 import shutil
 
 import pytest
@@ -33,29 +34,33 @@ pytestmark = [
 # kernels' extent-derivation can't reach (see module docstring); n=8 here, so
 # every extent is 8.
 _KERNELS = [
-    pytest.param("ppm_vflux",
-                 "ppm_vflux_single_tu.f90",
-                 "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock", {
-                     "startindex": 1,
-                     "endindex": 8,
-                     "vertical_limiter_type": 1,
-                     "dtime": 60.0
-                 },
-                 None, {},
-                 id="ppm_vflux"),
-    pytest.param("coriolis_pv",
-                 "coriolis_pv_single_tu.f90",
-                 "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", {},
-                 None, {},
-                 id="coriolis_pv"),
-    pytest.param("ocean_veloc_adv",
-                 "ocean_veloc_adv_single_tu.f90",
-                 "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", {},
-                 1, {
-                     "n_zlev": 8,
-                     "nproma": 8
-                 },
-                 id="ocean_veloc_adv"),
+    pytest.param(
+        "ppm_vflux",
+        "ppm_vflux_single_tu.f90",
+        "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock",
+        {"startindex": 1, "endindex": 8, "vertical_limiter_type": 1, "dtime": 60.0},
+        None,
+        {},
+        id="ppm_vflux",
+    ),
+    pytest.param(
+        "coriolis_pv",
+        "coriolis_pv_single_tu.f90",
+        "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar",
+        {},
+        None,
+        {},
+        id="coriolis_pv",
+    ),
+    pytest.param(
+        "ocean_veloc_adv",
+        "ocean_veloc_adv_single_tu.f90",
+        "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot",
+        {},
+        1,
+        {"n_zlev": 8, "nproma": 8},
+        id="ocean_veloc_adv",
+    ),
 ]
 
 
@@ -63,11 +68,9 @@ _KERNELS = [
 @pytest.mark.parametrize("key,fname,entry,overrides,int_fill,module_seeds", _KERNELS)
 def test_ocean_kernel_numerical_e2e(key, fname, entry, overrides, int_fill, module_seeds):
     """SDFG binding output == original-kernel reference on random inputs."""
-    res = run_kernel_e2e(_HERE / fname,
-                         entry,
-                         scalar_overrides=overrides,
-                         int_fill=int_fill,
-                         module_seeds=module_seeds or None)
+    res = run_kernel_e2e(
+        _HERE / fname, entry, scalar_overrides=overrides, int_fill=int_fill, module_seeds=module_seeds or None
+    )
     assert res["passed"], f"{key}: build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, f"{key}: no output buffer changed -- the kernel did no work (test is vacuous)"
     assert res["max_diff"] <= 1e-9, f"{key}: SDFG binding diverged from reference, max|d|={res['max_diff']:.3e}"

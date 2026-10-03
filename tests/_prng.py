@@ -1,6 +1,7 @@
 """SC26 ``Xor64Rng`` reproduced in numpy for the QE tests -- verbatim port of
 ``Experiments/common/prng.h`` (splitmix64 seed + xorshift64 draw) so the SDFG
 and numpy reference draw from the same stream."""
+
 import numpy as np
 
 _MASK64 = (1 << 64) - 1

@@ -22,7 +22,7 @@ res = MERGE(input1, input2, mask)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -65,7 +65,7 @@ res = MERGE(input1, input2, input1 .eq. 3)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -107,7 +107,7 @@ res = MERGE(input1, input2, input1 .lt. input2)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -151,7 +151,7 @@ res = MERGE(input1, input2, mask1(3:9) .lt. mask2(5:11))
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -180,7 +180,7 @@ res = MERGE(input1, input2(13:19), mask1(3:9) .gt. mask2(5:11))
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -212,7 +212,7 @@ res(1) = MERGE(input1, input2, val(1))
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
 
     val = np.full([2], 1, order="F", dtype=np.int32)
     res = np.full([2], 40, order="F", dtype=np.float64)
@@ -240,7 +240,7 @@ res = MERGE(MERGE(input1, input2, mask1), input3, mask2)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -273,7 +273,7 @@ res(1) = MERGE(input1(1), input2(1), mask(1))
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -311,7 +311,7 @@ res(1) = MERGE(input1(1), 0.0D0, mask(1))
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -344,7 +344,7 @@ res(1) = MERGE(input1(1), 0.0D0, mask(1) > mask2(1) .AND. mask2(2) == 0)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -372,7 +372,7 @@ res = MERGE(1.0D0, input2, input2 .lt. 3)
 
 END SUBROUTINE merge_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
 
     res = np.full([1], 40, order="F", dtype=np.float64)
 
@@ -433,7 +433,7 @@ def test_fortran_frontend_merge_dataref(tmp_path):
 
                     END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test', entry='merge_test').build()
+    sdfg = build_sdfg(src, tmp_path, name="merge_test", entry="merge_test").build()
 
     data1 = np.full([3], 42, order="F", dtype=np.float64)
     data2 = np.full([3], 40, order="F", dtype=np.float64)

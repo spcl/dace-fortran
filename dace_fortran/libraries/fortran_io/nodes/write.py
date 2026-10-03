@@ -30,12 +30,12 @@ def c_string(text: str) -> str:
 
 @dace.library.expansion
 class ExpandWriteFortranIO(ExpandTransformation):
-
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any,
-                  **kwargs: Any) -> nodes.Tasklet:
+    def expansion(
+        node: LibraryNode, parent_state: SDFGState, parent_sdfg: SDFG, *args: Any, **kwargs: Any
+    ) -> nodes.Tasklet:
         assert isinstance(node, Write)
         items = node.ordered_items(parent_sdfg, parent_state, "_in_", edges_in=True, num_items=node.num_items)
         path = c_string(node.filename)
@@ -43,16 +43,18 @@ class ExpandWriteFortranIO(ExpandTransformation):
         for conn, desc, count, is_value in items:
             suffix, ctype = fio_type(desc.dtype)
             if is_value:
-                lines.append(f'dace_fio_write_{suffix}(_u, (const {ctype} *)&{conn});')
+                lines.append(f"dace_fio_write_{suffix}(_u, (const {ctype} *)&{conn});")
             else:
-                lines.append(f'dace_fio_write_{suffix}_arr(_u, (const {ctype} *){conn}, {count});')
+                lines.append(f"dace_fio_write_{suffix}_arr(_u, (const {ctype} *){conn}, {count});")
         lines.append("dace_fio_close(_u);")
-        return nodes.Tasklet(node.name,
-                             node.in_connectors,
-                             node.out_connectors,
-                             "\n".join(lines),
-                             language=dtypes.Language.CPP,
-                             side_effects=True)
+        return nodes.Tasklet(
+            node.name,
+            node.in_connectors,
+            node.out_connectors,
+            "\n".join(lines),
+            language=dtypes.Language.CPP,
+            side_effects=True,
+        )
 
 
 @library_node

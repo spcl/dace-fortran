@@ -1,6 +1,7 @@
 """NPB3.4 LU: single-file SDFG build (lu.F90 only, entry=lu::dolu, no driver wrapper).
 Companion to test_lu_multi_file_build; same kernel-presence smoke check.
 """
+
 import json
 from pathlib import Path
 
@@ -31,5 +32,6 @@ def test_lu_single_file_builds(tmp_path):
     )
     sdfg.validate()
     sdfg_text = json.dumps(sdfg.to_json()).lower()
-    assert any(k in sdfg_text for k in _LU_KERNELS), (f"built SDFG does not reference any of {_LU_KERNELS}; the "
-                                                      "single-file build likely dropped lu.F90's body.")
+    assert any(k in sdfg_text for k in _LU_KERNELS), (
+        f"built SDFG does not reference any of {_LU_KERNELS}; the single-file build likely dropped lu.F90's body."
+    )

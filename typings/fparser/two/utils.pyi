@@ -4,7 +4,8 @@ fparser ships neither annotations nor a ``py.typed`` marker, and its parse tree 
 and ``children`` are filled in by the parser and hold nodes, strings or ``None`` depending on the production, so
 they are declared ``Any`` here, at the third-party boundary.
 """
-from typing import Any, Iterable, Self, TypeVar, overload
+
+from typing import Any, Self, TypeVar, overload
 
 T = TypeVar("T")
 

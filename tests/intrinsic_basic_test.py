@@ -22,7 +22,7 @@ res(2) = BIT_SIZE(e)
 
 END SUBROUTINE intrinsic_math_test_bit_size_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='intrinsic_math_test_bit_size_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_bit_size_function").build()
 
     size = 2
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -51,7 +51,7 @@ subroutine main(arrsize, arrsize2, arrsize3, res, res2, res3)
   res(7) = size(res3, 1) + size(res3, 2) + size(res3, 3)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 24
     size2 = 5
@@ -80,7 +80,7 @@ subroutine main(res)
   res(3, 1) = size(res, 2)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
 
     size = 7
     size2 = 5
@@ -114,7 +114,7 @@ contains
   end subroutine tf2
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -153,7 +153,7 @@ def test_fortran_frontend_bitwise_ops(tmp_path):
 
     END SUBROUTINE bitwise_ops
 """
-    sdfg = build_sdfg(src, tmp_path, name='bitwise_ops').build()
+    sdfg = build_sdfg(src, tmp_path, name="bitwise_ops").build()
 
     size = 11
     inp = np.full([size], 42, order="F", dtype=np.int32)
@@ -184,7 +184,7 @@ def test_fortran_frontend_bitwise_ops2(tmp_path):
 
     END SUBROUTINE bitwise_ops
 """
-    sdfg = build_sdfg(src, tmp_path, name='bitwise_ops').build()
+    sdfg = build_sdfg(src, tmp_path, name="bitwise_ops").build()
 
     size = 6
     inp = np.full([size], 42, order="F", dtype=np.int32)
@@ -216,7 +216,7 @@ def test_fortran_frontend_allocated(tmp_path):
 
     END SUBROUTINE allocated_test
 """
-    sdfg = build_sdfg(src, tmp_path, name='allocated_test').build()
+    sdfg = build_sdfg(src, tmp_path, name="allocated_test").build()
 
     size = 3
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -264,7 +264,7 @@ def test_fortran_frontend_allocated_nested(tmp_path):
 
     END SUBROUTINE allocated_test_nested
 """
-    sdfg = build_sdfg(src, tmp_path, name='allocated_test', entry='allocated_test').build()
+    sdfg = build_sdfg(src, tmp_path, name="allocated_test", entry="allocated_test").build()
 
     size = 3
     res = np.full([size], 42, order="F", dtype=np.int32)

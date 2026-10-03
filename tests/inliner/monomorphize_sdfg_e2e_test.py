@@ -5,6 +5,7 @@ through gfortran's real dispatch, across all four rewrite primitives (local, com
 clone, retype). Driven with ``stack_slots=True`` -- once dispatch is gone, the bridge can't
 lower an allocatable derived-type scalar, so the SDFG form uses plain stack slots.
 """
+
 import ctypes
 import shutil
 import subprocess
@@ -16,9 +17,12 @@ import pytest
 from _util import have_flang
 from dace_fortran.build import build_sdfg
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program
-from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (clone_shared_interposers,
-                                                                      monomorphize_component_dispatch,
-                                                                      monomorphize_local_dispatch, retype_to_concrete)
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
+    clone_shared_interposers,
+    monomorphize_component_dispatch,
+    monomorphize_local_dispatch,
+    retype_to_concrete,
+)
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
@@ -283,12 +287,22 @@ def _gfortran_ref(work: Path, module_src: str, caller_src: str) -> ctypes.CDLL:
     (work / "mod.f90").write_text(module_src)
     (work / "caller.f90").write_text(caller_src)
     so = work / "libref.so"
-    subprocess.check_call([
-        "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
-        "mod.f90", "caller.f90", "-o",
-        str(so)
-    ],
-                          cwd=str(work))
+    subprocess.check_call(
+        [
+            "gfortran",
+            "-shared",
+            "-fPIC",
+            "-O0",
+            "-fno-fast-math",
+            "-ffp-contract=off",
+            "-ffree-line-length-none",
+            "mod.f90",
+            "caller.f90",
+            "-o",
+            str(so),
+        ],
+        cwd=str(work),
+    )
     return ctypes.CDLL(str(so))
 
 
@@ -311,8 +325,9 @@ def _check_selx(tmp_path: Path, src: str, rewrite, name: str):
             ref.run_c(ctypes.byref(ctypes.c_int(sel)), ctypes.byref(expected))
             x = np.array([xv], dtype=np.float32)
             csdfg(sel=np.int32(sel), x=x)
-            assert abs(float(x[0]) - expected.value) < 1e-5, \
+            assert abs(float(x[0]) - expected.value) < 1e-5, (
                 f"{name} sel={sel} x0={xv}: SDFG {x[0]} != Fortran {expected.value}"
+            )
 
 
 def _plan(prog):
@@ -320,13 +335,21 @@ def _plan(prog):
 
 
 def test_local_dispatch_sdfg_matches_fortran(tmp_path: Path):
-    _check_selx(tmp_path, _LOCAL_SRC, lambda prog: monomorphize_local_dispatch(prog, _plan(prog), stack_slots=True),
-                "mono_local")
+    _check_selx(
+        tmp_path,
+        _LOCAL_SRC,
+        lambda prog: monomorphize_local_dispatch(prog, _plan(prog), stack_slots=True),
+        "mono_local",
+    )
 
 
 def test_component_dispatch_sdfg_matches_fortran(tmp_path: Path):
-    _check_selx(tmp_path, _COMPONENT_SRC,
-                lambda prog: monomorphize_component_dispatch(prog, _plan(prog), stack_slots=True), "mono_component")
+    _check_selx(
+        tmp_path,
+        _COMPONENT_SRC,
+        lambda prog: monomorphize_component_dispatch(prog, _plan(prog), stack_slots=True),
+        "mono_component",
+    )
 
 
 def _rewrite_clone(prog):
@@ -340,8 +363,9 @@ def test_clone_interposer_sdfg_matches_fortran(tmp_path: Path):
 
 
 def test_retype_sdfg_matches_fortran(tmp_path: Path):
-    csdfg = _build(tmp_path, _RETYPE_SRC, lambda prog: retype_to_concrete(prog, "t_transfer", "t_trivial"),
-                   "mono_retype")
+    csdfg = _build(
+        tmp_path, _RETYPE_SRC, lambda prog: retype_to_concrete(prog, "t_transfer", "t_trivial"), "mono_retype"
+    )
     ref = _gfortran_ref(tmp_path / "mono_retype_ref", _RETYPE_SRC, _REF_CALLER_X)
     rng = np.random.default_rng(99)
     for _ in range(8):

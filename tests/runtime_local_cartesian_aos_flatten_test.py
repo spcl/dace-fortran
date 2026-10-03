@@ -16,6 +16,7 @@ FlattenStructs.cpp); fully-static path unchanged.
 Closed form: each element writes x = [s, 2s, 3s] for s = src(i,jb), reads
 back sum(x) = 6*s, so out = 6*src.
 """
+
 from pathlib import Path
 
 import numpy as np

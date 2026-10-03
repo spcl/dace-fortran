@@ -2,6 +2,7 @@
 left the lower-bound result unhandled in ``control_flow.cpp``'s loop-bound ``buildExpr``,
 falling to the ``"?"`` sentinel and producing a SyntaxError in DaCe's
 ``unique_loop_iterators``.  Pins: assumed-shape sum builds and equals ``sum(a)``."""
+
 from pathlib import Path
 
 import numpy as np

@@ -1,4 +1,5 @@
 """End-to-end proof that ``preprocess_cli --inplace`` needs no build-system glue: stage a vanilla automake Fortran project (no dace-fortran awareness), rewrite sources in place, run the user's normal autotools chain, and confirm a real ``libfoo.so`` loads and exports the rewritten kernel."""
+
 import ctypes
 import shutil
 import subprocess
@@ -87,14 +88,19 @@ def _preprocess_inplace(proj: Path):
     """Run the dace-fortran CLI with ``--inplace`` over the kernel source -- the entire bridge-side integration: one command, no automake glue, no m4 macro."""
     inputs = list(proj.glob("*.f90"))  # kernel.f90 (utils/ stays unprocessed)
     cmd = [
-        sys.executable, "-m", "dace_fortran.preprocess_cli", "--all-defaults", "--rewrite-external", "--search-dir",
-        str(proj / "utils"), "--inplace"
+        sys.executable,
+        "-m",
+        "dace_fortran.preprocess_cli",
+        "--all-defaults",
+        "--rewrite-external",
+        "--search-dir",
+        str(proj / "utils"),
+        "--inplace",
     ]
     for f in inputs:
         cmd.extend(["--in", str(f)])
     res = subprocess.run(cmd, capture_output=True, text=True)
-    assert res.returncode == 0, \
-        f"preprocess CLI failed:\nstdout={res.stdout}\nstderr={res.stderr}"
+    assert res.returncode == 0, f"preprocess CLI failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
 
 def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
@@ -110,26 +116,20 @@ def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
     assert "EXTERNAL :: dscale" not in rewritten
     # REAL(KIND=wp) :: dscale is deleted alongside EXTERNAL (redundant once use-associated); wp vanishes via line deletion, not substitution.
     code_lines = "\n".join(line for line in rewritten.splitlines() if not line.lstrip().startswith("!"))
-    assert "wp" not in code_lines.lower(), \
-        f"kind alias wp should be resolved; got code:\n{code_lines}"
+    assert "wp" not in code_lines.lower(), f"kind alias wp should be resolved; got code:\n{code_lines}"
 
     # steps 2-4: vanilla autotools chain, no dace-fortran flags.
     _autoreconf(proj)
     res = subprocess.run(["./configure"], cwd=str(proj), capture_output=True, text=True)
-    assert res.returncode == 0, \
-        f"configure failed:\nstdout={res.stdout}\nstderr={res.stderr}"
+    assert res.returncode == 0, f"configure failed:\nstdout={res.stdout}\nstderr={res.stderr}"
     # plain make -- Makefile.am lists both sources in libfoo_la_SOURCES, module-first order.
     res = subprocess.run(["make"], cwd=str(proj), capture_output=True, text=True)
-    assert res.returncode == 0, \
-        f"make failed:\nstdout={res.stdout[-2000:]}\nstderr={res.stderr[-2000:]}"
+    assert res.returncode == 0, f"make failed:\nstdout={res.stdout[-2000:]}\nstderr={res.stderr[-2000:]}"
 
     # step 5: assert the .so is on disk and exports the kernel symbol.
-    candidates = list(proj.glob(".libs/libfoo.so*")) + \
-                  list(proj.glob("libfoo.so*"))
+    candidates = list(proj.glob(".libs/libfoo.so*")) + list(proj.glob("libfoo.so*"))
     so_paths = [p for p in candidates if p.is_file()]
-    assert so_paths, \
-        f"no libfoo.so produced; tree:\n" + \
-        "\n".join(str(p.relative_to(proj)) for p in proj.rglob("*"))
+    assert so_paths, "no libfoo.so produced; tree:\n" + "\n".join(str(p.relative_to(proj)) for p in proj.rglob("*"))
 
     # load the .so and call into the rewritten kernel; ctypes resolves dscale from the same .so (libtool linked it in).
     lib = ctypes.CDLL(str(so_paths[0]))
@@ -145,8 +145,7 @@ def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
     f = ctypes.c_double(3.0)
     foo_run(ctypes.byref(out), ctypes.byref(x), ctypes.byref(f))
     # dscale(2.0, 3.0) = 6.0; foo_run returns 6.0 + 1.0 = 7.0.
-    assert abs(out.value - 7.0) < 1e-12, \
-        f"foo_run returned {out.value} (expected 7.0)"
+    assert abs(out.value - 7.0) < 1e-12, f"foo_run returned {out.value} (expected 7.0)"
 
 
 def test_inplace_only_no_op_when_kernel_already_canonical(tmp_path):
@@ -168,8 +167,8 @@ END SUBROUTINE
 
     # Sleep past 1s and re-run; mtime should NOT change.
     import time
+
     time.sleep(1.05)
     subprocess.check_call(cmd)
     second_mtime = canon.stat().st_mtime
-    assert first_mtime == second_mtime, \
-        f"canonical kernel was re-written; mtimes {first_mtime} -> {second_mtime}"
+    assert first_mtime == second_mtime, f"canonical kernel was re-written; mtimes {first_mtime} -> {second_mtime}"

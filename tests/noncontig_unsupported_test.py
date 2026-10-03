@@ -84,8 +84,8 @@ subroutine main(p, out)
 end subroutine main
 """
     with pytest.raises(RuntimeError) as exc:
-        build_sdfg(src, tmp_path, name='main', entry='main').build()
+        build_sdfg(src, tmp_path, name="main", entry="main").build()
     msg = str(exc.value)
     assert "pipeline failed" in msg or "polymorphism" in msg, (
-        f"expected a pipeline-failed message naming polymorphism, "
-        f"got: {msg}")
+        f"expected a pipeline-failed message naming polymorphism, got: {msg}"
+    )

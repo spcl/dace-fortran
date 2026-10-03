@@ -127,36 +127,36 @@ _IFACE = OriginalInterface(
         OriginalArg(name="klon", fortran_type="integer", rank=0, shape=(), intent="in", struct_type=None),
         OriginalArg(name="klev", fortran_type="integer", rank=0, shape=(), intent="in", struct_type=None),
         OriginalArg(name="nblocks", fortran_type="integer", rank=0, shape=(), intent="in", struct_type=None),
-        OriginalArg(name="paph",
-                    fortran_type="real(8)",
-                    rank=3,
-                    shape=("klon", "klev+1", "nblocks"),
-                    intent="in",
-                    struct_type=None),
-        OriginalArg(name="za",
-                    fortran_type="real(8)",
-                    rank=3,
-                    shape=("klon", "klev", "nblocks"),
-                    intent="in",
-                    struct_type=None),
-        OriginalArg(name="zb",
-                    fortran_type="real(8)",
-                    rank=3,
-                    shape=("klon", "klev", "nblocks"),
-                    intent="in",
-                    struct_type=None),
-        OriginalArg(name="pfsqlf",
-                    fortran_type="real(8)",
-                    rank=3,
-                    shape=("klon", "klev+1", "nblocks"),
-                    intent="out",
-                    struct_type=None),
-        OriginalArg(name="pfsqrf",
-                    fortran_type="real(8)",
-                    rank=3,
-                    shape=("klon", "klev+1", "nblocks"),
-                    intent="out",
-                    struct_type=None),
+        OriginalArg(
+            name="paph",
+            fortran_type="real(8)",
+            rank=3,
+            shape=("klon", "klev+1", "nblocks"),
+            intent="in",
+            struct_type=None,
+        ),
+        OriginalArg(
+            name="za", fortran_type="real(8)", rank=3, shape=("klon", "klev", "nblocks"), intent="in", struct_type=None
+        ),
+        OriginalArg(
+            name="zb", fortran_type="real(8)", rank=3, shape=("klon", "klev", "nblocks"), intent="in", struct_type=None
+        ),
+        OriginalArg(
+            name="pfsqlf",
+            fortran_type="real(8)",
+            rank=3,
+            shape=("klon", "klev+1", "nblocks"),
+            intent="out",
+            struct_type=None,
+        ),
+        OriginalArg(
+            name="pfsqrf",
+            fortran_type="real(8)",
+            rank=3,
+            shape=("klon", "klev+1", "nblocks"),
+            intent="out",
+            struct_type=None,
+        ),
     ),
     struct_types={},
     used_modules={},
@@ -213,13 +213,19 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
     def _call(lib, fn):
         f = getattr(lib, fn)
         f.restype = None
-        f.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int] + \
-            [ctypes.POINTER(ctypes.c_double)] * 5
+        f.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int] + [ctypes.POINTER(ctypes.c_double)] * 5
         lf = np.zeros((klon, klev + 1, nblocks), dtype=np.float64, order="F")
         rf = np.zeros_like(lf)
-        f(klon, klev, nblocks, paph.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-          za.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), zb.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-          lf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), rf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+        f(
+            klon,
+            klev,
+            nblocks,
+            paph.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            za.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            zb.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            lf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            rf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        )
         return lf, rf
 
     lf_sdfg, rf_sdfg = _call(sdfg_lib, "run_flux")

@@ -13,6 +13,7 @@ access on an aliased object resolves to the source object's real flattened stora
 (resolve_object_member), so a live RMW updates the SOURCE (no lost update); the data-less
 rebind store itself is dropped at emit (emit_scalar_assign early return).
 """
+
 from pathlib import Path
 
 import numpy as np

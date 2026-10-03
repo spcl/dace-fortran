@@ -7,6 +7,7 @@ real-exchange path).  Fix rebuilds member-symbol names from the static
 ``OriginalInterface.struct_types`` layout and reads each member from the caller's
 struct directly.
 """
+
 from dace_fortran.bindings import (
     DerivedType,
     FlattenPlan,
@@ -26,20 +27,23 @@ def _fft_iface() -> OriginalInterface:
     dynamic-shape array member used only for its extent (``nl_d``)."""
     return OriginalInterface(
         entry="vexx",
-        args=(OriginalArg(name="dfftt",
-                          fortran_type="type(fft_type_descriptor)",
-                          rank=0,
-                          intent="in",
-                          struct_type="fft_type_descriptor"), ),
+        args=(
+            OriginalArg(
+                name="dfftt",
+                fortran_type="type(fft_type_descriptor)",
+                rank=0,
+                intent="in",
+                struct_type="fft_type_descriptor",
+            ),
+        ),
         struct_types={
-            "fft_type_descriptor":
-            DerivedType(
+            "fft_type_descriptor": DerivedType(
                 name="fft_type_descriptor",
                 module="fft_types",
                 members=(
                     Member(name="ngm", fortran_type="integer(c_int)", rank=0),
                     Member(name="nnr", fortran_type="integer(c_int)", rank=0),
-                    Member(name="nl_d", fortran_type="integer(c_int)", rank=1, shape=("?", )),
+                    Member(name="nl_d", fortran_type="integer(c_int)", rank=1, shape=("?",)),
                 ),
             )
         },
@@ -65,16 +69,16 @@ def test_struct_member_symbol_sources_recurses_nested():
     ``outer_inner_cnt``)."""
     iface = OriginalInterface(
         entry="k",
-        args=(OriginalArg(name="outer", fortran_type="type(t_outer)", rank=0, intent="in", struct_type="t_outer"), ),
+        args=(OriginalArg(name="outer", fortran_type="type(t_outer)", rank=0, intent="in", struct_type="t_outer"),),
         struct_types={
-            "t_outer":
-            DerivedType(name="t_outer",
-                        module="m",
-                        members=(Member(name="inner", fortran_type="type(t_inner)", rank=0, struct_name="t_inner"), )),
-            "t_inner":
-            DerivedType(name="t_inner",
-                        module="m",
-                        members=(Member(name="cnt", fortran_type="integer(c_int)", rank=0), )),
+            "t_outer": DerivedType(
+                name="t_outer",
+                module="m",
+                members=(Member(name="inner", fortran_type="type(t_inner)", rank=0, struct_name="t_inner"),),
+            ),
+            "t_inner": DerivedType(
+                name="t_inner", module="m", members=(Member(name="cnt", fortran_type="integer(c_int)", rank=0),)
+            ),
         },
     )
     src, paths = _struct_member_symbol_sources(iface)
@@ -113,11 +117,17 @@ def test_plan_entry_still_wins_over_struct_layout_fallback():
         free_symbols=("dfftt_ngm", "dfftt_nnr"),
     )
     from dace_fortran.bindings import FlattenEntry, FlattenRecipe
+
     plan = FlattenPlan(
-        entries=(FlattenEntry(outer_expr="dfftt%ngm",
-                              outer_type="integer(c_int)",
-                              writeback_intent="in",
-                              recipe=FlattenRecipe(flat_names=("dfftt_ngm", ), read_exprs=("dfftt%ngm", ), rank=0)), ))
+        entries=(
+            FlattenEntry(
+                outer_expr="dfftt%ngm",
+                outer_type="integer(c_int)",
+                writeback_intent="in",
+                recipe=FlattenRecipe(flat_names=("dfftt_ngm",), read_exprs=("dfftt%ngm",), rank=0),
+            ),
+        )
+    )
     text = "\n".join(_build_symbol_assigns(frozen, plan, {"dfftt"}, iface))
     # Plan-driven scalar_member path (read_exprs[0], no $i strip needed).
     assert "dfftt_ngm = int(dfftt%ngm, c_int)" in text

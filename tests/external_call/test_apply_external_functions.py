@@ -5,15 +5,24 @@ a call whose argument order comes entirely from the Fortran source.
 Two layers: **contract** (no toolchain) -- registry population + policy validation.
 **e2e** (flang+gfortran) -- a bare ``ExternalFunction`` with no ``Arg`` list must produce
 the same ``ExternalCall`` as an explicit two-``Arg`` ``keep_external``."""
+
 import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
+from _util import build_sdfg, have_flang
 
-from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, clear_external_registry, keep_external,
-                                   lookup_external, registered_names)
+from dace_fortran.external import (
+    Arg,
+    ExternalCall,
+    apply_external_functions,
+    clear_external_registry,
+    keep_external,
+    lookup_external,
+    registered_names,
+)
 from dace_fortran.external_functions import ExternalFunction
 
 # ---------------------------------------------------------------------------
@@ -26,12 +35,13 @@ def test_apply_registers_emitted_external():
     ``c_name`` is its symbol and whose library is linked."""
     clear_external_registry()
     try:
-        apply_external_functions([ExternalFunction("sync_patch_array", c_function="sync_c", library="/tmp/libhalo.so")],
-                                 [])
+        apply_external_functions(
+            [ExternalFunction("sync_patch_array", c_function="sync_c", library="/tmp/libhalo.so")], []
+        )
         sig = lookup_external("sync_patch_array")
         assert sig is not None
         assert sig.c_name == "sync_c"
-        assert sig.libraries == ("/tmp/libhalo.so", )
+        assert sig.libraries == ("/tmp/libhalo.so",)
         assert sig.stub is False
         assert sig.args == (), "a bare ExternalFunction authors no args"
     finally:
@@ -68,8 +78,9 @@ def test_apply_both_lists_together():
     """Both collections register in one call; ``registered_names`` lists all."""
     clear_external_registry()
     try:
-        apply_external_functions([ExternalFunction("sync_patch_array"),
-                                  ExternalFunction("exchange_data")], ["finish", "dbg_print"])
+        apply_external_functions(
+            [ExternalFunction("sync_patch_array"), ExternalFunction("exchange_data")], ["finish", "dbg_print"]
+        )
         assert set(registered_names()) == {"sync_patch_array", "exchange_data", "finish", "dbg_print"}
         assert lookup_external("sync_patch_array").stub is False
         assert lookup_external("finish").stub is True
@@ -102,8 +113,6 @@ def test_apply_validates_duplicate_emit_name():
 # ---------------------------------------------------------------------------
 # e2e -- the derive-from-HLFIR linchpin: a bare ExternalFunction lowers + runs
 # ---------------------------------------------------------------------------
-
-from _util import build_sdfg, have_flang  # tests/conftest.py puts tests/ on sys.path
 
 _e2e = [
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
@@ -206,9 +215,9 @@ def test_derived_node_matches_authored(tmp_path: Path, _m):
         clear_external_registry()
         keep_external(
             "bar",
-            args=[Arg(kind="array", dtype="float64", intent="inout"),
-                  Arg(kind="scalar", dtype="int32", intent="in")],
-            libraries=[str(lib)])
+            args=[Arg(kind="array", dtype="float64", intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")],
+            libraries=[str(lib)],
+        )
 
     try:
         derived = _external_call_node(tmp_path, libbar, bare)

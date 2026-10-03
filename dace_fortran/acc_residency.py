@@ -35,6 +35,7 @@ An argument with no ACC evidence is reported in ``unclassified``; it is never
 defaulted into ``host``, because "no directive mentions it" and "the directives
 say it is on the host" call for different actions on the binding side.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,31 +53,33 @@ from fparser.two.utils import FortranSyntaxError, walk
 
 #: Clauses proving the data has a device copy at call time.  ``DELETE`` /
 #: ``DETACH`` qualify: only device-resident data can be removed from the device.
-DEVICE_CLAUSES = frozenset({
-    "present",
-    "copy",
-    "copyin",
-    "copyout",
-    "create",
-    "deviceptr",
-    "device_resident",
-    "attach",
-    "detach",
-    "delete",
-    "device",
-    "use_device",
-    "link",
-    "present_or_copy",
-    "present_or_copyin",
-    "present_or_copyout",
-    "present_or_create",
-    "pcopy",
-    "pcopyin",
-    "pcopyout",
-    "pcreate",
-    "pcopy_in",
-    "pcopy_out",
-})
+DEVICE_CLAUSES = frozenset(
+    {
+        "present",
+        "copy",
+        "copyin",
+        "copyout",
+        "create",
+        "deviceptr",
+        "device_resident",
+        "attach",
+        "detach",
+        "delete",
+        "device",
+        "use_device",
+        "link",
+        "present_or_copy",
+        "present_or_copyin",
+        "present_or_copyout",
+        "present_or_create",
+        "pcopy",
+        "pcopyin",
+        "pcopyout",
+        "pcreate",
+        "pcopy_in",
+        "pcopy_out",
+    }
+)
 
 #: Clauses that leave the data usable from the host.  ``NO_CREATE`` is the only
 #: ACC clause admitting host memory as the fallback; ``UPDATE HOST/SELF`` marks
@@ -144,7 +147,7 @@ def _mask_cpp(source: str, defines: frozenset) -> str:
             directive = stripped[1:].lstrip()
             word_match = re.match(r"\w*", directive)  # matches the empty string at worst
             word = word_match.group(0) if word_match else ""
-            rest = directive[len(word):].strip()
+            rest = directive[len(word) :].strip()
             if word == "ifdef":
                 taken = rest.split()[0] in defines if rest.split() else False
                 stack.append([taken, taken])
@@ -234,7 +237,7 @@ def _sentinel_body(line: str) -> Tuple[str, bool]:
     match = _ACC_SENTINEL_RE.match(line)
     if match is None:
         raise ValueError(f"not a !$acc sentinel line: {line!r}")
-    body = _strip_comment(line[match.end():]).rstrip()
+    body = _strip_comment(line[match.end() :]).rstrip()
     continued = body.endswith("&")
     if continued:
         body = body[:-1]
@@ -413,10 +416,9 @@ def extract_acc_residency(source_path: str | Path, routine: str, defines: Iterab
     return classify(path.read_text(), routine, path.name, defines)
 
 
-def write_acc_residency_sidecar(source_path: str | Path,
-                                routine: str,
-                                out_dir: str | Path,
-                                defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Path:
+def write_acc_residency_sidecar(
+    source_path: str | Path, routine: str, out_dir: str | Path, defines: Iterable[str] = DEFAULT_CPP_DEFINES
+) -> Path:
     """Write ``<routine>.acc_residency.json`` into ``out_dir``; return its path."""
     payload = extract_acc_residency(source_path, routine, defines)
     out = Path(out_dir) / f"{routine}.acc_residency.json"
@@ -426,15 +428,19 @@ def write_acc_residency_sidecar(source_path: str | Path,
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m dace_fortran.acc_residency",
-                                     description="Extract per-argument OpenACC data residency for a Fortran routine.")
+    parser = argparse.ArgumentParser(
+        prog="python -m dace_fortran.acc_residency",
+        description="Extract per-argument OpenACC data residency for a Fortran routine.",
+    )
     parser.add_argument("source", type=Path, help="Fortran source, ACC directives intact.")
     parser.add_argument("--routine", required=True, help="Target routine name.")
-    parser.add_argument("--define",
-                        action="append",
-                        default=[],
-                        help="Extra cpp macro assumed defined when selecting #if arms "
-                        "(added to the default set: %s)." % ", ".join(sorted(DEFAULT_CPP_DEFINES)))
+    parser.add_argument(
+        "--define",
+        action="append",
+        default=[],
+        help="Extra cpp macro assumed defined when selecting #if arms "
+        "(added to the default set: %s)." % ", ".join(sorted(DEFAULT_CPP_DEFINES)),
+    )
     parser.add_argument("--out", type=Path, help="Write the sidecar JSON here (default: stdout).")
     parser.add_argument("--out-dir", type=Path, help="Write <routine>.acc_residency.json into this directory.")
     parser.add_argument("--table", action="store_true", help="Also print a human-readable table on stderr.")

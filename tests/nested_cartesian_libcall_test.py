@@ -8,6 +8,7 @@ Gate #12: rootedAtStructDummy/walkMemberChain now walk THROUGH the inlined-call 
 struct (reusing gate #11's leadsToComponentDesignate), and the libcall operand-subset builder renders
 the whole-member read as the element slice diag_pvd_x[(i-1), 0:3] instead of the whole multi-dim
 companion (which 1-D-only dot_product rejects)."""
+
 import pytest
 
 from _util import build_sdfg, have_flang

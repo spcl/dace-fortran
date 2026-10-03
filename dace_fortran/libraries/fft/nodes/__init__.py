@@ -6,3 +6,5 @@ from dace_fortran.libraries.fft.nodes.fft_interpolate import FFTInterpolate
 # re-export them here so the single ``dace_fortran.libraries.fft.nodes`` import resolves FFT/IFFT
 # alongside the Fortran-specific FFTInterpolate.
 from dace.libraries.fft.nodes import FFT, IFFT
+
+__all__ = ["FFT", "IFFT", "FFTInterpolate"]

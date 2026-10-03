@@ -9,6 +9,7 @@ Verifies writes inside ``inner`` to ``buf(m,i,j)`` land at the right linear
 offset inside ``scratch``, matching the f2py-compiled gfortran reference
 element-by-element (NPB LU's ``scratch``/``buf`` pattern).
 """
+
 import numpy as np
 import pytest
 
@@ -50,7 +51,7 @@ def test_rank_promotion_view_writes_land_at_correct_linear_offset(tmp_path):
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
     # Sentinel init so untouched slots are visible (any -1.0 = view stride bug).
-    scratch_sdfg = np.full((SCRATCH_N, ), -1.0, dtype=np.float64, order='F')
+    scratch_sdfg = np.full((SCRATCH_N,), -1.0, dtype=np.float64, order="F")
     sdfg(scratch=scratch_sdfg)
 
     # Reference flat buffer replicates the Fortran column-major linear-offset
@@ -104,7 +105,7 @@ def test_rank_reinterpret_4d_source_to_2d_view(tmp_path):
     A, B, C, D = 4, 3, 5, 2
     sdfg = build_sdfg(_SRC_4D_TO_2D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    arr_sdfg = np.full((A, B, C, D), -1.0, dtype=np.float64, order='F')
+    arr_sdfg = np.full((A, B, C, D), -1.0, dtype=np.float64, order="F")
     sdfg(arr_4d=arr_sdfg)
 
     # Expected: flatten the source column-major, then reindex to the view's (A*B, C*D) shape.
@@ -113,7 +114,7 @@ def test_rank_reinterpret_4d_source_to_2d_view(tmp_path):
         for i in range(1, A * B + 1):
             lin = (i - 1) + (A * B) * (j - 1)
             expected_flat[lin] = i + 100 * j
-    expected = expected_flat.reshape((A, B, C, D), order='F')
+    expected = expected_flat.reshape((A, B, C, D), order="F")
 
     np.testing.assert_array_equal(arr_sdfg, expected)
 
@@ -148,11 +149,11 @@ def test_rank_reinterpret_3d_source_to_1d_view(tmp_path):
     A, B, C = 4, 3, 5
     sdfg = build_sdfg(_SRC_3D_TO_1D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    arr_sdfg = np.full((A, B, C), -1.0, dtype=np.float64, order='F')
+    arr_sdfg = np.full((A, B, C), -1.0, dtype=np.float64, order="F")
     sdfg(arr_3d=arr_sdfg)
 
     expected_flat = np.array([7 * i for i in range(1, A * B * C + 1)], dtype=np.float64)
-    expected = expected_flat.reshape((A, B, C), order='F')
+    expected = expected_flat.reshape((A, B, C), order="F")
 
     np.testing.assert_array_equal(arr_sdfg, expected)
 
@@ -193,7 +194,7 @@ def test_rank_reinterpret_2d_source_to_4d_view(tmp_path):
     ROWS, COLS = 6, 8
     sdfg = build_sdfg(_SRC_2D_TO_4D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order='F')
+    arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order="F")
     sdfg(arr_2d=arr_sdfg)
 
     expected_flat = np.empty(ROWS * COLS, dtype=np.float64)
@@ -203,7 +204,7 @@ def test_rank_reinterpret_2d_source_to_4d_view(tmp_path):
                 for a in range(1, 3):
                     lin = (a - 1) + 2 * (b - 1) + 2 * 3 * (c - 1) + 2 * 3 * 4 * (d - 1)
                     expected_flat[lin] = a + 10 * b + 100 * c + 1000 * d
-    expected = expected_flat.reshape((ROWS, COLS), order='F')
+    expected = expected_flat.reshape((ROWS, COLS), order="F")
 
     np.testing.assert_array_equal(arr_sdfg, expected)
 
@@ -242,7 +243,7 @@ def test_rank_reinterpret_2d_source_to_3d_view(tmp_path):
     ROWS, COLS = 6, 8
     sdfg = build_sdfg(_SRC_2D_TO_3D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order='F')
+    arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order="F")
     sdfg(arr_2d=arr_sdfg)
 
     expected_flat = np.empty(ROWS * COLS, dtype=np.float64)
@@ -251,6 +252,6 @@ def test_rank_reinterpret_2d_source_to_3d_view(tmp_path):
             for a in range(1, 3):
                 lin = (a - 1) + 2 * (b - 1) + 2 * 3 * (c - 1)
                 expected_flat[lin] = a + 10 * b + 100 * c
-    expected = expected_flat.reshape((ROWS, COLS), order='F')
+    expected = expected_flat.reshape((ROWS, COLS), order="F")
 
     np.testing.assert_array_equal(arr_sdfg, expected)

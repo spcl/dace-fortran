@@ -20,6 +20,7 @@ horizontal fusion run together to a fixed point), applied a second time after ``
 since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-omp-thread-count``
 defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
 """
+
 import copy
 from typing import Any, Dict, Optional, Set, Union, cast
 
@@ -33,8 +34,10 @@ from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
-from dace.transformation.passes.length_one_array_scalar_conversion import (ConvertLengthOneArraysToScalars,
-                                                                           STAGING_STATE_PREFIXES)
+from dace.transformation.passes.length_one_array_scalar_conversion import (
+    ConvertLengthOneArraysToScalars,
+    STAGING_STATE_PREFIXES,
+)
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -86,7 +89,7 @@ def fission_scalars(sdfg: SDFG) -> Dict[str, Set[str]]:
     for name in proxies:
         sdfg.arrays[name].transient = False
     try:
-        return (Pipeline([ScalarFission()]).apply_pass(sdfg, {}) or {}).get('ScalarFission') or {}
+        return (Pipeline([ScalarFission()]).apply_pass(sdfg, {}) or {}).get("ScalarFission") or {}
     finally:
         for name in proxies:
             sdfg.arrays[name].transient = True
@@ -115,7 +118,7 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
 
     def fresh() -> Dict[str, Any]:
         return {
-            k: (v.copy(order='F' if v.flags.f_contiguous else 'C') if isinstance(v, np.ndarray) else v)
+            k: (v.copy(order="F" if v.flags.f_contiguous else "C") if isinstance(v, np.ndarray) else v)
             for k, v in inputs.items()
         }
 
@@ -143,13 +146,15 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
         raise AssertionError("optimize() changed the numerics (must be bit-exact):\n  " + "\n  ".join(mismatched))
 
 
-def optimize(sdfg: SDFG,
-             *,
-             symbols: Optional[Dict[str, Const]] = None,
-             scalars: Optional[Dict[str, Const]] = None,
-             unroll_limit: int = 8,
-             validate: bool = True,
-             verify_inputs: Optional[Dict[str, Any]] = None) -> SDFG:
+def optimize(
+    sdfg: SDFG,
+    *,
+    symbols: Optional[Dict[str, Const]] = None,
+    scalars: Optional[Dict[str, Const]] = None,
+    unroll_limit: int = 8,
+    validate: bool = True,
+    verify_inputs: Optional[Dict[str, Any]] = None,
+) -> SDFG:
     """Run the parallelization pipeline in place and return ``sdfg``.
 
     :param sdfg: the SDFG to optimize (mutated in place).
@@ -193,6 +198,7 @@ def optimize(sdfg: SDFG,
     FullMapFusion(validate=validate).apply_pass(sdfg, {})
 
     from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
+
     MakeTransientsPersistent().apply_pass(sdfg, {})
     BindOmpThreadCount().apply_pass(sdfg, {})
 
@@ -206,4 +212,5 @@ def optimize(sdfg: SDFG,
 def num_maps(sdfg: SDFG) -> int:
     """Map entries anywhere in ``sdfg``, nested SDFGs included -- the parallelization yardstick."""
     from dace.sdfg import nodes
+
     return sum(1 for n, _ in sdfg.all_nodes_recursive() if isinstance(n, nodes.MapEntry))

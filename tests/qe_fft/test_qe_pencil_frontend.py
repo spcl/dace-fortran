@@ -7,6 +7,7 @@ matching lib node: ``cft_1x``/``cft_1y``/``cft_1z`` -> :class:`FFT`; ``fft_scatt
 Recognition only -- the buffer-to-3-D-grid reinterpretation for a full parallel 3-D FFT SDFG
 is a separate gap (``axis`` tag carried on the ASTNode for ``emit_fft`` to consume later).
 """
+
 from pathlib import Path
 
 import pytest
@@ -26,8 +27,7 @@ def _build_and_assert(entry: str, expected_node: str, tmp_path):
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / name), entry=entry, name=name)
     sdfg.validate()
     classes = {type(n).__name__ for s in sdfg.states() for n in s.nodes()}
-    assert expected_node in classes, \
-        f"{entry}: expected a {expected_node!r} lib node, got {sorted(classes)!r}"
+    assert expected_node in classes, f"{entry}: expected a {expected_node!r} lib node, got {sorted(classes)!r}"
 
 
 def test_cft_1z_recognised(tmp_path):

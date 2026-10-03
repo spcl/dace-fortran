@@ -22,13 +22,12 @@ class HasShape(Protocol):
     """Any array-like call argument (numpy, cupy, torch, ...)."""
 
     @property
-    def shape(self) -> tuple[int, ...]:
-        ...
+    def shape(self) -> tuple[int, ...]: ...
 
 
 #: ``<arr>_d<i>`` / ``offset_<arr>_d<i>`` synthetic-extent symbol name; greedy
 #: ``.+`` matches the rightmost ``_d<i>`` since an array name may itself contain ``_d``.
-_DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
+_DIM_SYMBOL_RE = re.compile(r"^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$")
 
 
 class AutoDimSDFG(dace.SDFG):
@@ -49,10 +48,10 @@ class AutoDimSDFG(dace.SDFG):
             m = _DIM_SYMBOL_RE.match(sym)
             if m is None:
                 continue
-            is_offset = m.group('off') is not None
-            actual = kwargs.get(m.group('arr'))
+            is_offset = m.group("off") is not None
+            actual = kwargs.get(m.group("arr"))
             shape = actual.shape if isinstance(actual, HasShape) else None
-            idx = int(m.group('idx'))
+            idx = int(m.group("idx"))
             if not is_offset and shape is not None and idx < len(shape):
                 kwargs[sym] = int(shape[idx])  # always the correct extent
             elif is_offset:
@@ -63,10 +62,12 @@ class AutoDimSDFG(dace.SDFG):
                 # off-by-one read of every such array.
                 kwargs[sym] = 1
             else:
-                arr = m.group('arr')
+                arr = m.group("arr")
                 if arr in self._touched_arrays():
-                    raise ValueError(f"extent symbol {sym!r} is unbound: no argument {arr!r} supplies its extent "
-                                     f"(pass {sym}=<extent> explicitly); refusing to default it")
+                    raise ValueError(
+                        f"extent symbol {sym!r} is unbound: no argument {arr!r} supplies its extent "
+                        f"(pass {sym}=<extent> explicitly); refusing to default it"
+                    )
                 kwargs[sym] = 1  # extent of an array no state reads or writes: its size is never observed
         return super().__call__(*args, **kwargs)
 
@@ -80,5 +81,5 @@ class AutoDimSDFG(dace.SDFG):
         accepts the dump; the auto-fill ``__call__`` wrapper isn't persisted
         state, so nothing is lost."""
         d = super().to_json(*args, **kwargs)
-        d['type'] = dace.SDFG.__name__
+        d["type"] = dace.SDFG.__name__
         return d

@@ -5,6 +5,7 @@
 * Differential: DUT (SDFG) runs in place, REF (original body, renamed ``solve_nh_ref``) runs on a deep
   copy, and results are compared bit-for-bit per call.
 """
+
 import re
 from pathlib import Path
 
@@ -192,15 +193,19 @@ def apply_solve_nh_patch(pristine_source: str, dace_only: bool = False) -> str:
         body_block = _DIFF_BLOCK
 
     # (1) driver: original header + USE helpers (if any) + dummies + body.
-    driver = (lines[subr_start:header_end + 1] + use_block + lines[header_end + 1:last_intent + 1] +
-              body_block.splitlines())
+    driver = (
+        lines[subr_start : header_end + 1]
+        + use_block
+        + lines[header_end + 1 : last_intent + 1]
+        + body_block.splitlines()
+    )
 
     # (2) the original subroutine, verbatim, renamed to solve_nh_ref.
-    ref = list(lines[subr_start:end_subr + 1])
+    ref = list(lines[subr_start : end_subr + 1])
     ref[0] = re.sub(r"(SUBROUTINE\s+)solve_nh(\s*\()", r"\1solve_nh_ref\2", ref[0], count=1, flags=re.IGNORECASE)
     ref[-1] = re.sub(r"(END\s+SUBROUTINE\s+)solve_nh\b", r"\1solve_nh_ref", ref[-1], count=1, flags=re.IGNORECASE)
 
-    out = lines[:subr_start] + driver + [""] + ref + lines[end_subr + 1:]
+    out = lines[:subr_start] + driver + [""] + ref + lines[end_subr + 1 :]
     return "\n".join(out) + "\n"
 
 

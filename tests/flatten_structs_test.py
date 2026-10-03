@@ -1,6 +1,7 @@
 """Verify the ``hlfir-flatten-structs`` pass rewrites derived-type data into
 flat per-member companions (uniform case) or into a single ELLPACK-style
 combined array (jagged case) before SDFG generation sees it."""
+
 from pathlib import Path
 
 import numpy as np
@@ -56,8 +57,8 @@ def test_flatten_structs_splits_members(tmp_path):
     b = build_sdfg(_SRC, tmp_path, name="complex_struct")
 
     names = _names(b)
-    assert any(n.endswith("_re") for n in names), (f"missing re companion array in {sorted(names)}")
-    assert any(n.endswith("_im") for n in names), (f"missing im companion array in {sorted(names)}")
+    assert any(n.endswith("_re") for n in names), f"missing re companion array in {sorted(names)}"
+    assert any(n.endswith("_im") for n in names), f"missing im companion array in {sorted(names)}"
 
 
 # ----------------------------------------------------------------------------
@@ -73,11 +74,11 @@ def test_velocity_struct_arg_flattens_to_four_args(tmp_path):
     # member companions appear as hlfir.declare uniq_names
     for mem in ("_u", "_v", "_w", "_p"):
         needle = f"Est{mem}"
-        assert needle in ir, (f"expected declare with uniq_name ending in {needle!r}; IR excerpt:"
-                              f"\n{ir[:800]}")
+        assert needle in ir, f"expected declare with uniq_name ending in {needle!r}; IR excerpt:\n{ir[:800]}"
 
     assert "!fir.type<" not in ir.split("func.func")[1].splitlines()[0], (
-        f"function signature should no longer reference a struct type:\n{ir[:400]}")
+        f"function signature should no longer reference a struct type:\n{ir[:400]}"
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -91,11 +92,12 @@ def test_jagged_struct_arg_packs_into_2d(tmp_path):
     assert "_soa" in ir, f"function should be renamed to *_soa:\n{ir[:600]}"
 
     # The combined 2-D array: 4 rows (one per member), 20 cols (= max(10,20,15,5)).
-    assert "!fir.array<4x20xf64>" in ir, (f"expected packed 4x20xf64 array in post-pass IR:\n{ir[:1500]}")
+    assert "!fir.array<4x20xf64>" in ir, f"expected packed 4x20xf64 array in post-pass IR:\n{ir[:1500]}"
 
     # four coordinate_of/convert pairs alias each member into a row of the combined array
     assert ir.count("fir.coordinate_of") >= 4, (
-        f"expected four fir.coordinate_of ops (one per jagged member):\n{ir[:1500]}")
+        f"expected four fir.coordinate_of ops (one per jagged member):\n{ir[:1500]}"
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -138,10 +140,12 @@ end subroutine main
     ir = run_passes_dump(src, tmp_path, name="main", pipeline=_FLATTEN_ONLY)
 
     assert "Es_start_index" in ir and "Es_end_index" in ir, (
-        f"owned struct local should still flatten into companions:\n{ir[:1200]}")
+        f"owned struct local should still flatten into companions:\n{ir[:1200]}"
+    )
     # descriptor local p stays intact -- pointer declare survives for the downstream pointer-rewrite path
     assert "Ep_start_index" not in ir and "Ep_end_index" not in ir, (
-        f"POINTER struct local must NOT be locally flattened:\n{ir[:1200]}")
+        f"POINTER struct local must NOT be locally flattened:\n{ir[:1200]}"
+    )
     assert '"_QFmainEp"' in ir, f"pointer local declare should survive:\n{ir[:1200]}"
 
 
@@ -172,9 +176,10 @@ end subroutine main
 """
     ir = run_passes_dump(src, tmp_path, name="main", pipeline=_FLATTEN_ONLY)
     # OWNED ``s`` flattens; ALLOCATABLE descriptor ``a`` is left intact.
-    assert "Es_lo" in ir and "Es_hi" in ir, (f"owned struct local should still flatten:\n{ir[:1200]}")
+    assert "Es_lo" in ir and "Es_hi" in ir, f"owned struct local should still flatten:\n{ir[:1200]}"
     assert "Ea_lo" not in ir and "Ea_hi" not in ir, (
-        f"ALLOCATABLE struct local must NOT be locally flattened:\n{ir[:1200]}")
+        f"ALLOCATABLE struct local must NOT be locally flattened:\n{ir[:1200]}"
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -316,8 +321,9 @@ def test_nested_aor_scalar_member_loop_bound_registers_as_symbol(tmp_path):
     # Both nested-struct scalar bounds resolve as caller-bound free symbols.
     for m in ("start_block", "end_block"):
         name = f"patch_p2d_in_domain_{m}"
-        assert name in syms, (f"nested struct-member loop bound {name!r} should register as an SDFG "
-                              f"symbol; symbols={sorted(syms)}")
+        assert name in syms, (
+            f"nested struct-member loop bound {name!r} should register as an SDFG symbol; symbols={sorted(syms)}"
+        )
     # struct dummy wasn't statically flattened (pointer-array intermediate) -- bounds are pure symbols, no data companion
     assert "patch_p2d_in_domain_start_block" not in sdfg.arrays
 
@@ -349,11 +355,13 @@ def test_nested_aor_array_member_registers_with_record_dim(tmp_path):
     # or the top offset symbol is never registered and the build raises
     # "unresolved free symbol". Build succeeding IS the binding assertion.
     sdfg = build_sdfg(_NESTED_AOR_ARRAY_MEMBER_SRC, tmp_path / "sdfg", name="inner", entry="lib::inner").build()
-    assert "patch_p1d_dolic" in sdfg.arrays, (f"nested pointer-AoR array member companion missing; "
-                                              f"arrays={sorted(sdfg.arrays)}")
+    assert "patch_p1d_dolic" in sdfg.arrays, (
+        f"nested pointer-AoR array member companion missing; arrays={sorted(sdfg.arrays)}"
+    )
     shape = sdfg.arrays["patch_p1d_dolic"].shape
-    assert len(shape) == 3, (f"companion must carry the prepended record dim (rank 1+2=3), got rank "
-                             f"{len(shape)}: {shape}")
+    assert len(shape) == 3, (
+        f"companion must carry the prepended record dim (rank 1+2=3), got rank {len(shape)}: {shape}"
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -363,10 +371,12 @@ def test_nested_aor_array_member_registers_with_record_dim(tmp_path):
 
 
 def _private_component_names(tmp_path):
-    b = build_sdfg(_PRIVATE_COMPONENT_SRC,
-                   tmp_path,
-                   name="private_component_struct",
-                   entry="m_private_components::private_component_kernel")
+    b = build_sdfg(
+        _PRIVATE_COMPONENT_SRC,
+        tmp_path,
+        name="private_component_struct",
+        entry="m_private_components::private_component_kernel",
+    )
     return _names(b)
 
 
@@ -375,9 +385,9 @@ def test_private_component_never_designated_is_pruned(tmp_path):
     flat companion. flang mangles it with an illegal '.' in the name; ICON's real
     ``t_patch % comm_pat_gather_c`` shape (27 gfortran syntax errors before the gate)."""
     names = _private_component_names(tmp_path)
-    assert not any(
-        "never_used" in n
-        for n in names), (f"private, never-designated component must be pruned, not flattened; got {sorted(names)}")
+    assert not any("never_used" in n for n in names), (
+        f"private, never-designated component must be pruned, not flattened; got {sorted(names)}"
+    )
 
 
 def test_private_component_designated_in_module_survives(tmp_path):
@@ -386,10 +396,11 @@ def test_private_component_designated_in_module_survives(tmp_path):
     ocean solver's ``act__tag`` dispatch tag); the kernel reads ``o%book%seen(1)``."""
     names = _private_component_names(tmp_path)
     assert any("seen" in n for n in names), (
-        f"private component designated by the in-module kernel must survive the gate; got {sorted(names)}")
+        f"private component designated by the in-module kernel must survive the gate; got {sorted(names)}"
+    )
 
 
 def test_public_sibling_of_private_component_still_flattens(tmp_path):
     """Ordinary public members (``data``, unmangled) are never a gate candidate, unaffected."""
     names = _private_component_names(tmp_path)
-    assert any("data" in n for n in names), (f"public member must be unaffected by the gate; got {sorted(names)}")
+    assert any("data" in n for n in names), f"public member must be unaffected by the gate; got {sorted(names)}"

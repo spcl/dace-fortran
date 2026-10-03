@@ -39,7 +39,7 @@ end module read_arr_mod
 
     # arr[i] = (i-5)*10 -- distinguishes offset-by-1 from offset-by-(-5).
     arr = np.asfortranarray(np.array([(i - 5) * 10 for i in range(11)], dtype=np.int32))  # values -50 ... 50
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
 
     # arr(-3) should be -30 (arr(-5)=-50, arr(-4)=-40, ...); a wrong offset would segfault or misread.
     sdfg(arr=arr, idx=np.int32(-3), out=out)
@@ -79,7 +79,7 @@ end module read_alloc_mod
     sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc_mod::read_alloc").build()
     sdfg.validate()
 
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(idx=np.int32(3), out=out)
     # 1-based: arr(3) = 30 -- confirms the default offset=1 path for positive-only indices.
     assert out[0] == 30, f"arr(3) should be 30; got {out[0]}"
@@ -117,11 +117,12 @@ end module read_alloc_mod
     sdfg.validate()
 
     # Inference picks -5 (most-negative literal designate index in the body).
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -5, (
         f"expected offset_arr_d0 inferred to -5; got "
-        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
 
-    out = np.zeros(4, dtype=np.int32, order='F')
+    out = np.zeros(4, dtype=np.int32, order="F")
     sdfg(out=out)
     np.testing.assert_array_equal(out, [-50, -30, 0, 50])
 
@@ -151,9 +152,9 @@ end module zero_based_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="zero_based_mod::zero_based").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == 0
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == 0
 
-    out = np.zeros(3, dtype=np.int32, order='F')
+    out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(out=out)
     np.testing.assert_array_equal(out, [100, 101, 102])
 
@@ -186,9 +187,9 @@ end module icon_edge_blocks_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="icon_edge_blocks_mod::icon_edge_blocks").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_end_block_d0') == -13
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_end_block_d0") == -13
 
-    out = np.zeros(3, dtype=np.int32, order='F')
+    out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(out=out)
     np.testing.assert_array_equal(out, [-1300, -800, 500])
 
@@ -220,11 +221,11 @@ end module mixed_bounds_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="mixed_bounds_mod::mixed_bounds").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -4
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -4
     # dim 1 has no literal index below 1, so stays at default 1
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d1') == 1
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d1") == 1
 
-    out = np.zeros(4, dtype=np.int32, order='F')
+    out = np.zeros(4, dtype=np.int32, order="F")
     sdfg(out=out)
     np.testing.assert_array_equal(out, [-41, 2, 43, -22])
 
@@ -256,10 +257,11 @@ end module sym_idx_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="sym_idx_mod::sym_idx").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -5, (
         f"shape_shift inference should pick -5 from ALLOCATE(arr(-5:5)); "
-        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
-    out = np.zeros(11, dtype=np.int32, order='F')
+        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
+    out = np.zeros(11, dtype=np.int32, order="F")
     sdfg(out=out)
     expected = np.array([(i - 5) * 100 for i in range(11)], dtype=np.int32)
     np.testing.assert_array_equal(out, expected)
@@ -286,14 +288,15 @@ end module read_dummy_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="read_dummy_mod::read_dummy").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -3, (
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -3, (
         f"expected offset_arr_d0 == -3 (most-negative literal); "
-        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
+        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}"
+    )
 
     # Buffer is 1-based numpy; SDFG reads at arr[N-(-3)]=arr[N+3], so for
     # N in [-3,5] buf[0]=arr(-3)=-30, buf[3]=arr(0)=0, buf[8]=arr(5)=50.
     arr = np.asfortranarray(np.array([(i - 3) * 10 for i in range(9)], dtype=np.int32))
-    out = np.zeros(3, dtype=np.int32, order='F')
+    out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out)
     np.testing.assert_array_equal(out, [-30, 0, 50])
 
@@ -324,12 +327,13 @@ end module sum_arr_mod
     sdfg = build_sdfg(src, sdfg_dir, name="sum_arr", entry="sum_arr_mod::sum_arr").build()
     sdfg.validate()
     # Loop bounds are literal but the designate index is symbolic; offset stays free.
-    assert 'offset_arr_d0' in sdfg.arglist(), (f"expected offset_arr_d0 to be free on SDFG signature; "
-                                               f"arglist: {list(sdfg.arglist().keys())}")
+    assert "offset_arr_d0" in sdfg.arglist(), (
+        f"expected offset_arr_d0 to be free on SDFG signature; arglist: {list(sdfg.arglist().keys())}"
+    )
 
     # Buffer holds arr(-5)..arr(5) at buf[0..10]; sum is 0.
     arr = np.asfortranarray(np.array(range(-5, 6), dtype=np.int32))
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, n=np.int32(11), out=out, offset_arr_d0=np.int64(-5), arr_d0=np.int64(11))
     assert out[0] == 0, f"sum(arr(-5..5)) should be 0; got {out[0]}"
 
@@ -360,16 +364,16 @@ end module sum_col_mod
     sdfg = build_sdfg(src, sdfg_dir, name="sum_col", entry="sum_col_mod::sum_col").build()
     sdfg.validate()
     arglist = sdfg.arglist()
-    assert 'offset_arr_d0' in arglist, "offset_arr_d0 should be free"
+    assert "offset_arr_d0" in arglist, "offset_arr_d0 should be free"
     # dim 1's literal index (1) is positive, so inference doesn't fire (min>=1);
     # behavior: free if no literal seen, baked at 1 if a positive literal was seen.
 
     # Buffer: column 0 holds arr(-3..3, 1) = values -3..3 -> sum=0.
     arr = np.asfortranarray(np.array([[i] for i in range(-3, 4)], dtype=np.int32))  # 7 rows, 1 col
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     kw = dict(arr=arr, n=np.int32(7), out=out, offset_arr_d0=np.int64(-3), arr_d0=np.int64(7), arr_d1=np.int64(1))
-    if 'offset_arr_d1' in arglist:
-        kw['offset_arr_d1'] = np.int64(1)
+    if "offset_arr_d1" in arglist:
+        kw["offset_arr_d1"] = np.int64(1)
     sdfg(**kw)
     assert out[0] == 0, f"sum(arr(-3..3, 1)) should be 0; got {out[0]}"
 
@@ -394,9 +398,9 @@ end module write_arr_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="write_arr", entry="write_arr_mod::write_arr").build()
     sdfg.validate()
-    assert 'offset_arr_d0' in sdfg.arglist()
+    assert "offset_arr_d0" in sdfg.arglist()
 
-    arr = np.zeros(9, dtype=np.int32, order='F')
+    arr = np.zeros(9, dtype=np.int32, order="F")
     sdfg(arr=arr, offset_arr_d0=np.int64(-4), arr_d0=np.int64(9))
     expected = np.array([i * 10 for i in range(-4, 5)], dtype=np.int32)
     np.testing.assert_array_equal(arr, expected)
@@ -429,12 +433,12 @@ end module pair_sum_mod
     sdfg = build_sdfg(src, sdfg_dir, name="pair_sum", entry="pair_sum_mod::pair_sum").build()
     sdfg.validate()
     arglist = sdfg.arglist()
-    assert 'offset_a_d0' in arglist, "a should have a free offset symbol"
-    assert 'offset_b_d0' in arglist, "b should have a free offset symbol"
+    assert "offset_a_d0" in arglist, "a should have a free offset symbol"
+    assert "offset_b_d0" in arglist, "b should have a free offset symbol"
 
     a = np.asfortranarray(np.array(range(-3, 4), dtype=np.int32))  # sum = 0
     b = np.asfortranarray(np.array(range(-7, 8), dtype=np.int32))  # sum = 0
-    out = np.zeros(1, dtype=np.int32, order='F')
+    out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(a=a, b=b, out=out, offset_a_d0=np.int64(-3), offset_b_d0=np.int64(-7), a_d0=np.int64(7), b_d0=np.int64(15))
     assert out[0] == 0, f"sum(a)+sum(b) should be 0; got {out[0]}"
 
@@ -462,9 +466,9 @@ end module param_bound_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="param_bound_mod::param_bound").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -8
+    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get("offset_arr_d0") == -8
 
     arr = np.asfortranarray(np.array([(i - 8) * 100 for i in range(14)], dtype=np.int32))  # arr(-8) = -800, etc
-    out = np.zeros(3, dtype=np.int32, order='F')
+    out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out)
     np.testing.assert_array_equal(out, [-800, 0, 500])

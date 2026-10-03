@@ -8,6 +8,7 @@ contract:
                             SEARCH_DIRS utils
                             PASSES all_defaults rewrite_external)
 """
+
 import shutil
 import subprocess
 import sys
@@ -77,8 +78,7 @@ def test_cmake_configure_succeeds(tmp_path):
     cleanly and the ``dace_fortran_preprocess`` call is well-formed."""
     proj = _write_project(tmp_path)
     res = subprocess.run(["cmake", "-S", str(proj), "-B", str(proj / "build")], capture_output=True, text=True)
-    assert res.returncode == 0, \
-        f"cmake -S failed:\nstdout={res.stdout}\nstderr={res.stderr}"
+    assert res.returncode == 0, f"cmake -S failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
 
 def test_cmake_build_runs_preprocess_and_emits_sources(tmp_path):
@@ -87,13 +87,12 @@ def test_cmake_build_runs_preprocess_and_emits_sources(tmp_path):
     proj = _write_project(tmp_path)
     subprocess.check_call(["cmake", "-S", str(proj), "-B", str(proj / "build")], stdout=subprocess.DEVNULL)
     res = subprocess.run(["cmake", "--build", str(proj / "build")], capture_output=True, text=True)
-    assert res.returncode == 0, \
-        f"cmake --build failed:\nstdout={res.stdout}\nstderr={res.stderr}"
+    assert res.returncode == 0, f"cmake --build failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
-    out = (proj / "build" / "dace_fortran_preprocessed" / "src" / "kernel.f90")
-    assert out.is_file(), \
-        f"no preprocessed kernel at {out}\nbuild tree:\n" + \
-        "\n".join(str(p.relative_to(proj)) for p in proj.rglob("*"))
+    out = proj / "build" / "dace_fortran_preprocessed" / "src" / "kernel.f90"
+    assert out.is_file(), f"no preprocessed kernel at {out}\nbuild tree:\n" + "\n".join(
+        str(p.relative_to(proj)) for p in proj.rglob("*")
+    )
     rewritten = out.read_text()
     # ``KIND=wp`` -> ``KIND=8`` (all_defaults includes normalize-kind).
     assert "KIND=8" in rewritten
@@ -109,8 +108,7 @@ def test_cmake_returns_preprocessed_sources_variable_to_parent_scope(tmp_path):
     proj = _write_project(tmp_path)
     subprocess.check_call(["cmake", "-S", str(proj), "-B", str(proj / "build")], stdout=subprocess.DEVNULL)
     listing = (proj / "build" / "preprocessed_sources.txt").read_text()
-    assert "kernel.f90" in listing, \
-        f"expected kernel.f90 in mylib_PREPROCESSED_SOURCES, got: {listing!r}"
+    assert "kernel.f90" in listing, f"expected kernel.f90 in mylib_PREPROCESSED_SOURCES, got: {listing!r}"
 
 
 def test_cmake_rebuilds_when_input_source_changes(tmp_path):
@@ -119,7 +117,7 @@ def test_cmake_rebuilds_when_input_source_changes(tmp_path):
     proj = _write_project(tmp_path)
     subprocess.check_call(["cmake", "-S", str(proj), "-B", str(proj / "build")], stdout=subprocess.DEVNULL)
     subprocess.check_call(["cmake", "--build", str(proj / "build")], stdout=subprocess.DEVNULL)
-    out = (proj / "build" / "dace_fortran_preprocessed" / "src" / "kernel.f90")
+    out = proj / "build" / "dace_fortran_preprocessed" / "src" / "kernel.f90"
     mtime1 = out.stat().st_mtime
 
     # content change so the file digest changes (mtime alone isn't enough on some FS)
@@ -128,10 +126,10 @@ def test_cmake_rebuilds_when_input_source_changes(tmp_path):
     # bump mtime explicitly -- some FS round to seconds
     import os
     import time
+
     time.sleep(1.05)
     os.utime(src, None)
 
     subprocess.check_call(["cmake", "--build", str(proj / "build")], stdout=subprocess.DEVNULL)
     mtime2 = out.stat().st_mtime
-    assert mtime2 > mtime1, \
-        f"expected rebuild after input change; mtime1={mtime1} mtime2={mtime2}"
+    assert mtime2 > mtime1, f"expected rebuild after input change; mtime1={mtime1} mtime2={mtime2}"

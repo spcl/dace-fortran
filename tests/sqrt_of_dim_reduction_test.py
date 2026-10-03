@@ -2,6 +2,7 @@
 
 Was broken: materialiseElementalToTransient's walk of the SQRT elemental hit hlfir.apply on an hlfir.sum source, which isn't in kHlfirExprToTransient, so buildExpr fell through to ``?`` -- the QE test_vexx_bp_k_gpu_parses xfail's blocker.  Fixed by pre-walking for hlfir.apply ops over sum/product/minval/maxval, materialising the inner elemental to a ``_libtmp_<gid>`` transient, and registering the reduction in kHlfirExprToTransient.
 """
+
 import numpy as np
 import pytest
 
@@ -23,8 +24,8 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
-    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(a=a, out=out)
     # SUM(a**2, 1) reduces along Fortran dim 1 (numpy axis 0).
     np.testing.assert_allclose(out[0], np.min(np.sqrt(np.sum(a**2, axis=0))))
@@ -43,8 +44,8 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
-    a = np.arange(16.0, dtype=np.float64).reshape(4, 4, order='F') + 0.5
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    a = np.arange(16.0, dtype=np.float64).reshape(4, 4, order="F") + 0.5
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(a=a, out=out)
     np.testing.assert_allclose(out[0], np.max(np.sqrt(np.sum(a**2, axis=1))))
 
@@ -62,7 +63,7 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
-    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
-    out = np.zeros((1, ), dtype=np.float64, order='F')
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(a=a, out=out)
     np.testing.assert_allclose(out[0], np.sum(np.log(np.sum(a, axis=0) + 1.0)))

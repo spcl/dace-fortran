@@ -10,6 +10,7 @@ bindings layer, not the SDFG.
 
 Companion doc: bug1_optional_array_present.md
 """
+
 import ctypes
 import shutil
 from pathlib import Path
@@ -124,10 +125,10 @@ def test_array_optional_presence_forwarded_in_binding(tmp_path: Path):
     assert "optional :: a(" in text, text
     # Presence must be sourced from the actual argument, exactly like the
     # (already-fixed) scalar-optional case:
-    assert "a_present = int(merge(1, 0, present(a)), c_int)" in text, \
+    assert "a_present = int(merge(1, 0, present(a)), c_int)" in text, (
         "array-optional presence not forwarded; found hardwired default instead"
-    assert "a_present = 0" not in text, \
-        "wrapper still hard-sets the array optional's presence to absent"
+    )
+    assert "a_present = 0" not in text, "wrapper still hard-sets the array optional's presence to absent"
 
 
 def test_array_optional_present_call_matches_reference(tmp_path: Path):

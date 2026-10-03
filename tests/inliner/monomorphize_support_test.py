@@ -3,9 +3,10 @@
 concrete subtypes, each providing %init/%solve, single-level) must yield a
 ``MonomorphizationPlan`` enumerating every arm. Out-of-scope shapes are rejected -- asserted
 directly via ``pytest.raises(UnsupportedProgram)`` matching the reason, not xfail'd."""
+
 import pytest
 
-from dace_fortran.inliner.ast_desugaring.monomorphize import (UnsupportedProgram, analyze_source)
+from dace_fortran.inliner.ast_desugaring.monomorphize import UnsupportedProgram, analyze_source
 
 # ---------------------------------------------------------------------------
 # Supported: an abstract solver + two concretizations, each with %init/%solve.
@@ -33,7 +34,9 @@ module m
   end interface
 """
 
-SUPPORTED_TWO_CONCRETE = ABSTRACT_PREAMBLE + """
+SUPPORTED_TWO_CONCRETE = (
+    ABSTRACT_PREAMBLE
+    + """
   type, extends(t_solver) :: t_gmres
   contains
     procedure :: init  => gmres_init
@@ -63,8 +66,11 @@ contains
   end subroutine
 end module
 """
+)
 
-SUPPORTED_ONE_CONCRETE = ABSTRACT_PREAMBLE + """
+SUPPORTED_ONE_CONCRETE = (
+    ABSTRACT_PREAMBLE
+    + """
   type, extends(t_solver) :: t_gmres
   contains
     procedure :: init  => gmres_init
@@ -81,6 +87,7 @@ contains
   end subroutine
 end module
 """
+)
 
 # ---------------------------------------------------------------------------
 # Unsupported shapes -- each must raise UnsupportedProgram with a clear reason.
@@ -151,7 +158,9 @@ module m
 end module
 """
 
-UNSUPPORTED_MISSING_OVERRIDE = ABSTRACT_PREAMBLE + """
+UNSUPPORTED_MISSING_OVERRIDE = (
+    ABSTRACT_PREAMBLE
+    + """
   type, extends(t_solver) :: t_gmres
   contains
     procedure :: init => gmres_init      ! overrides init but NOT solve
@@ -163,6 +172,7 @@ contains
   end subroutine
 end module
 """
+)
 
 
 def test_supported_two_concrete_enumerates_both_arms():
@@ -173,14 +183,8 @@ def test_supported_two_concrete_enumerates_both_arms():
     assert plan.deferred == ["init", "solve"]
     arms = {a.type_name: a.bindings for a in plan.arms}
     assert arms == {
-        "t_gmres": {
-            "init": "gmres_init",
-            "solve": "gmres_solve"
-        },
-        "t_cg": {
-            "init": "cg_init",
-            "solve": "cg_solve"
-        },
+        "t_gmres": {"init": "gmres_init", "solve": "gmres_solve"},
+        "t_cg": {"init": "cg_init", "solve": "cg_solve"},
     }
 
 

@@ -29,9 +29,11 @@ def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
         if proc.returncode == 0:
             return
         if attempt == _F2PY_BUILD_ATTEMPTS:
-            raise RuntimeError(f"f2py reference build for {mod_name!r} failed after "
-                               f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
-                               f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
+            raise RuntimeError(
+                f"f2py reference build for {mod_name!r} failed after "
+                f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
+                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+            )
         # drop half-written extension; back off for the resource spike to clear
         for stale in cwd.glob(f"{mod_name}*.so"):
             stale.unlink()
@@ -78,9 +80,11 @@ def f2py_build_and_import(src_file, *, out_dir, mod_name, only=None, extra_args=
         incomplete = (ext_name, missing, wrapped)
         for stale in out_dir.glob(f"{ext_name}*.so"):
             stale.unlink()
-    raise RuntimeError(f"f2py reference {mod_name!r} built (rc=0) but is missing requested "
-                       f"routine(s) {incomplete[1]} after {_F2PY_IMPORT_ATTEMPTS} attempts; "
-                       f"wrapped names = {incomplete[2]}")
+    raise RuntimeError(
+        f"f2py reference {mod_name!r} built (rc=0) but is missing requested "
+        f"routine(s) {incomplete[1]} after {_F2PY_IMPORT_ATTEMPTS} attempts; "
+        f"wrapped names = {incomplete[2]}"
+    )
 
 
 def f2py(src_text: str, out_dir: Path, mod_name: str):
@@ -102,6 +106,7 @@ def sdfg_call_args(sdfg, int_values: dict) -> dict:
     SDFG's Scalar-vs-Array classification.  Mirrors the helper in
     ``icon/selected_loopnests/test_sdfg_equivalence.py``."""
     from dace.data import Scalar
+
     arglist = sdfg.arglist()
     out = {}
     for k, v in int_values.items():

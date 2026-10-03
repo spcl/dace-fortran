@@ -9,6 +9,7 @@ refused (box/pointer/allocatable/dynamic-shape) -- these stay in
 ``get_used_data`` to find genuinely dead names; ``binding_names`` keeps ones
 the bindings layer still needs.
 """
+
 from __future__ import annotations
 
 from typing import AbstractSet, Set
@@ -36,8 +37,10 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     symbol is only referenced textually).  The grep is over-broad in the safe
     direction -- may keep a dead array, never over-prunes."""
     import re
+
     _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z_0-9]*\b")
     from dace.sdfg.utils import get_used_data
+
     live: Set[str] = set()
     for state in sdfg.all_states():
         live |= get_used_data(state)
@@ -61,6 +64,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     # Control-flow regions (LoopRegion/ConditionalBlock) carry their own
     # conditions naming SDFG arrays directly -- interstate edges don't have them.
     from dace.sdfg.state import ConditionalBlock, LoopRegion
+
     for region in sdfg.all_control_flow_regions():
         if isinstance(region, LoopRegion):
             for cb in (region.loop_condition, region.init_statement, region.update_statement):
@@ -68,7 +72,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
         elif isinstance(region, ConditionalBlock):
             for cond, _branch in region.branches:
                 _grep(_code_text(cond))
-    for cb in (sdfg.init_code.get('frame'), sdfg.exit_code.get('frame')):
+    for cb in (sdfg.init_code.get("frame"), sdfg.exit_code.get("frame")):
         _grep(_code_text(cb))
     return live
 

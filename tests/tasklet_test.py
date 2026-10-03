@@ -28,7 +28,7 @@ res(1) = temp + 10
 
 END SUBROUTINE tasklet_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='tasklet_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name="tasklet_test_function").build()
 
     inp = np.full([2], 42, order="F", dtype=np.float32)
     res = np.full([2], 42, order="F", dtype=np.float32)

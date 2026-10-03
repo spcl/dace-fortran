@@ -10,15 +10,30 @@ Run directly with ``python -m tests.icon.graupel.test_aes_graupel_fused_full`` f
 
 Tolerance evidence: see ``RTOL``/``ATOL`` below.
 """
+
 import numpy as np
 import pytest
 
 from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files
 
-from ._graupel_harness import (DEP_SOURCES, ENTRY, FUSED_SOURCE, SCENARIOS, Config, assert_families_fire, assert_match,
-                               compile_reference, copy_fields, physical_columns, random_state, run_reference, run_sdfg,
-                               zero_outputs, ORIGINAL_SOURCE)
+from ._graupel_harness import (
+    DEP_SOURCES,
+    ENTRY,
+    FUSED_SOURCE,
+    SCENARIOS,
+    Config,
+    assert_families_fire,
+    assert_match,
+    compile_reference,
+    copy_fields,
+    physical_columns,
+    random_state,
+    run_reference,
+    run_sdfg,
+    zero_outputs,
+    ORIGINAL_SOURCE,
+)
 
 pytestmark = [pytest.mark.long, pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")]
 
@@ -47,7 +62,7 @@ def sdfg(tmp_path_factory):
 
 
 def _run_both(reference, sdfg, cfg: Config, **columns):
-    inputs = physical_columns(**{'ke': KE, **columns})
+    inputs = physical_columns(**{"ke": KE, **columns})
     ref, got = copy_fields(inputs), copy_fields(inputs)
     zero_outputs(ref)
     zero_outputs(got)
@@ -68,19 +83,19 @@ def test_fused_graupel_ivstart_offset_and_kstart(reference, sdfg):
     inputs, ref, got = _run_both(reference, sdfg, Config(2, len(SCENARIOS) - 1, 4, DT))
     assert_match(ref, got, RTOL, ATOL)
     # columns outside [ivstart, ivend] and levels above kstart are untouched
-    for n in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'):
+    for n in ("t", "qv", "qc", "qi", "qr", "qs", "qg"):
         np.testing.assert_array_equal(got[n][:, :3], inputs[n][:, :3])
         np.testing.assert_array_equal(got[n][[0, len(SCENARIOS) - 1]], inputs[n][[0, len(SCENARIOS) - 1]])
     # the offset must actually change the physics relative to the full-range call
     _, ref_full, _ = _run_both(reference, sdfg, Config(1, len(SCENARIOS), 1, DT))
-    assert not np.allclose(ref['qc'], ref_full['qc'])
+    assert not np.allclose(ref["qc"], ref_full["qc"])
 
 
 def test_fused_graupel_other_shape_and_dt(reference, sdfg):
     """One SDFG serves other runtime extents: ``ke=12``, ten columns, thicker layers and ``dt=60`` still match gfortran (and are not a no-op)."""
     inputs, ref, got = _run_both(reference, sdfg, Config(1, 10, 1, 60.0), ke=12, dz0=400.0, repeats=2)
-    assert any((ref[n] != inputs[n]).any() for n in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'))
-    assert ref['pflx'].any()
+    assert any((ref[n] != inputs[n]).any() for n in ("t", "qv", "qc", "qi", "qr", "qs", "qg"))
+    assert ref["pflx"].any()
     assert_match(ref, got, RTOL, ATOL)
 
 
@@ -110,16 +125,15 @@ def test_fused_layout_matches_original_layout(reference, tmp_path):
     assert_match(fused, orig, RTOL, ATOL)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import tempfile
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as tmp:
         ref_lib = compile_reference(Path(tmp) / "ref", [FUSED_SOURCE])
-        built = build_sdfg_from_files([*DEP_SOURCES, FUSED_SOURCE],
-                                      entry=ENTRY,
-                                      name="graupel_fused",
-                                      out_dir=Path(tmp) / "build")
+        built = build_sdfg_from_files(
+            [*DEP_SOURCES, FUSED_SOURCE], entry=ENTRY, name="graupel_fused", out_dir=Path(tmp) / "build"
+        )
         built.validate()
         test_fused_graupel_full_columns(ref_lib, built)
         test_fused_graupel_ivstart_offset_and_kstart(ref_lib, built)

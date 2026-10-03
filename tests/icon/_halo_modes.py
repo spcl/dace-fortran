@@ -5,6 +5,7 @@ mpi_* call, which the bridge lowers to dace.libraries.mpi libnodes. Both modes m
 extract to a compiling single TU for both solvers; this module is the single source
 of truth so the ocean + atmosphere harnesses stay in step.
 """
+
 from dace_fortran.external_functions import ExternalFunction
 
 #: "external" mode: MPI ops the black box covers -- halo generics + the collectives
@@ -207,17 +208,21 @@ def halo_config(mode: str) -> dict:
     rename_specifics, return_false, extra_sources. Callers merge these into the
     solver's own non-halo externals."""
     if mode == "external":
-        return dict(external_functions=list(HALO_EXTERNAL_FUNCTIONS),
-                    force_include=[],
-                    rename_specifics={},
-                    return_false=[],
-                    extra_sources={},
-                    specialize_at_source=[])
+        return dict(
+            external_functions=list(HALO_EXTERNAL_FUNCTIONS),
+            force_include=[],
+            rename_specifics={},
+            return_false=[],
+            extra_sources={},
+            specialize_at_source=[],
+        )
     if mode == "inlined":
-        return dict(external_functions=list(HALO_INLINED_EXTERNAL_FUNCTIONS),
-                    force_include=list(HALO_INLINED_FORCE_INCLUDE),
-                    rename_specifics=dict(HALO_INLINED_RENAME_SPECIFICS),
-                    return_false=list(HALO_INLINED_RETURN_FALSE),
-                    extra_sources=dict(HALO_INLINED_EXTRA_SOURCES),
-                    specialize_at_source=list(HALO_INLINED_SPECIALIZE_AT_SOURCE))
+        return dict(
+            external_functions=list(HALO_INLINED_EXTERNAL_FUNCTIONS),
+            force_include=list(HALO_INLINED_FORCE_INCLUDE),
+            rename_specifics=dict(HALO_INLINED_RENAME_SPECIFICS),
+            return_false=list(HALO_INLINED_RETURN_FALSE),
+            extra_sources=dict(HALO_INLINED_EXTRA_SOURCES),
+            specialize_at_source=list(HALO_INLINED_SPECIALIZE_AT_SOURCE),
+        )
     raise ValueError(f"unknown halo mode {mode!r} (expected one of {HALO_MODES})")

@@ -61,16 +61,18 @@ def test_section_assign_sdfg_structure(tmp_path: Path):
     assert "42" in tasklets[0].code.as_string
 
 
-@pytest.mark.parametrize("a,b,expected", [
-    (2, 5, [0, 42, 42, 42, 42, 0]),
-    (1, 6, [42, 42, 42, 42, 42, 42]),
-    (3, 3, [0, 0, 42, 0, 0, 0]),
-    (1, 1, [42, 0, 0, 0, 0, 0]),
-])
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        (2, 5, [0, 42, 42, 42, 42, 0]),
+        (1, 6, [42, 42, 42, 42, 42, 42]),
+        (3, 3, [0, 0, 42, 0, 0, 0]),
+        (1, 1, [42, 0, 0, 0, 0, 0]),
+    ],
+)
 def test_section_assign_numerical(tmp_path: Path, a, b, expected):
     """Runtime matches Fortran semantics across full-range, single-element, and asymmetric (a,b) windows."""
     sdfg = build_sdfg(_SRC, tmp_path, name="fill_range", pipeline="hlfir-propagate-shapes").build()
     res = np.zeros(6, dtype=np.int32)
     sdfg(res=res, a=a, b=b)
-    assert res.tolist() == expected, \
-        f"res({a}:{b}) = 42 -> {res.tolist()}, expected {expected}"
+    assert res.tolist() == expected, f"res({a}:{b}) = 42 -> {res.tolist()}, expected {expected}"

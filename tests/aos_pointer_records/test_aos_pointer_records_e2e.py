@@ -5,6 +5,7 @@ and an f2py reference from the same source, runs both with seeded random
 inputs, and asserts OUTPUT arrays match elementwise. Regression gate for
 ``hlfir-lift-aos-pointer-records``.
 """
+
 import shutil
 import subprocess
 import sys
@@ -128,12 +129,14 @@ def test_assumed_shape_target_numerical(tmp_path):
     targets = [np.asfortranarray(rng.standard_normal((n, k))) for _ in range(4)]
     for ix in (1, 2, 3, 4):
         out_sdfg = np.zeros((n, k), order="F")
-        sdfg(ix=np.int32(ix),
-             qa=targets[0].copy(order="F"),
-             qb=targets[1].copy(order="F"),
-             qc=targets[2].copy(order="F"),
-             qd=targets[3].copy(order="F"),
-             out=out_sdfg)
+        sdfg(
+            ix=np.int32(ix),
+            qa=targets[0].copy(order="F"),
+            qb=targets[1].copy(order="F"),
+            qc=targets[2].copy(order="F"),
+            qd=targets[3].copy(order="F"),
+            out=out_sdfg,
+        )
         np.testing.assert_allclose(out_sdfg, targets[ix - 1], rtol=1e-12, atol=1e-12, err_msg=f"mismatch for ix={ix}")
 
 
@@ -160,8 +163,12 @@ def test_wp_kind_alias_numerical(tmp_path):
 if __name__ == "__main__":
     import tempfile
 
-    for test in (test_single_pointer_member_numerical, test_write_through_pointer_numerical,
-                 test_target_and_alias_stay_coherent_numerical, test_assumed_shape_target_numerical,
-                 test_wp_kind_alias_numerical):
+    for test in (
+        test_single_pointer_member_numerical,
+        test_write_through_pointer_numerical,
+        test_target_and_alias_stay_coherent_numerical,
+        test_assumed_shape_target_numerical,
+        test_wp_kind_alias_numerical,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             test(Path(tmp))

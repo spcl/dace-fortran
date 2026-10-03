@@ -8,6 +8,7 @@ legal only on a POINTER dummy -- pre-fix, outer array dummies were declared
 plain ``target`` and gfortran rejected the fold. Builds + gfortran-links a
 synthetic kernel via ``build_fortran_library`` and inspects the wrapper decl.
 """
+
 import shutil
 
 import pytest
@@ -43,17 +44,15 @@ def test_pointer_outer_arg_declared_pointer_and_wrapper_compiles(tmp_path):
     sdfg = make_builder(_SRC, entry="kern", name="ptrarg", out_dir=str(tmp_path / "sdfg")).build()
 
     # Precondition: ASSOCIATED lowered to a presence guard free symbol (else no fold to declare pointer for).
-    assert any(str(s) == "v_allocated" for s in sdfg.free_symbols), \
+    assert any(str(s) == "v_allocated" for s in sdfg.free_symbols), (
         f"expected a v_allocated presence guard; free symbols = {sorted(str(s) for s in sdfg.free_symbols)}"
+    )
 
     # green build = fold gfortran-compiles (a target decl would fail with 'must be a POINTER').
     lib = build_fortran_library(sdfg, out_dir=str(tmp_path / "lib"))
     assert lib.so_path.is_file(), "wrapper library did not link"
 
     wrapper = lib.bindings_f90.read_text()
-    assert "pointer :: v(:,:,:)" in wrapper, \
-        f"POINTER arg not declared 'pointer' in wrapper head:\n{wrapper}"
-    assert "target :: v(:,:,:)" not in wrapper, \
-        "POINTER arg wrongly declared 'target' (associated() would not compile)"
-    assert "merge(1, 0, associated(v))" in wrapper, \
-        f"expected an associated() presence fold in the wrapper:\n{wrapper}"
+    assert "pointer :: v(:,:,:)" in wrapper, f"POINTER arg not declared 'pointer' in wrapper head:\n{wrapper}"
+    assert "target :: v(:,:,:)" not in wrapper, "POINTER arg wrongly declared 'target' (associated() would not compile)"
+    assert "merge(1, 0, associated(v))" in wrapper, f"expected an associated() presence fold in the wrapper:\n{wrapper}"

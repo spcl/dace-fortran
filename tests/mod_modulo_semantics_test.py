@@ -100,7 +100,9 @@ end subroutine
 
 def test_constant_fold_mod_modulo_division_negative_operands():
     """The fparser constant folder applies the same truncated / floored rules as the compiled code."""
-    sources, _ = (SourceCodeBuilder().add_file("""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
 subroutine main(r)
   implicit none
   integer, parameter :: m = mod(-7, 3), mo = modulo(-7, 3), q = -7 / 2
@@ -112,7 +114,10 @@ subroutine main(r)
   r(4) = rm
   r(5) = rmo
 end subroutine main
-""").check_with_gfortran().get())
+""")
+        .check_with_gfortran()
+        .get()
+    )
     got = optimizations.const_eval_nodes(parse_and_improve(sources)).tofortran()
     assert "r(1) = (- 1)\n" in got, got
     assert "r(2) = 2\n" in got, got
@@ -123,6 +128,7 @@ end subroutine main
 
 if __name__ == "__main__":
     import tempfile
+
     for kind, dtype in [(4, np.int32), (8, np.int64)]:
         with tempfile.TemporaryDirectory() as d:
             test_integer_mod_modulo_division_negative_operands(Path(d), kind, dtype)

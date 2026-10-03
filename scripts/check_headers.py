@@ -27,6 +27,7 @@ arguments (already narrowed by the hook's path filter). ``--fix`` inserts the
 header in place; without it the tool only reports, exiting 1 when any in-scope
 file is missing the header (the offenders and the fix command are printed).
 """
+
 import argparse
 import re
 import subprocess
@@ -45,12 +46,13 @@ HEADER = (
 # authors-org phrase, with the trailing "All rights reserved." optional -- so both the
 # pre-existing DaCe-wide convention and the canonical HEADER above are recognized.
 COPYRIGHT_RE = re.compile(
-    r"^# Copyright \d{4}(-\d{4})? ETH Zurich and the [\w.-]+ authors\.(\s+All rights reserved\.)?$")
+    r"^# Copyright \d{4}(-\d{4})? ETH Zurich and the [\w.-]+ authors\.(\s+All rights reserved\.)?$"
+)
 
 # Included root; dace-fortran has no ported-kernel / generated-distribution
 # subtree analogous to an upstream project's vendored third-party code, so there is
 # nothing to carve back out here.
-SCOPE_PREFIXES = ("dace_fortran/", )
+SCOPE_PREFIXES = ("dace_fortran/",)
 
 CODING_RE = re.compile(r"^[ \t\f]*#.*?coding[:=]")
 

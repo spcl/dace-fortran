@@ -20,12 +20,12 @@ subroutine main(d)
   if (d(2) .eq. 42) d(2) = 6.5
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.full([4], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0)
-    assert (a[0] == 5.5)
-    assert (a[1] == 6.5)
-    assert (a[2] == 5.5)
+    assert a[0] == 5.5
+    assert a[1] == 6.5
+    assert a[2] == 5.5
 
 
 def test_fortran_frontend_if_nested_cycle(tmp_path):
@@ -51,9 +51,9 @@ subroutine main(d)
   if (d(2, 1) .eq. 42.0) d(2, 1) = 6.5
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main').build()
+    sdfg = build_sdfg(src, tmp_path, name="main").build()
     a = np.full([4, 4], 42, order="F", dtype=np.float64)
     sdfg(d=a, i=0, j=0, stop=0, start=0, count=0)
-    assert (a[0, 0] == 42)
-    assert (a[1, 0] == 6.5)
-    assert (a[2, 0] == 42)
+    assert a[0, 0] == 42
+    assert a[1, 0] == 6.5
+    assert a[2, 0] == 42

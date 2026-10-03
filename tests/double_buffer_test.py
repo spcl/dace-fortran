@@ -56,28 +56,28 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
   deallocate(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
 
     # split-produced companions must appear; the original struct dummy is gone.
-    assert 's_prog_nnow_w' in sdfg.arrays
-    assert 's_prog_nnew_w' in sdfg.arrays
-    assert 's' not in sdfg.arrays
-    assert 's_prog' not in sdfg.arrays
+    assert "s_prog_nnow_w" in sdfg.arrays
+    assert "s_prog_nnew_w" in sdfg.arrays
+    assert "s" not in sdfg.arrays
+    assert "s_prog" not in sdfg.arrays
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_simple_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_simple_ref", only=("wrapper",))
 
     rng = np.random.default_rng(7)
     w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    w_now_sdfg = w_now_in.copy(order='F')
-    w_new_sdfg = w_new_in.copy(order='F')
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_sdfg = w_now_in.copy(order="F")
+    w_new_sdfg = w_new_in.copy(order="F")
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
     sdfg(s_prog_nnow_w=w_now_sdfg, s_prog_nnew_w=w_new_sdfg, out=out_sdfg)
 
-    w_now_ref = w_now_in.copy(order='F')
-    w_new_ref = w_new_in.copy(order='F')
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_ref = w_now_in.copy(order="F")
+    w_new_ref = w_new_in.copy(order="F")
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
 
     np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
@@ -119,10 +119,11 @@ contains
 end module
 """
     with pytest.raises(RuntimeError) as exc:
-        build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+        build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
     msg = str(exc.value).lower()
-    assert ("pipeline failed" in msg or "swap" in msg or "time-level" in msg
-            or "reassigned" in msg), f"expected an in-kernel-swap rejection, got: {msg}"
+    assert "pipeline failed" in msg or "swap" in msg or "time-level" in msg or "reassigned" in msg, (
+        f"expected an in-kernel-swap rejection, got: {msg}"
+    )
 
 
 def test_dbuf_split_multi_member(tmp_path):
@@ -172,32 +173,42 @@ subroutine wrapper(w_now, w_new, vn_now, vn_new, out_w, out_vn, nnow, nnew)
   deallocate(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
-    for name in ('s_prog_nnow_w', 's_prog_nnew_w', 's_prog_nnow_vn', 's_prog_nnew_vn'):
-        assert name in sdfg.arrays, f'missing companion {name!r}'
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
+    for name in ("s_prog_nnow_w", "s_prog_nnew_w", "s_prog_nnow_vn", "s_prog_nnew_vn"):
+        assert name in sdfg.arrays, f"missing companion {name!r}"
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_multi_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_multi_ref", only=("wrapper",))
 
     rng = np.random.default_rng(11)
-    arrs = {k: np.asfortranarray(rng.standard_normal((2, 3))) for k in ('w_now', 'w_new', 'vn_now', 'vn_new')}
-    out_w_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
-    out_vn_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
-    sdfg_arrs = {k: v.copy(order='F') for k, v in arrs.items()}
-    sdfg(s_prog_nnow_w=sdfg_arrs['w_now'],
-         s_prog_nnew_w=sdfg_arrs['w_new'],
-         s_prog_nnow_vn=sdfg_arrs['vn_now'],
-         s_prog_nnew_vn=sdfg_arrs['vn_new'],
-         out_w=out_w_sdfg,
-         out_vn=out_vn_sdfg)
+    arrs = {k: np.asfortranarray(rng.standard_normal((2, 3))) for k in ("w_now", "w_new", "vn_now", "vn_new")}
+    out_w_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
+    out_vn_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
+    sdfg_arrs = {k: v.copy(order="F") for k, v in arrs.items()}
+    sdfg(
+        s_prog_nnow_w=sdfg_arrs["w_now"],
+        s_prog_nnew_w=sdfg_arrs["w_new"],
+        s_prog_nnow_vn=sdfg_arrs["vn_now"],
+        s_prog_nnew_vn=sdfg_arrs["vn_new"],
+        out_w=out_w_sdfg,
+        out_vn=out_vn_sdfg,
+    )
 
-    out_w_ref = np.zeros((2, 3), order='F', dtype=np.float64)
-    out_vn_ref = np.zeros((2, 3), order='F', dtype=np.float64)
-    ref_arrs = {k: v.copy(order='F') for k, v in arrs.items()}
-    ref.wrapper(ref_arrs['w_now'], ref_arrs['w_new'], ref_arrs['vn_now'], ref_arrs['vn_new'], out_w_ref, out_vn_ref,
-                np.int32(1), np.int32(2))
+    out_w_ref = np.zeros((2, 3), order="F", dtype=np.float64)
+    out_vn_ref = np.zeros((2, 3), order="F", dtype=np.float64)
+    ref_arrs = {k: v.copy(order="F") for k, v in arrs.items()}
+    ref.wrapper(
+        ref_arrs["w_now"],
+        ref_arrs["w_new"],
+        ref_arrs["vn_now"],
+        ref_arrs["vn_new"],
+        out_w_ref,
+        out_vn_ref,
+        np.int32(1),
+        np.int32(2),
+    )
 
     for k in sdfg_arrs:
-        np.testing.assert_allclose(sdfg_arrs[k], ref_arrs[k], rtol=0, atol=0, err_msg=f'mismatch on {k}')
+        np.testing.assert_allclose(sdfg_arrs[k], ref_arrs[k], rtol=0, atol=0, err_msg=f"mismatch on {k}")
     np.testing.assert_allclose(out_w_sdfg, out_w_ref, rtol=0, atol=0)
     np.testing.assert_allclose(out_vn_sdfg, out_vn_ref, rtol=0, atol=0)
 
@@ -243,27 +254,27 @@ subroutine wrapper(w_now, w_new, w_temp, out, nnow, nnew, ntemp)
   deallocate(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
-    for name in ('s_prog_nnow_w', 's_prog_nnew_w', 's_prog_ntemp_w'):
-        assert name in sdfg.arrays, f'missing companion {name!r}'
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
+    for name in ("s_prog_nnow_w", "s_prog_nnew_w", "s_prog_ntemp_w"):
+        assert name in sdfg.arrays, f"missing companion {name!r}"
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_three_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_three_ref", only=("wrapper",))
 
     rng = np.random.default_rng(13)
     w_now = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new = np.asfortranarray(rng.standard_normal((2, 3)))
     w_temp = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    sdfg_now = w_now.copy(order='F')
-    sdfg_new = w_new.copy(order='F')
-    sdfg_temp = w_temp.copy(order='F')
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg_now = w_now.copy(order="F")
+    sdfg_new = w_new.copy(order="F")
+    sdfg_temp = w_temp.copy(order="F")
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
     sdfg(s_prog_nnow_w=sdfg_now, s_prog_nnew_w=sdfg_new, s_prog_ntemp_w=sdfg_temp, out=out_sdfg)
 
-    ref_now = w_now.copy(order='F')
-    ref_new = w_new.copy(order='F')
-    ref_temp = w_temp.copy(order='F')
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref_now = w_now.copy(order="F")
+    ref_new = w_new.copy(order="F")
+    ref_temp = w_temp.copy(order="F")
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     ref.wrapper(ref_now, ref_new, ref_temp, out_ref, np.int32(1), np.int32(2), np.int32(3))
 
     np.testing.assert_allclose(sdfg_now, ref_now, rtol=0, atol=0)
@@ -316,24 +327,24 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
   nullify(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
-    assert 's_prog_nnow_w' in sdfg.arrays
-    assert 's_prog_nnew_w' in sdfg.arrays
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
+    assert "s_prog_nnow_w" in sdfg.arrays
+    assert "s_prog_nnew_w" in sdfg.arrays
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_ptr_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_ptr_ref", only=("wrapper",))
 
     rng = np.random.default_rng(17)
     w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    w_now_sdfg = w_now_in.copy(order='F')
-    w_new_sdfg = w_new_in.copy(order='F')
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_sdfg = w_now_in.copy(order="F")
+    w_new_sdfg = w_new_in.copy(order="F")
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
     sdfg(s_prog_nnow_w=w_now_sdfg, s_prog_nnew_w=w_new_sdfg, out=out_sdfg)
 
-    w_now_ref = w_now_in.copy(order='F')
-    w_new_ref = w_new_in.copy(order='F')
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_ref = w_now_in.copy(order="F")
+    w_new_ref = w_new_in.copy(order="F")
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
 
     np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
@@ -387,27 +398,27 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
   deallocate(s%inner%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
 
-    assert 's_inner_prog_nnow_w' in sdfg.arrays
-    assert 's_inner_prog_nnew_w' in sdfg.arrays
-    assert 's' not in sdfg.arrays
-    assert 's_inner' not in sdfg.arrays
+    assert "s_inner_prog_nnow_w" in sdfg.arrays
+    assert "s_inner_prog_nnew_w" in sdfg.arrays
+    assert "s" not in sdfg.arrays
+    assert "s_inner" not in sdfg.arrays
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_nested_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_nested_ref", only=("wrapper",))
 
     rng = np.random.default_rng(23)
     w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    w_now_sdfg = w_now_in.copy(order='F')
-    w_new_sdfg = w_new_in.copy(order='F')
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_sdfg = w_now_in.copy(order="F")
+    w_new_sdfg = w_new_in.copy(order="F")
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
     sdfg(s_inner_prog_nnow_w=w_now_sdfg, s_inner_prog_nnew_w=w_new_sdfg, out=out_sdfg)
 
-    w_now_ref = w_now_in.copy(order='F')
-    w_new_ref = w_new_in.copy(order='F')
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_ref = w_now_in.copy(order="F")
+    w_new_ref = w_new_in.copy(order="F")
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
 
     np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
@@ -455,26 +466,26 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
   deallocate(s)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
 
-    assert 's_nnow_w' in sdfg.arrays
-    assert 's_nnew_w' in sdfg.arrays
-    assert 's' not in sdfg.arrays
+    assert "s_nnow_w" in sdfg.arrays
+    assert "s_nnew_w" in sdfg.arrays
+    assert "s" not in sdfg.arrays
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_direct_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_direct_ref", only=("wrapper",))
 
     rng = np.random.default_rng(29)
     w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    w_now_sdfg = w_now_in.copy(order='F')
-    w_new_sdfg = w_new_in.copy(order='F')
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_sdfg = w_now_in.copy(order="F")
+    w_new_sdfg = w_new_in.copy(order="F")
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
     sdfg(s_nnow_w=w_now_sdfg, s_nnew_w=w_new_sdfg, out=out_sdfg)
 
-    w_now_ref = w_now_in.copy(order='F')
-    w_new_ref = w_new_in.copy(order='F')
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    w_now_ref = w_now_in.copy(order="F")
+    w_new_ref = w_new_in.copy(order="F")
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
 
     np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
@@ -531,25 +542,24 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
   deallocate(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
 
     # The toggle is eliminated: only the stable per-time-level lanes remain.
-    assert 's_prog_nnow_w' in sdfg.arrays
-    assert 's_prog_nnew_w' in sdfg.arrays
-    assert not any('nvar' in a for a in sdfg.arrays), \
-        f"nvar toggle survived as a companion: {sorted(sdfg.arrays)}"
+    assert "s_prog_nnow_w" in sdfg.arrays
+    assert "s_prog_nnew_w" in sdfg.arrays
+    assert not any("nvar" in a for a in sdfg.arrays), f"nvar toggle survived as a companion: {sorted(sdfg.arrays)}"
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_nvar_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_nvar_ref", only=("wrapper",))
 
     rng = np.random.default_rng(11)
     w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
 
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
-    sdfg(s_prog_nnow_w=w_now_in.copy(order='F'), s_prog_nnew_w=w_new_in.copy(order='F'), out=out_sdfg)
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
+    sdfg(s_prog_nnow_w=w_now_in.copy(order="F"), s_prog_nnew_w=w_new_in.copy(order="F"), out=out_sdfg)
 
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
-    ref.wrapper(w_now_in.copy(order='F'), w_new_in.copy(order='F'), out_ref, np.int32(1), np.int32(2))
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
+    ref.wrapper(w_now_in.copy(order="F"), w_new_in.copy(order="F"), out_ref, np.int32(1), np.int32(2))
 
     # The corrector overwrites with ``=``: final out = prog(nnow) + prog(nnew).
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
@@ -597,21 +607,21 @@ contains
   end subroutine
 end module
 """
-    src_f90 = tmp_path / 'dbuf_shim_mod.f90'
+    src_f90 = tmp_path / "dbuf_shim_mod.f90"
     src_f90.write_text(src)
     # short SDFG name: bind(c) shim derives <name>_dace_finalize, and the xdist test-suffix would
     # blow Fortran's 63-char identifier limit.
-    sdfg = make_builder(src, entry='kernel', name='dbufshim', out_dir=str(tmp_path / 'sdfg')).build()
-    assert 's_prog_nnow_rho' in sdfg.arrays and 's_prog_nnew_rho' in sdfg.arrays
+    sdfg = make_builder(src, entry="kernel", name="dbufshim", out_dir=str(tmp_path / "sdfg")).build()
+    assert "s_prog_nnow_rho" in sdfg.arrays and "s_prog_nnew_rho" in sdfg.arrays
 
-    lib = build_fortran_library(sdfg, out_dir=str(tmp_path / 'lib'), prelude_sources=[src_f90], bind_c_shim=True)
-    shim = __import__('pathlib').Path(lib.bind_c_shim_f90).read_text()
+    lib = build_fortran_library(sdfg, out_dir=str(tmp_path / "lib"), prelude_sources=[src_f90], bind_c_shim=True)
+    shim = __import__("pathlib").Path(lib.bind_c_shim_f90).read_text()
     # shim reconstructs the AoR sized for both time levels, populates each lane from its own buffer
     # (not the old generic size-1 path).
-    assert 'allocate(s%prog(max(' in shim
-    assert 's%prog(nnow)%rho = s_prog_nnow_rho' in shim
-    assert 's%prog(nnew)%rho = s_prog_nnew_rho' in shim
-    assert __import__('pathlib').Path(lib.so_path).is_file()
+    assert "allocate(s%prog(max(" in shim
+    assert "s%prog(nnow)%rho = s_prog_nnow_rho" in shim
+    assert "s%prog(nnew)%rho = s_prog_nnew_rho" in shim
+    assert __import__("pathlib").Path(lib.so_path).is_file()
 
 
 @pytest.mark.parametrize("jg, kmatch, fires", [(2, 7, True), (2, 8, False), (1, 5, True)])
@@ -679,33 +689,44 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew, ndyn, nd, jg, kmatch)
   deallocate(s%prog)
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kernel", entry="kernel").build()
 
     # toggle eliminated AND istep fully spilled: no free (would-be-uninitialised) symbol remains.
-    assert not any('istep' in str(s) for s in sdfg.free_symbols), \
+    assert not any("istep" in str(s) for s in sdfg.free_symbols), (
         f"istep survived as an unpopulated free symbol: {sorted(str(s) for s in sdfg.free_symbols)}"
+    )
 
-    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_istep_ref', only=('wrapper', ))
+    ref = f2py_compile(src, tmp_path / "ref", "dbuf_istep_ref", only=("wrapper",))
 
     rng = np.random.default_rng(31)
     w_now = np.asfortranarray(rng.standard_normal((2, 3)))
     w_new = np.asfortranarray(rng.standard_normal((2, 3)))
     ndyn = np.asfortranarray(np.array([5, 7, 9], dtype=np.int32))
 
-    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
-    sdfg(s_prog_nnow_w=w_now.copy(order='F'),
-         s_prog_nnew_w=w_new.copy(order='F'),
-         out=out_sdfg,
-         ndyn=ndyn.copy(order='F'),
-         jg=np.int32(jg),
-         kmatch=np.int32(kmatch),
-         nnow=np.int32(1),
-         nnew=np.int32(2))
+    out_sdfg = np.zeros((2, 3), order="F", dtype=np.float64)
+    sdfg(
+        s_prog_nnow_w=w_now.copy(order="F"),
+        s_prog_nnew_w=w_new.copy(order="F"),
+        out=out_sdfg,
+        ndyn=ndyn.copy(order="F"),
+        jg=np.int32(jg),
+        kmatch=np.int32(kmatch),
+        nnow=np.int32(1),
+        nnew=np.int32(2),
+    )
 
-    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    out_ref = np.zeros((2, 3), order="F", dtype=np.float64)
     # f2py infers ``nd`` from ``ndyn`` (dropped from the positional list).
-    ref.wrapper(w_now.copy(order='F'), w_new.copy(order='F'), out_ref, np.int32(1), np.int32(2), ndyn.copy(order='F'),
-                np.int32(jg), np.int32(kmatch))
+    ref.wrapper(
+        w_now.copy(order="F"),
+        w_new.copy(order="F"),
+        out_ref,
+        np.int32(1),
+        np.int32(2),
+        ndyn.copy(order="F"),
+        np.int32(jg),
+        np.int32(kmatch),
+    )
 
     np.testing.assert_array_equal(out_sdfg, out_ref)
     # istep-2 branch fires when ndyn(jg)==kmatch: closed form is prog(nnow)+prog(nvar), +100 if fired.

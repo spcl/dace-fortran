@@ -8,6 +8,7 @@ Once mis-hypothesised as bug M3 (this indexing shape); the real "?"-leak cascade
 unrelated causes, since fixed -- the shape itself compiles and is numerically correct. Locked
 in end-to-end against an f2py reference so fixes can't silently regress to a dropped-dim mask.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -22,8 +23,10 @@ def _module_wrap(src: str, free_sub_decl: str, mod_name: str) -> str:
     """Wrap a free subroutine in a module so the SDFG can build the
     ``<mod>::<sub>`` entry, while the free form stays the f2py reference."""
     # count=1: free_sub_decl ("subroutine foo") is also a substring of "end subroutine foo" -- wrap only the opening line.
-    return src.replace(free_sub_decl, f"module {mod_name}\ncontains\n{free_sub_decl}", 1).rstrip() \
+    return (
+        src.replace(free_sub_decl, f"module {mod_name}\ncontains\n{free_sub_decl}", 1).rstrip()
         + f"\nend module {mod_name}\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +58,14 @@ end subroutine paw_accum
 def test_indirect_scatter_accumulate_matches_reference(tmp_path: Path):
     """deexx(ikb) += ... through ikb = ofsbeta(na)+ih must match gfortran/f2py -- a dropped
     record or wrong indirect base would diverge, not just round off."""
-    sdfg = build_sdfg(_module_wrap(_SCATTER, "subroutine paw_accum", "paw_mod"),
-                      tmp_path / "sdfg",
-                      name="paw_accum",
-                      entry="paw_mod::paw_accum").build()
+    sdfg = build_sdfg(
+        _module_wrap(_SCATTER, "subroutine paw_accum", "paw_mod"),
+        tmp_path / "sdfg",
+        name="paw_accum",
+        entry="paw_mod::paw_accum",
+    ).build()
     sdfg.validate()
-    ref = f2py_compile(_SCATTER, tmp_path / "ref", "paw_ref", only=("paw_accum", ))
+    ref = f2py_compile(_SCATTER, tmp_path / "ref", "paw_ref", only=("paw_accum",))
 
     nat, nh, nkb = 3, 4, 40
     rng = np.random.default_rng(7)
@@ -73,13 +78,15 @@ def test_indirect_scatter_accumulate_matches_reference(tmp_path: Path):
     ref.paw_accum(weight, becphi, d_ref, ofsbeta, nh)  # nat/nkb derived by f2py
 
     d_sdfg = deexx0.copy(order="F")
-    sdfg(weight=np.float64(weight),
-         becphi=becphi,
-         deexx=d_sdfg,
-         ofsbeta=ofsbeta,
-         nat=np.int32(nat),
-         nh=np.int32(nh),
-         nkb=np.int32(nkb))
+    sdfg(
+        weight=np.float64(weight),
+        becphi=becphi,
+        deexx=d_sdfg,
+        ofsbeta=ofsbeta,
+        nat=np.int32(nat),
+        nh=np.int32(nh),
+        nkb=np.int32(nkb),
+    )
 
     np.testing.assert_allclose(d_sdfg, d_ref, rtol=1e-12, atol=1e-12)
     # The accumulation actually happened (guard against a no-op pass).
@@ -112,12 +119,14 @@ end subroutine inline_scatter
 def test_inline_indirect_index_matches_reference(tmp_path: Path):
     """``out(ofsbeta(na)+ih) = src(ofsbeta(na)+ih)*3`` -- the indirect read
     inlined into the subscript arithmetic (no intermediate scalar)."""
-    sdfg = build_sdfg(_module_wrap(_INLINE, "subroutine inline_scatter", "inl_mod"),
-                      tmp_path / "sdfg",
-                      name="inline_scatter",
-                      entry="inl_mod::inline_scatter").build()
+    sdfg = build_sdfg(
+        _module_wrap(_INLINE, "subroutine inline_scatter", "inl_mod"),
+        tmp_path / "sdfg",
+        name="inline_scatter",
+        entry="inl_mod::inline_scatter",
+    ).build()
     sdfg.validate()
-    ref = f2py_compile(_INLINE, tmp_path / "ref", "inl_ref", only=("inline_scatter", ))
+    ref = f2py_compile(_INLINE, tmp_path / "ref", "inl_ref", only=("inline_scatter",))
 
     nat, nh, nkb = 3, 4, 40
     rng = np.random.default_rng(11)
@@ -159,12 +168,14 @@ end subroutine nlxx_apply
 def test_2d_indirect_read_matches_reference(tmp_path: Path):
     """``hpsi(ig) -= deexx(ikb)*vkbp(ig, ikb)`` with ``ikb = ofsbeta(na)+ih`` --
     a 2-D read whose column index is indirect-derived (add_nlxx_pot)."""
-    sdfg = build_sdfg(_module_wrap(_READ2D, "subroutine nlxx_apply", "nlxx_mod"),
-                      tmp_path / "sdfg",
-                      name="nlxx_apply",
-                      entry="nlxx_mod::nlxx_apply").build()
+    sdfg = build_sdfg(
+        _module_wrap(_READ2D, "subroutine nlxx_apply", "nlxx_mod"),
+        tmp_path / "sdfg",
+        name="nlxx_apply",
+        entry="nlxx_mod::nlxx_apply",
+    ).build()
     sdfg.validate()
-    ref = f2py_compile(_READ2D, tmp_path / "ref", "nlxx_ref", only=("nlxx_apply", ))
+    ref = f2py_compile(_READ2D, tmp_path / "ref", "nlxx_ref", only=("nlxx_apply",))
 
     nat, nh, nkb, npw = 3, 4, 40, 5
     rng = np.random.default_rng(13)
@@ -177,14 +188,16 @@ def test_2d_indirect_read_matches_reference(tmp_path: Path):
     ref.nlxx_apply(vkbp, deexx, ofsbeta, h_ref, nh)  # nat/nkb/npw derived
 
     h_sdfg = hpsi0.copy(order="F")
-    sdfg(vkbp=vkbp,
-         deexx=deexx,
-         ofsbeta=ofsbeta,
-         hpsi=h_sdfg,
-         nat=np.int32(nat),
-         nh=np.int32(nh),
-         nkb=np.int32(nkb),
-         npw=np.int32(npw))
+    sdfg(
+        vkbp=vkbp,
+        deexx=deexx,
+        ofsbeta=ofsbeta,
+        hpsi=h_sdfg,
+        nat=np.int32(nat),
+        nh=np.int32(nh),
+        nkb=np.int32(nkb),
+        npw=np.int32(npw),
+    )
 
     np.testing.assert_allclose(h_sdfg, h_ref, rtol=1e-12, atol=1e-12)
     assert not np.allclose(h_sdfg, hpsi0)
@@ -224,7 +237,7 @@ def test_module_global_ofsbeta_indirect_matches_reference(tmp_path: Path):
     sdfg.validate()
     assert "ofsbeta" in sdfg.arglist(), "module-global ofsbeta must surface as a kwarg"
 
-    ref = f2py_compile(_MODGLOBAL, tmp_path / "ref", "modg_ref", only=("paw_accum_g", ))
+    ref = f2py_compile(_MODGLOBAL, tmp_path / "ref", "modg_ref", only=("paw_accum_g",))
 
     nat, nh, nkb = 3, 4, 40
     rng = np.random.default_rng(17)
