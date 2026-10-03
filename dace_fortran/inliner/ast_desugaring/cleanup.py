@@ -196,10 +196,10 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
 
     # Find names that collide or clash with reserved keywords.
     known_names: Set[str] = {k[-1] for k in ident_map.keys()}
-    name_collisions: Dict[str, int] = {k: 0 for k in known_names}
+    name_counts: Dict[str, int] = {k: 0 for k in known_names}
     for k in ident_map.keys():
-        name_collisions[k[-1]] += 1
-    name_collisions: Set[str] = {k for k, v in name_collisions.items() if v > 1 or k.lower() in KEYWORDS_TO_AVOID}
+        name_counts[k[-1]] += 1
+    name_collisions: Set[str] = {k for k, v in name_counts.items() if v > 1 or k.lower() in KEYWORDS_TO_AVOID}
 
     # Assign fresh names to colliding/reserved subprograms.
     uident_map: Dict[types.SPEC, str] = {}
@@ -312,9 +312,10 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
                            f03.Name):
                 if nm.string != oname:
                     continue
-                local_spec = analysis.search_local_alias_spec(nm)
+                nm_spec = analysis.search_local_alias_spec(nm)
+                assert nm_spec is not None, f"`{nm}` has no local alias spec"
                 # Adjust local spec to the function's original spec (handles the name-as-return-var case).
-                local_spec = local_spec[:-2] + local_spec[-1:]
+                local_spec = nm_spec[:-2] + nm_spec[-1:]
                 assert local_spec in ident_map, f"`{local_spec}` is not a valid identifier"
                 assert ident_map[local_spec] is v, f"`{local_spec}` does not refer to `{v}`"
                 nm.string = uname
@@ -345,23 +346,23 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
 
     # Find names that collide or clash with reserved keywords.
     known_names: Set[str] = {k[-1].lower() for k in ident_map.keys()}
-    name_collisions: Dict[str, int] = {k: 0 for k in known_names}
+    name_counts: Dict[str, int] = {k: 0 for k in known_names}
     for k in ident_map.keys():
-        name_collisions[k[-1].lower()] += 1
-    name_collisions: Set[str] = {k for k, v in name_collisions.items() if v > 1 or k in KEYWORDS_TO_AVOID}
+        name_counts[k[-1].lower()] += 1
+    name_collisions: Set[str] = {k for k, v in name_counts.items() if v > 1 or k in KEYWORDS_TO_AVOID}
 
     # Entry-point args may keep their original names.
     entry_point_args: Set[types.SPEC] = set()
-    for k in keepers:
-        if k not in ident_map:
+    for keeper in keepers:
+        if not isinstance(keeper, tuple) or keeper not in ident_map:
             continue
-        fn = ident_map[k]
+        fn = ident_map[keeper]
         if not isinstance(fn, (f03.Subroutine_Stmt, f03.Function_Stmt)):
             continue
         args = ast_utils.atmost_one(ast_utils.children_of_type(fn, f03.Dummy_Arg_List))
         args = args.children if args else tuple()
         for a in args:
-            entry_point_args.add(k + (a.string, ))
+            entry_point_args.add(keeper + (a.string, ))
 
     # Assign fresh names to colliding/reserved/not-kept variables.
     uident_map: Dict[types.SPEC, str] = {}
@@ -382,7 +383,7 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         else:
             uname = k[-1]
         uident_map[k] = uname
-    uident_map.update({k: k[-1] for k in keepers})
+    uident_map.update({k: k[-1] for k in keepers if isinstance(k, tuple)})
 
     # PHASE 1.a: remove imports of to-be-renamed variables (re-imported under the new name later).
     for use in walk(ast, f03.Use_Stmt):
@@ -416,8 +417,9 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         if isinstance(callee, f03.Intrinsic_Name):
             # Intrinsics don't have their internal variables renamed.
             continue
-        cspec = analysis.search_real_local_alias_spec(callee, alias_map)
-        cspec = analysis.ident_spec(alias_map[cspec])
+        callee_spec = analysis.search_real_local_alias_spec(callee, alias_map)
+        assert callee_spec is not None, f"cannot resolve callee `{callee}`"
+        cspec = analysis.ident_spec(alias_map[callee_spec])
         assert cspec
         k, _ = kv.children
         assert isinstance(k, f03.Name)
@@ -553,13 +555,14 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
         # global_mod already exists -- nothing to do.
         return ast
 
-    all_derived_types, all_global_vars = [], []
+    derived_type_lines: List[str] = []
+    global_var_lines: List[str] = []
     # Collect derived types for the global module.
     for dt in walk(ast, f03.Derived_Type_Def):
         dtspec = analysis.ident_spec(ast_utils.singular(ast_utils.children_of_type(dt, f03.Derived_Type_Stmt)))
         assert len(dtspec) == 2
         mod, dtname = dtspec
-        all_derived_types.append(f"use {mod}, only : {dtname}")
+        derived_type_lines.append(f"use {mod}, only : {dtname}")
     # Collect global vars for the global data structure.
     for m in walk(ast, f03.Module):
         spart = ast_utils.atmost_one(ast_utils.children_of_type(m, f03.Specification_Part))
@@ -570,9 +573,9 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
             if 'PARAMETER' in f"{attr}":
                 # PARAMETER consts should already be propagated away.
                 continue
-            all_global_vars.append(tdecl.tofortran())
-    all_derived_types = '\n'.join(all_derived_types)
-    all_global_vars = '\n'.join(all_global_vars)
+            global_var_lines.append(tdecl.tofortran())
+    all_derived_types = '\n'.join(derived_type_lines)
+    all_global_vars = '\n'.join(global_var_lines)
 
     # Replace references to global variables with data-refs.
     for nm in walk(ast, f03.Name):
@@ -583,6 +586,7 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
             while par and isinstance(par.parent, (f03.Part_Ref, f03.Data_Ref)):
                 par = par.parent
             scope_spec = analysis.search_scope_spec(par)
+            assert scope_spec is not None, f"`{par}` has no scope spec"
             root, _, _ = analysis.dataref_root(par, scope_spec, alias_map)
             if root is not nm:
                 continue
@@ -625,9 +629,9 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
             else:
                 utils.set_children(fn,
                                    fn.children[:1] + [f03.Specification_Part(get_reader(use_stmt))] + fn.children[1:])
-            spart = ast_utils.atmost_one(ast_utils.children_of_type(fn, f03.Specification_Part))
-            decl_idx = [idx for idx, v in enumerate(spart.children) if isinstance(v, f03.Type_Declaration_Stmt)]
-            decl_idx = decl_idx[0] if decl_idx else len(spart.children)
+            spart = ast_utils.singular(ast_utils.children_of_type(fn, f03.Specification_Part))
+            decl_idxs = [idx for idx, v in enumerate(spart.children) if isinstance(v, f03.Type_Declaration_Stmt)]
+            decl_idx = decl_idxs[0] if decl_idxs else len(spart.children)
             utils.set_children(
                 spart, spart.children[:decl_idx] +
                 [f03.Type_Declaration_Stmt(f"type({GLOBAL_DATA_TYPE_NAME}) :: {GLOBAL_DATA_OBJ_NAME}")] +
@@ -705,6 +709,7 @@ def create_global_initializers(ast: f03.Program, entry_points: List[types.SPEC])
             if not this:
                 uses.append(f"use {utils.find_name_of_node(mod)}, only: {utils.find_name_of_stmt(var)}")
             var_t = analysis.find_type_of_entity(var, alias_map)
+            assert var_t is not None, f"cannot determine the type of `{var}`"
             if var_t.spec in type_defs:
                 if var_t.shape:
                     # TODO: We need to create loops for this initialization.
@@ -736,9 +741,9 @@ end subroutine {fn_name}
         utils.append_children(box, init_fn)
         created_init_fns.add(fn_name)
 
-    type_defs: List[types.SPEC] = [k for k in ident_map.keys() if isinstance(ident_map[k], f03.Derived_Type_Stmt)]
+    type_def_specs: List[types.SPEC] = [k for k in ident_map.keys() if isinstance(ident_map[k], f03.Derived_Type_Stmt)]
     type_defs: Dict[types.SPEC, Tuple[str, List[types.SPEC]]] = \
-        {k: (f"type_init_{k[-1]}_{idx}", []) for idx, k in enumerate(type_defs)}
+        {k: (f"type_init_{k[-1]}_{idx}", []) for idx, k in enumerate(type_def_specs)}
     for k, v in ident_map.items():
         if not isinstance(v, f03.Component_Decl) or not ast_utils.atmost_one(
                 ast_utils.children_of_type(v, f03.Component_Initialization)):
@@ -763,10 +768,10 @@ end subroutine {fn_name}
 
     global_inited_vars: List[types.SPEC] = [
         k for k, v in ident_map.items()
-        if isinstance(v, f03.Entity_Decl) and not analysis.find_type_of_entity(v, alias_map).const and (
-            analysis.find_type_of_entity(v, alias_map).spec in type_defs
-            or ast_utils.atmost_one(ast_utils.children_of_type(v, f03.Initialization)))
-        and analysis.search_scope_spec(v) and isinstance(alias_map[analysis.search_scope_spec(v)], f03.Module_Stmt)
+        if isinstance(v, f03.Entity_Decl) and (v_type := analysis.find_type_of_entity(v, alias_map)) is not None
+        and not v_type.const and (v_type.spec in type_defs or ast_utils.atmost_one(
+            ast_utils.children_of_type(v, f03.Initialization))) and (v_scope := analysis.search_scope_spec(v))
+        and isinstance(alias_map[v_scope], f03.Module_Stmt)
     ]
     if global_inited_vars:
         _make_init_fn(GLOBAL_INIT_FN_NAME, global_inited_vars, None)

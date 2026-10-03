@@ -440,7 +440,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
                 break
         if is_killed: continue
         ns_typ = analysis.find_type_of_entity(ns_node, alias_map)
-        if isinstance(ns_node, f03.Entity_Decl) and ns_typ.pointer:
+        if isinstance(ns_node, f03.Entity_Decl) and ns_typ is not None and ns_typ.pointer:
             for pa in walk(ast, f03.Pointer_Assignment_Stmt):
                 dst = pa.children[0]
                 if not isinstance(dst, f03.Name): continue

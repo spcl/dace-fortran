@@ -300,19 +300,20 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
 
         # Assumes a subprogram defined directly inside a module.
         assert len(pname) == 2
-        mod, pname = pname
+        mod, proc_name = pname
 
         if mod == cmod:
             # Already visible at the module level -- no alias needed.
-            pname_alias = pname
+            pname_alias = proc_name
         else:
             # Importing from a different module -- alias to avoid a name collision.
-            pname_alias, COUNTER = f"{pname}_{SUFFIX}_{COUNTER}", COUNTER + 1
+            pname_alias, COUNTER = f"{proc_name}_{SUFFIX}_{COUNTER}", COUNTER + 1
             if not specification_part:
-                utils.append_children(subprog,
-                                      f03.Specification_Part(get_reader(f"use {mod}, only: {pname_alias} => {pname}")))
+                utils.append_children(
+                    subprog, f03.Specification_Part(get_reader(f"use {mod}, only: {pname_alias} => {proc_name}")))
             else:
-                utils.prepend_children(specification_part, f03.Use_Stmt(f"use {mod}, only: {pname_alias} => {pname}"))
+                utils.prepend_children(specification_part,
+                                       f03.Use_Stmt(f"use {mod}, only: {pname_alias} => {proc_name}"))
 
         # Replace bname with pname_alias and pass dref as the first argument.
         _, args = callsite.children
@@ -482,7 +483,12 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
                     kroot, ktyp, rest = analysis.dataref_root(k, scope_spec, alias_map)
                     if isinstance(v, f03.Data_Stmt_Value):
                         repeat, elem = v.children
-                        repeat = 1 if not repeat else int(analysis.const_eval_basic_type(repeat, alias_map))
+                        if repeat:
+                            repeat_val = analysis.const_eval_basic_type(repeat, alias_map)
+                            assert repeat_val is not None, f"non-constant repeat count `{repeat}` in DATA statement"
+                            repeat = int(repeat_val)
+                        else:
+                            repeat = 1
                         assert repeat
                     else:
                         elem = v
@@ -548,6 +554,7 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
             if not isinstance(decl, f03.Entity_Decl):
                 continue
             entity_type = analysis.find_type_of_entity(decl, alias_map)
+            assert entity_type is not None, f"cannot determine the type of `{decl}`"
             # A PARAMETER (kind param like JPRL, or a physical const) is host-associated into
             # the new function, never a runtime dummy -- a kind specifier MUST be a constant,
             # so carrying it as an INTEGER dummy would produce an invalid REAL(KIND=<dummy>).
@@ -555,18 +562,17 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
                 continue
             tdecl = decl.parent.parent
             typ, _, _ = tdecl.children
-            shape = entity_type.shape
-            shape = f"({','.join(shape)})" if shape else ''
+            shape_str = f"({','.join(entity_type.shape)})" if entity_type.shape else ''
             if spec not in all_stmt_fns and nm.string not in carryovers:
                 carryovers.append(nm.string)
-                arg_decls.append(f"{typ}, intent(in) :: {nm}{shape}")
+                arg_decls.append(f"{typ}, intent(in) :: {nm}{shape_str}")
 
-        dummy_args = ','.join(dummy_args + carryovers)
-        arg_decls = '\n'.join(arg_decls)
+        dummy_args_str = ','.join(dummy_args + carryovers)
+        arg_decls_str = '\n'.join(arg_decls)
         nufn = f"""
-{ret_typ} function {fn}({dummy_args})
+{ret_typ} function {fn}({dummy_args_str})
   implicit none
-  {arg_decls}
+  {arg_decls_str}
   {fn} = {expr}
 end function {fn}
 """
@@ -740,7 +746,9 @@ def deconstruct_forward_goto_statements(
     child_w_goto = goto
     par = child_w_goto.parent
 
-    for _n in range(len(utils.lineage(target.parent, goto)) - 1):
+    goto_lineage = utils.lineage(target.parent, goto)
+    assert goto_lineage is not None, f"`{goto}` is not inside `{target.parent}`"
+    for _n in range(len(goto_lineage) - 1):
         # determine position of `GOTO`/ancestor of `GOTO`, and `CONTINUE` (if applicable)
         child_pos = ast_utils.singular(iter([i for i, x in enumerate(par.children) if x is child_w_goto]))
         target_pos = ast_utils.singular(iter([i for i, x in enumerate(par.children)
@@ -840,7 +848,9 @@ def deconstruct_backward_goto_statements(
     child_w_goto = goto
     par = child_w_goto.parent
 
-    for _n in range(len(utils.lineage(target.parent, goto)) - 2):
+    goto_lineage = utils.lineage(target.parent, goto)
+    assert goto_lineage is not None, f"`{goto}` is not inside `{target.parent}`"
+    for _n in range(len(goto_lineage) - 2):
         # determine position of `GOTO`/ancestor of `GOTO`
         child_pos = ast_utils.singular(iter([i for i, x in enumerate(par.children) if x is child_w_goto]))
 

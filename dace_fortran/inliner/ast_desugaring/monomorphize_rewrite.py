@@ -439,9 +439,8 @@ def _slot_statement_ladder(stmt: f03.Base,
     text = str(stmt)
     lines = []
     for tag, arm in enumerate(plan.arms, start=1):
-        retargeted = re.sub(r'(%\s*)' + re.escape(slot) + r'\b',
-                            lambda m, a=arm: m.group(1) + _arm_slot(slot, a.type_name),
-                            text)
+        arm_slot = _arm_slot(slot, arm.type_name)
+        retargeted = re.sub(r'(%\s*)' + re.escape(slot) + r'\b', lambda m: m.group(1) + arm_slot, text)
         lines.append(f"{'if' if tag == 1 else 'else if'} ({prefix}%{_tag_var(slot)} == {tag}) then")
         lines.append(f"  {retargeted}")
     lines.append("end if")
@@ -835,7 +834,8 @@ def _arm_ancestor_rank(tinfos: dict, type_name: str) -> dict:
     against a ``SELECT TYPE`` ``CLASS IS`` guard: an ancestor matches, the nearest
     (smallest depth) wins."""
     rank: dict = {}
-    t, depth = type_name.lower(), 0
+    t: Optional[str] = type_name.lower()
+    depth = 0
     while t and t not in rank:
         rank[t] = depth
         ti = tinfos.get(t)
@@ -1800,8 +1800,8 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
             if isinstance(child, f03.Implicit_Part):
                 continue
             if isinstance(child, f03.Use_Stmt):
-                nm = ast_utils.atmost_one(ast_utils.children_of_type(child, f03.Name))
-                if nm is not None and str(nm).lower() in (base_name, arm_name):
+                use_name = ast_utils.atmost_one(ast_utils.children_of_type(child, f03.Name))
+                if use_name is not None and str(use_name).lower() in (base_name, arm_name):
                     continue  # base symbols are already in scope post-merge
                 remove_self(child)
                 prepend_children(base_spec, child)
@@ -1839,8 +1839,8 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
     # a compiler rejects ("cannot USE a module currently being built").  Drop every
     # such self-use (at module scope and in the contained procedures).
     for use in list(walk(base_mod, f03.Use_Stmt)):
-        nm = ast_utils.atmost_one(ast_utils.children_of_type(use, f03.Name))
-        if nm is not None and str(nm).lower() == base_name:
+        use_name = ast_utils.atmost_one(ast_utils.children_of_type(use, f03.Name))
+        if use_name is not None and str(use_name).lower() == base_name:
             remove_self(use)
     _toposort_type_defs(base_spec)
 
