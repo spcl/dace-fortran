@@ -2,25 +2,38 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared base and helpers for the Fortran I/O library nodes."""
 
-from typing import List, Tuple
+from typing import List, NamedTuple
 
 from dace import SDFG, SDFGState, data, dtypes
 from dace.sdfg import nodes
 from dace.subsets import Range
+
+
+class FioType(NamedTuple):
+    suffix: str
+    ctype: str
+
+
+class IoItem(NamedTuple):
+    connector: str
+    descriptor: data.Data
+    elements: str
+    is_value: bool
+
 
 #: DaCe base type -> (``dace_fio_*`` entry suffix, C scalar type) for the
 #: shipped wrappers.  The suffix selects the typed ``read``/``write`` entry; the
 #: C type is the pointer cast at the call site (so int64 vs ``long long`` and
 #: similar width spellings never trip ``-Werror``).
 _FIO_TYPES = {
-    dtypes.float64: ("f64", "double"),
-    dtypes.float32: ("f32", "float"),
-    dtypes.int32: ("i32", "int"),
-    dtypes.int64: ("i64", "long long"),
+    dtypes.float64: FioType("f64", "double"),
+    dtypes.float32: FioType("f32", "float"),
+    dtypes.int32: FioType("i32", "int"),
+    dtypes.int64: FioType("i64", "long long"),
 }
 
 
-def fio_type(dtype: dtypes.typeclass) -> Tuple[str, str]:
+def fio_type(dtype: dtypes.typeclass) -> FioType:
     """Resolve the ``dace_fio_*`` wrapper suffix and C cast type for ``dtype``."""
     base = dtype.base_type
     if base not in _FIO_TYPES:
@@ -39,9 +52,7 @@ class FortranIONode(nodes.LibraryNode):
     def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 
-    def ordered_items(
-        self, sdfg: SDFG, state: SDFGState, prefix: str, edges_in: bool, num_items: int
-    ) -> List[Tuple[str, data.Data, str, bool]]:
+    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str, edges_in: bool, num_items: int) -> List[IoItem]:
         """Resolve the ``num_items`` connected I/O items in connector order, as ``(connector,
         descriptor, count, is_value)``.  ``is_value`` marks a scalar/single-element
         connector (emitted by value, so the call site takes its address)."""
@@ -49,7 +60,7 @@ class FortranIONode(nodes.LibraryNode):
             edges = {e.dst_conn: e for e in state.in_edges(self) if e.dst_conn}
         else:
             edges = {e.src_conn: e for e in state.out_edges(self) if e.src_conn}
-        items = []
+        items: List[IoItem] = []
         for i in range(num_items):
             conn = f"{prefix}{i}"
             edge = edges.get(conn)
@@ -61,5 +72,5 @@ class FortranIONode(nodes.LibraryNode):
             desc = sdfg.arrays[edge.data.data]
             is_value = isinstance(desc, data.Scalar) or subset.num_elements() == 1
             count = "*".join(str(s) for s in subset.size_exact()) or "1"
-            items.append((conn, desc, count, is_value))
+            items.append(IoItem(conn, desc, count, is_value))
         return items

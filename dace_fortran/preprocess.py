@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Iterator, Optional, Sequence
+from typing import Iterable, Iterator, NamedTuple, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dace_fortran.external_functions import ExternalFunction
@@ -69,13 +69,24 @@ _INTEGER_DECL_RE = re.compile(
 _BARE_IF_RE = re.compile(r"\b(IF\s*\(\s*)([A-Za-z_]\w*)(\s*\))", re.IGNORECASE)
 
 
-def _scan_line(body: str) -> tuple[int, list[tuple[int, int]]]:
+class StringSpan(NamedTuple):
+    start: int
+    end: int
+
+
+class ScannedLine(NamedTuple):
+    comment: int
+    strings: list[StringSpan]
+
+
+def _scan_line(body: str) -> ScannedLine:
     """Comment start + character-string spans of one line; shared so a ``!``
     or ``**`` inside a literal is never treated as code.  Returns
     ``(comment_index, [(start, end), ...])``; doubled quotes (``''``) stay
     inside one span.
     """
-    spans, i, n = [], 0, len(body)
+    spans: list[StringSpan] = []
+    i, n = 0, len(body)
     while i < n:
         c = body[i]
         if c in "'\"":
@@ -87,13 +98,13 @@ def _scan_line(body: str) -> tuple[int, list[tuple[int, int]]]:
                         continue
                     break
                 j += 1
-            spans.append((i, min(j + 1, n)))
+            spans.append(StringSpan(i, min(j + 1, n)))
             i = j + 1
         elif c == "!":
-            return i, spans
+            return ScannedLine(i, spans)
         else:
             i += 1
-    return n, spans
+    return ScannedLine(n, spans)
 
 
 def _collect_integer_scalar_names(source: str) -> set[str]:
@@ -114,7 +125,12 @@ def _collect_integer_scalar_names(source: str) -> set[str]:
     return names
 
 
-def _extract_power_base(code: str, star: int) -> tuple[int, int] | None:
+class PowerBase(NamedTuple):
+    begin: int
+    end: int
+
+
+def _extract_power_base(code: str, star: int) -> PowerBase | None:
     """Base (left primary) of a ``**`` operator: scans leftward over a
     parenthesised group, identifier, array/function reference
     (``name(...)``), or ``%`` component chain (``a%b(i)%c``).  Returns
@@ -150,7 +166,7 @@ def _extract_power_base(code: str, star: int) -> tuple[int, int] | None:
             i -= 1  # designator chain -- keep walking the components
             continue
         break
-    return None if i == end else (i, end)
+    return None if i == end else PowerBase(i, end)
 
 
 def _real_exp_int_value(tok: str) -> int | None:
@@ -563,7 +579,12 @@ def _balance_cpp(block: str) -> str:
     return "".join(ln for i, ln in enumerate(lines) if i not in drop)
 
 
-def _module_blocks(text: str) -> Iterator[tuple[str, str]]:
+class ModuleBlock(NamedTuple):
+    name: str
+    text: str
+
+
+def _module_blocks(text: str) -> Iterator[ModuleBlock]:
     """Yield ``(name_lower, block_text)`` per top-level ``module`` in
     ``text`` (``submodule``/``module procedure`` excluded; modules don't
     nest).
@@ -592,7 +613,7 @@ def _module_blocks(text: str) -> Iterator[tuple[str, str]]:
             i += 1
         end = min(i, n - 1)
         # Balance cpp conditionals split across the block boundary (see _balance_cpp).
-        yield name, _balance_cpp("".join(lines[start : end + 1]))
+        yield ModuleBlock(name, _balance_cpp("".join(lines[start : end + 1])))
         last_end = end + 1
         i = end + 1
 

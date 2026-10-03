@@ -54,6 +54,7 @@ from dace.subsets import Subset
 
 from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
+from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
@@ -1643,11 +1644,11 @@ class SDFGBuilder:
         # into a shape / bound).  The binding generator merges this
         # with any hand-authored override map.
         origin_by_name = {
-            v.fortran_name: (v.module_origin_mod, v.module_origin_name)
+            v.fortran_name: ModuleOrigin(v.module_origin_mod, v.module_origin_name)
             for v in self.variables
-            if v.module_origin_mod and v.module_origin_name
+            if v.fortran_name and v.module_origin_mod and v.module_origin_name
         }
-        module_symbol_origins: dict = {}
+        module_symbol_origins: dict[str, ModuleOrigin] = {}
 
         args_list = []
         # Reverse the rename map so we can recover the user-source
@@ -1774,7 +1775,7 @@ class SDFGBuilder:
         # is the default when no host override is supplied.
         name_map = self.dace_name_map
         for name, origin in origin_by_name.items():
-            module_symbol_origins.setdefault(name_map.get(name, name), origin)
+            module_symbol_origins.setdefault(name_map.get(name) or name, origin)
         fs = FrozenSignature(
             entry=sdfg.name,
             mangled=next((v.mangled_name for v in self.arrays.values() if v.mangled_name), sdfg.name),

@@ -27,7 +27,7 @@ from collections import defaultdict
 
 from dace import Memlet
 from dace.sdfg import nodes
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -105,7 +105,13 @@ def load_anchors(state: SDFGState, node: nodes.Node, seen: set[int] | None = Non
     return anchors or [node]
 
 
-def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
+class SkippedEdge(NamedTuple):
+    container: str
+    src: nodes.Node
+    dst: nodes.Node
+
+
+def order_state(state: SDFGState) -> list[SkippedEdge]:
     """Add ordering edges for every unordered same-container pair in ``state``.
 
     :return: list of ``(container, src, dst)`` triples that had to be skipped to keep the state
@@ -117,7 +123,7 @@ def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
         if scopes[node] is None:
             by_container[node.root_data].append(node)
 
-    skipped = []
+    skipped: list[SkippedEdge] = []
     for container, access_nodes in by_container.items():
         if len(access_nodes) < 2:
             continue
@@ -153,7 +159,7 @@ def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
                             dst_reach = descendants(state, dst)
                             reach[id(dst)] = dst_reach
                         if src in dst_reach:
-                            skipped.append((container, src, dst))
+                            skipped.append(SkippedEdge(container, src, dst))
                             continue
                         state.add_nedge(src, dst, Memlet())
                         gained = dst_reach | {dst}
@@ -163,9 +169,9 @@ def order_state(state: SDFGState) -> list[tuple[str, nodes.Node, nodes.Node]]:
     return skipped
 
 
-def enforce_statement_order(sdfg: SDFG) -> list[tuple[str, nodes.Node, nodes.Node]]:
+def enforce_statement_order(sdfg: SDFG) -> list[SkippedEdge]:
     """Pin Fortran statement order into every state of ``sdfg`` and its nested SDFGs."""
-    skipped = []
+    skipped: list[SkippedEdge] = []
     for nested in sdfg.all_sdfgs_recursive():
         for state in nested.states():
             skipped.extend(order_state(state))

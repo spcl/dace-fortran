@@ -10,13 +10,14 @@ low + high frequency bins, drop the middle), then IFFT back.
 
 from __future__ import annotations
 import itertools
+from enum import Enum
 
 import dace.library
 import dace.properties
 import dace
 from dace import nodes, SDFG, SDFGState, dtypes, Memlet
 from dace import transformation as xf
-from typing import Any, ClassVar, Sequence, cast
+from typing import Any, ClassVar, NamedTuple, Sequence, cast
 
 import numpy as np
 
@@ -47,16 +48,49 @@ class FFTInterpolate(nodes.LibraryNode):
         self.dtype_kind = dtype_kind
 
 
-def _get_input_and_output(state: SDFGState, node: nodes.Node) -> tuple[str, str]:
+class InputOutput(NamedTuple):
+    input: str
+    output: str
+
+
+def _get_input_and_output(state: SDFGState, node: nodes.Node) -> InputOutput:
     """Resolve the lib node's IO connector data names."""
     in_edge = next(e for e in state.in_edges(node) if e.dst_conn)
     out_edge = next(e for e in state.out_edges(node) if e.src_conn)
     if in_edge.data.data is None or out_edge.data.data is None:
         raise ValueError(f"FFTInterpolate '{node}': connector carries an empty memlet")
-    return in_edge.data.data, out_edge.data.data
+    return InputOutput(in_edge.data.data, out_edge.data.data)
 
 
-def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[tuple[Any, Any, Any, Any]]:
+class Half(Enum):
+    """One side of an axis' symmetric split: the low frequencies or the high (negative) ones."""
+
+    LOW = "low"
+    HIGH = "high"
+
+
+class Side(Enum):
+    """Which grid an index addresses: the input or the output."""
+
+    IN = "in"
+    OUT = "out"
+
+
+class FftwDirection(Enum):
+    FORWARD = "FFTW_FORWARD"
+    BACKWARD = "FFTW_BACKWARD"
+
+
+class AxisCut(NamedTuple):
+    """Cut points of one axis: ``low + high = min(n_in, n_out)``."""
+
+    low: Any
+    high: Any
+    n_in: Any
+    n_out: Any
+
+
+def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[AxisCut]:
     """Return ``(low, high)`` cut-points per axis for the symmetric-split copy.
 
     For each axis ``d``: ``low_d + high_d = min(nin_d, nout_d)``.  Defined
@@ -64,23 +98,21 @@ def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[
     (Nyquist on the longer side) is dropped and the spectrum stays
     Hermitian-correct.
     """
-    cuts = []
+    cuts: list[AxisCut] = []
     for nin_d, nout_d in zip(indesc.shape, outdesc.shape):
         smaller = nin_d if nin_d <= nout_d else nout_d
         low_d = (smaller + 1) // 2
         high_d = smaller // 2
-        cuts.append((low_d, high_d, nin_d, nout_d))
+        cuts.append(AxisCut(low_d, high_d, nin_d, nout_d))
     return cuts
 
 
-def _region_index(
-    part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, Any, Any, Any]], side: str, ivars: Sequence[str]
-) -> str:
+def _region_index(part_per_axis: Sequence[Half], cuts: Sequence[AxisCut], side: Side, ivars: Sequence[str]) -> str:
     """Build the per-element index string for the copy tasklet."""
     parts = []
     for part, (low_d, high_d, nin_d, nout_d), iv in zip(part_per_axis, cuts, ivars):
-        n_d = nin_d if side == "in" else nout_d
-        if part == "low":
+        n_d = nin_d if side is Side.IN else nout_d
+        if part is Half.LOW:
             parts.append(f"{iv}")
         else:
             parts.append(f"{n_d} - {high_d} + {iv}")
@@ -94,7 +126,7 @@ def _emit_fftw3_tasklet(
     out_array: str,
     shape: Sequence[Any],
     complex_dtype: dtypes.typeclass,
-    direction: str,
+    direction: FftwDirection,
     envs: Sequence[Any],
 ) -> None:
     """Drop a self-contained ``fftw_plan_dft_*d`` Tasklet into ``state``.
@@ -116,13 +148,13 @@ def _emit_fftw3_tasklet(
     code = f"""
     {{
         {prefix}plan __plan = {prefix}plan_dft_{rank}d({cdims},
-            ({complex_t}*)_fftw_inp, ({complex_t}*)_fftw_out, {direction}, FFTW_ESTIMATE);
+            ({complex_t}*)_fftw_inp, ({complex_t}*)_fftw_out, {direction.value}, FFTW_ESTIMATE);
         {prefix}execute(__plan);
         {prefix}destroy_plan(__plan);
     }}
     """
     tasklet = nodes.Tasklet(
-        f"fftw3_{direction.lower()}",
+        f"fftw3_{direction.value.lower()}",
         inputs={"_fftw_inp": dtypes.pointer(complex_dtype)},
         outputs={"_fftw_out": dtypes.pointer(complex_dtype)},
         code=code,
@@ -138,9 +170,7 @@ def _emit_fftw3_tasklet(
     )
 
 
-def _region_iter_ranges(
-    part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, Any, Any, Any]], ivars: Sequence[str]
-) -> MapRanges:
+def _region_iter_ranges(part_per_axis: Sequence[Half], cuts: Sequence[AxisCut], ivars: Sequence[str]) -> MapRanges:
     """Per-axis map iteration ranges for the copy tasklet.
 
     Each ``low`` side iterates ``0:low_d``; each ``high`` side iterates
@@ -149,7 +179,7 @@ def _region_iter_ranges(
     """
     ranges: MapRanges = {}
     for part, (low_d, high_d, _, _), iv in zip(part_per_axis, cuts, ivars):
-        size_d = low_d if part == "low" else high_d
+        size_d = low_d if part is Half.LOW else high_d
         ranges[iv] = f"0:{size_d}"
     return ranges
 
@@ -269,7 +299,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
                 "__inp_spec",
                 in_shape,
                 complex_dtype,
-                direction="FFTW_FORWARD",
+                direction=FftwDirection.FORWARD,
                 envs=[FFTW3Env],
             )
 
@@ -277,20 +307,20 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         # combination across the rank axes (2**rank regions total).
         cuts = _low_high_per_axis(indesc, outdesc)
         prev_state = st_fft
-        for combo in itertools.product(("low", "high"), repeat=rank):
+        for combo in itertools.product(tuple(Half), repeat=rank):
             # A zero-width cut on any axis means an empty region; skip it.
             if any(
-                (part == "low" and low_d == 0) or (part == "high" and high_d == 0)
+                (part is Half.LOW and low_d == 0) or (part is Half.HIGH and high_d == 0)
                 for part, (low_d, high_d, _, _) in zip(combo, cuts)
             ):
                 continue
-            st_copy = sdfg.add_state_after(prev_state, "s_copy_" + "".join(p[0] for p in combo))
+            st_copy = sdfg.add_state_after(prev_state, "s_copy_" + "".join(p.value[0] for p in combo))
             ivars = [f"j{d}" for d in range(rank)]
             ranges = _region_iter_ranges(combo, cuts, ivars)
-            in_idx = _region_index(combo, cuts, "in", ivars)
-            out_idx = _region_index(combo, cuts, "out", ivars)
+            in_idx = _region_index(combo, cuts, Side.IN, ivars)
+            out_idx = _region_index(combo, cuts, Side.OUT, ivars)
             st_copy.add_mapped_tasklet(
-                f"copy_spec_{''.join(p[0] for p in combo)}",
+                f"copy_spec_{''.join(p.value[0] for p in combo)}",
                 ranges,
                 {"__x": Memlet(f"__inp_spec[{in_idx}]")},
                 "__y = __x",
@@ -329,7 +359,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
                 "__out_c",
                 out_shape,
                 complex_dtype,
-                direction="FFTW_BACKWARD",
+                direction=FftwDirection.BACKWARD,
                 envs=[FFTW3Env],
             )
 

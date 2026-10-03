@@ -29,8 +29,9 @@ and follow.)
 import hashlib
 import logging
 import re
+from enum import Enum
 from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple
+from typing import List, NamedTuple, Optional, Set, Tuple
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -88,11 +89,16 @@ def _clone_name(proc: str, arm: str) -> str:
     return f"{full[: _FORTRAN_MAX_NAME - len(digest) - 2]}__{digest}"
 
 
-def _find_arm(plan: MonomorphizationPlan, type_name: str) -> Tuple[int, str]:
+class ArmTag(NamedTuple):
+    tag: int
+    type_name: str
+
+
+def _find_arm(plan: MonomorphizationPlan, type_name: str) -> ArmTag:
     """1-based tag value + canonical arm name for a concrete type (case-insensitive)."""
     for i, arm in enumerate(plan.arms, start=1):
         if arm.type_name.lower() == type_name.lower():
-            return i, arm.type_name
+            return ArmTag(i, arm.type_name)
     raise KeyError(f"type `{type_name}` is not a concrete arm of `{plan.abstract_base}`")
 
 
@@ -173,7 +179,12 @@ def _dispatch_ladder(var: str, binding: str, argstr: str, plan: Monomorphization
     return _parse_exec("\n".join(lines))
 
 
-def _class_locals(spec: f03.Specification_Part, base: str) -> List[Tuple[f03.Type_Declaration_Stmt, List[str]]]:
+class ClassLocals(NamedTuple):
+    declaration: f03.Type_Declaration_Stmt
+    names: List[str]
+
+
+def _class_locals(spec: f03.Specification_Part, base: str) -> List[ClassLocals]:
     """``(decl, [names])`` for each ``CLASS(base), ... :: ...`` declaration in ``spec``."""
     out = []
     for decl in walk(spec, f03.Type_Declaration_Stmt):
@@ -183,7 +194,7 @@ def _class_locals(spec: f03.Specification_Part, base: str) -> List[Tuple[f03.Typ
             and type_spec.children[0] == "CLASS"
             and str(type_spec.children[1]).lower() == base.lower()
         ):
-            out.append((decl, [str(e.children[0]) for e in walk(decl, f03.Entity_Decl)]))
+            out.append(ClassLocals(decl, [str(e.children[0]) for e in walk(decl, f03.Entity_Decl)]))
     return out
 
 
@@ -290,7 +301,12 @@ def _component_is_pointer(comp: f03.Data_Component_Def_Stmt) -> bool:
     return attrs is not None and "POINTER" in str(attrs).upper()
 
 
-def _component_slots(program: f03.Program, base: str) -> List[Tuple[f03.Data_Component_Def_Stmt, List[str]]]:
+class ComponentSlots(NamedTuple):
+    component: f03.Data_Component_Def_Stmt
+    names: List[str]
+
+
+def _component_slots(program: f03.Program, base: str) -> List[ComponentSlots]:
     """``(component_stmt, [names])`` for each ``CLASS(base), ... :: ...`` *component*."""
     out = []
     for comp in walk(program, f03.Data_Component_Def_Stmt):
@@ -300,18 +316,23 @@ def _component_slots(program: f03.Program, base: str) -> List[Tuple[f03.Data_Com
             and type_spec.children[0] == "CLASS"
             and str(type_spec.children[1]).lower() == base.lower()
         ):
-            out.append((comp, [str(cd.children[0]) for cd in walk(comp, f03.Component_Decl)]))
+            out.append(ComponentSlots(comp, [str(cd.children[0]) for cd in walk(comp, f03.Component_Decl)]))
     return out
 
 
-def _ref_prefix_and_tail(ref: f03.Data_Ref) -> Tuple[str, str]:
+class RefPrefixTail(NamedTuple):
+    prefix: str
+    tail: str
+
+
+def _ref_prefix_and_tail(ref: f03.Data_Ref) -> RefPrefixTail:
     """Split a ``Data_Ref`` into (``a%b`` prefix, last selector) -- e.g. ``this%act`` -> (``this``, ``act``).
     ``Data_Ref.children`` is the flat tuple of path parts ``(Name('this'), Name('act'))``."""
     parts = ref.children
-    return "%".join(str(p) for p in parts[:-1]), str(parts[-1])
+    return RefPrefixTail("%".join(str(p) for p in parts[:-1]), str(parts[-1]))
 
 
-def _member_prefix_and_tail(obj: f03.Base) -> Optional[Tuple[str, str]]:
+def _member_prefix_and_tail(obj: f03.Base) -> Optional[RefPrefixTail]:
     """Split a member reference into (``a%b`` prefix, last component), for either a
     ``Data_Ref`` (an rvalue path ``this%trans``) or a ``Data_Pointer_Object`` (a
     pointer-assign LHS ``this%op``, whose children are ``(base, '%', name)``).
@@ -322,7 +343,7 @@ def _member_prefix_and_tail(obj: f03.Base) -> Optional[Tuple[str, str]]:
         parts = [c for c in obj.children if c != "%"]
         if len(parts) < 2:
             return None
-        return "%".join(str(p) for p in parts[:-1]), str(parts[-1])
+        return RefPrefixTail("%".join(str(p) for p in parts[:-1]), str(parts[-1]))
     return None
 
 
@@ -828,7 +849,12 @@ def _dummy_arg_names(sub: f03.Base) -> List[str]:
     return names[1:] if names else []  # drop the subprogram's own name
 
 
-def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> List[Tuple[str, str]]:
+class PointerAssociation(NamedTuple):
+    dummy: str
+    target: str
+
+
+def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> List[PointerAssociation]:
     """``(slot, dummy)`` for each ``<prefix>%<slot> => <dummy>`` in ``scope`` whose
     ``<dummy>`` is a plain-name ``CLASS(base)`` entity -- the pointer-association
     tag sources.  Detected by the (still-``CLASS``) dummy rather than the slot name,
@@ -846,7 +872,7 @@ def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> List[Tuple[str, str
         if pt is None:
             continue
         if isinstance(rhs, f03.Name) and str(rhs).lower() in class_names:
-            out.append((pt[1], str(rhs)))
+            out.append(PointerAssociation(pt[1], str(rhs)))
     return out
 
 
@@ -979,11 +1005,26 @@ def _host_scope_specs(scope: f03.Base) -> List[f03.Specification_Part]:
     return specs
 
 
-def _lookup_entity_type(scope: f03.Base, name: str) -> Tuple[bool, Optional[Tuple[str, str]]]:
-    """``(declared, (kind, type_name) | None)`` for ``name`` visible from ``scope``
-    (own scope, then host association).  ``declared`` says whether any declaration
-    was found; the pair is ``('TYPE'|'CLASS', type)`` for a derived-type
-    declaration, else ``None`` (intrinsic).  The nearest scope wins -- a local
+class DerivedKind(Enum):
+    """How a derived-type entity is declared."""
+
+    TYPE = "TYPE"
+    CLASS = "CLASS"
+
+
+class DerivedDeclaration(NamedTuple):
+    kind: DerivedKind
+    type_name: str
+
+
+class EntityType(NamedTuple):
+    declared: bool
+    derived: Optional[DerivedDeclaration]
+
+
+def _lookup_entity_type(scope: f03.Base, name: str) -> EntityType:
+    """Whether ``name`` visible from ``scope`` (own scope, then host association) is
+    declared, and its derived-type declaration (``None`` for an intrinsic type).  The nearest scope wins -- a local
     shadows a host entity -- so the search stops at the first scope declaring it."""
     name_l = name.lower()
     for spec in _host_scope_specs(scope):
@@ -992,17 +1033,17 @@ def _lookup_entity_type(scope: f03.Base, name: str) -> Tuple[bool, Optional[Tupl
                 continue
             ts = decl.children[0]
             if isinstance(ts, f03.Declaration_Type_Spec) and ts.children[0] in ("TYPE", "CLASS"):
-                return True, (str(ts.children[0]), str(ts.children[1]))
-            return True, None
-    return False, None
+                return EntityType(True, DerivedDeclaration(DerivedKind(ts.children[0]), str(ts.children[1])))
+            return EntityType(True, None)
+    return EntityType(False, None)
 
 
 def _entity_declared_type(scope: f03.Base, name: str) -> Optional[str]:
     """Declared derived-type name of ``name`` visible from ``scope`` for a
     ``TYPE(t)`` *or* ``CLASS(t)`` declaration (the type used to resolve a
     dispatch), ``None`` for an intrinsic type or a missing declaration."""
-    _, info = _lookup_entity_type(scope, name)
-    return info[1].lower() if info is not None else None
+    derived = _lookup_entity_type(scope, name).derived
+    return derived.type_name.lower() if derived is not None else None
 
 
 def _component_type(dtds: dict, type_name: str, comp: str) -> Optional[str]:
@@ -1134,9 +1175,13 @@ def _drop_dead_constructors(program: f03.Program, procs: Set[str]) -> None:
             changed = True
 
 
-def _callee_of(
-    call: f03.Call_Stmt, scope: Optional[f03.Base], tinfos: dict, dtds: dict
-) -> Tuple[Optional[str], Optional[f03.Base], bool]:
+class Callee(NamedTuple):
+    name: Optional[str]
+    passed_object: Optional[f03.Base]
+    has_passed_object: bool
+
+
+def _callee_of(call: f03.Call_Stmt, scope: Optional[f03.Base], tinfos: dict, dtds: dict) -> Callee:
     """``(proc_name, passed_object_or_None, has_passed_object)`` for a call: a
     plain ``CALL proc`` (no passed object), or a type-bound dispatch ``obj%binding``
     resolved *precisely* by ``obj``'s static type (:func:`_type_of_ref` +
@@ -1146,13 +1191,13 @@ def _callee_of(
     concrete slot (``this%act__t_cg%bconstruct``) to the wrong arm's procedure."""
     des = call.children[0]
     if isinstance(des, f03.Name):
-        return str(des).lower(), None, False
+        return Callee(str(des).lower(), None, False)
     if isinstance(des, f03.Procedure_Designator):
         obj, _, binding = des.children
         tn = _type_of_ref(scope, obj, dtds) if scope is not None else None
         proc = _binding_target(tinfos, tn, str(binding)) if tn is not None else None
-        return proc, obj, True
-    return None, None, False
+        return Callee(proc, obj, True)
+    return Callee(None, None, False)
 
 
 def _dummy_is_dispatched(sub: f03.Base, dummy: str) -> bool:
@@ -1514,13 +1559,17 @@ def _entity_concrete_type(scope: f03.Base, name: str) -> Optional[str]:
     concrete actual passed to a pointer-assoc constructor (the ladder's tag
     source); ICON declares those actuals as module variables, so the lookup climbs
     into the host module (:func:`_lookup_entity_type`)."""
-    _, info = _lookup_entity_type(scope, name)
-    return str(info[1]) if (info is not None and info[0] == "TYPE") else None
+    derived = _lookup_entity_type(scope, name).derived
+    return derived.type_name if (derived is not None and derived.kind is DerivedKind.TYPE) else None
 
 
-def _ptr_assoc_slot_sites(
-    scope: f03.Base, base: str, slot_names: Set[str]
-) -> List[Tuple[f03.Pointer_Assignment_Stmt, str, str]]:
+class SlotAssociation(NamedTuple):
+    statement: f03.Pointer_Assignment_Stmt
+    slot: str
+    dummy: str
+
+
+def _ptr_assoc_slot_sites(scope: f03.Base, base: str, slot_names: Set[str]) -> List[SlotAssociation]:
     """``(pointer_assign_stmt, slot, dummy_name)`` for each ``<prefix>%<slot> =>
     <dummy>`` in ``scope`` where ``slot`` is one of ``slot_names`` and ``<dummy>``
     is a plain-name entity declared ``CLASS(base)`` in ``scope`` -- the interior
@@ -1541,7 +1590,7 @@ def _ptr_assoc_slot_sites(
         if pt is None or pt[1].lower() not in slot_names:
             continue
         if isinstance(rhs, f03.Name) and str(rhs).lower() in class_names:
-            out.append((pa, pt[1], str(rhs)))
+            out.append(SlotAssociation(pa, pt[1], str(rhs)))
     return out
 
 

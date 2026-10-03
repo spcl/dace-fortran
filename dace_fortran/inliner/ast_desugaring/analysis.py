@@ -10,7 +10,7 @@ import math
 import operator
 import sys
 from copy import copy
-from typing import Any, Callable, Iterable, Iterator, Optional, Tuple, List, Dict, Union, Set
+from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Set, Tuple, Union
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
@@ -815,9 +815,15 @@ def find_type_of_entity(
     return tspec
 
 
+class DataRefRoot(NamedTuple):
+    root: Base
+    root_type: types.TYPE_SPEC
+    components: List[Base]
+
+
 def dataref_root(
     dref: Union[f03.Name, f03.Data_Ref, f03.Data_Pointer_Object], scope_spec: types.SPEC, alias_map: types.SPEC_TABLE
-) -> Tuple[Base, types.TYPE_SPEC, List[Base]]:
+) -> DataRefRoot:
     """
     Helper function to deconstruct a data reference (e.g., `a % b % c`) into its root variable
     and the list of subsequent component accesses.
@@ -842,7 +848,7 @@ def dataref_root(
         root_type = find_type_dataref(root, scope_spec, alias_map)
     assert root_type
 
-    return root, root_type, rest
+    return DataRefRoot(root, root_type, rest)
 
 
 def find_dataref_component_spec(
@@ -1173,6 +1179,13 @@ def lookup_dataref(
 MATCH_ALL = types.TYPE_SPEC(("*",), "")  # TODO: Hacky; `does_type_signature_match()` will match anything with this.
 
 
+class NumType(NamedTuple):
+    """An intrinsic numeric type family and its kind (``REAL``, 8)."""
+
+    family: str
+    kind: int
+
+
 def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
     if c.spec == ("*",) or (OPTIONS.tolerate_external_uses and g.spec == ("*",)):
         # A match-anything candidate parameter matches any argument; under
@@ -1184,26 +1197,26 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
         # Both's ranks must match
         return False
 
-    def _real_num_type(t: str) -> Tuple[str, int]:
+    def _real_num_type(t: str) -> NumType:
         if t == "DOUBLE PRECISION":
-            return "REAL", 8
+            return NumType("REAL", 8)
         elif t == "REAL":
-            return "REAL", 4
+            return NumType("REAL", 4)
         elif t.startswith("REAL"):
             w = int(t.removeprefix("REAL"))
-            return "REAL", w
+            return NumType("REAL", w)
         elif t == "INTEGER":
-            return "INTEGER", 4
+            return NumType("INTEGER", 4)
         elif t.startswith("INTEGER"):
             w = int(t.removeprefix("INTEGER"))
-            return "INTEGER", w
+            return NumType("INTEGER", w)
         elif t == "COMPLEX":
-            return "COMPLEX", 4
+            return NumType("COMPLEX", 4)
         elif t.startswith("COMPLEX"):
             # Suffix is the component kind (COMPLEX8 -> 2xFP64), mirroring REAL.
             w = int(t.removeprefix("COMPLEX"))
-            return "COMPLEX", w
-        return t, 1
+            return NumType("COMPLEX", w)
+        return NumType(t, 1)
 
     def _subsumes(b: types.SPEC, s: types.SPEC) -> bool:
         """If `b` subsumes `s` -- for generic resolution this is type-kind-rank
@@ -1298,16 +1311,26 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[int]:
 ConstKey = Union[types.SPEC, Tuple[types.SPEC, types.SPEC]]
 
 
+class RootComponent(NamedTuple):
+    root: types.SPEC
+    component: types.SPEC
+
+
+class LocalConsts(NamedTuple):
+    plus: Dict[ConstKey, types.LITERAL_TYPES]
+    minus: Set[ConstKey]
+
+
 def track_local_consts(
     node: Union[Base, List[Base]],
     alias_map: types.SPEC_TABLE,
     plus_init: Optional[Dict[ConstKey, types.LITERAL_TYPES]] = None,
     minus_init: Optional[Set[ConstKey]] = None,
-) -> Tuple[Dict[ConstKey, types.LITERAL_TYPES], Set[ConstKey]]:
+) -> LocalConsts:
     plus: Dict[ConstKey, types.LITERAL_TYPES] = copy(plus_init) if plus_init else {}
     minus: Set[ConstKey] = copy(minus_init) if minus_init else set()
 
-    def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> Optional[Tuple[types.SPEC, types.SPEC]]:
+    def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> Optional[RootComponent]:
         scope_spec = search_scope_spec(dref)
         assert scope_spec
         if walk(dref, f03.Part_Ref):
@@ -1326,7 +1349,7 @@ def track_local_consts(
             return None
         root_spec = ident_spec(alias_map[loc])
         comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
-        return root_spec, comp_spec
+        return RootComponent(root_spec, comp_spec)
 
     def _integrate_subresults(tp: Dict[ConstKey, types.LITERAL_TYPES], tm: Set[ConstKey]) -> None:
         assert not (tm & tp.keys())
@@ -1693,4 +1716,4 @@ def track_local_consts(
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")
 
-    return plus, minus
+    return LocalConsts(plus, minus)

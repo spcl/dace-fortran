@@ -10,7 +10,8 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Collection, Container, Dict, List, Optional, Sequence, Tuple
+from enum import Enum
+from typing import Collection, Container, Dict, List, NamedTuple, Optional, Sequence, TYPE_CHECKING
 
 from dace_fortran.bindings.flatten_plan import (
     FlattenPlan,
@@ -18,7 +19,7 @@ from dace_fortran.bindings.flatten_plan import (
     strip_index_args,
 )
 from dace_fortran.bindings.fortran_interface import DerivedType, OriginalArg, OriginalInterface
-from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature, ModuleOrigin
 from dace_fortran.bindings.loop_copy import (
     fortran_scalar_type,
     render_alias_calls,
@@ -534,7 +535,12 @@ def build_wrapper_head(
 # ---------------------------------------------------------------------------
 
 
-def partition_symbol_blocks(sym_lines: List[str], buffer_names: Collection[str]) -> tuple[List[str], List[str]]:
+class SymbolBlocks(NamedTuple):
+    early: List[str]
+    late: List[str]
+
+
+def partition_symbol_blocks(sym_lines: List[str], buffer_names: Collection[str]) -> SymbolBlocks:
     """Split symbol-population lines into ``(early, late)`` by buffer dependency.
 
     A shape sym read from a module global/dummy/constant is assigned BEFORE the
@@ -563,7 +569,7 @@ def partition_symbol_blocks(sym_lines: List[str], buffer_names: Collection[str])
             i += 1
     early = [ln for blk in blocks if not any(_buffer_derived(ln) for ln in blk) for ln in blk]
     late = [ln for blk in blocks if any(_buffer_derived(ln) for ln in blk) for ln in blk]
-    return early, late
+    return SymbolBlocks(early, late)
 
 
 def build_wrapper_body(
@@ -963,7 +969,12 @@ def build_wrapper_tail(
 _ACC_INDENT = "    "
 
 
-def build_acc_staging(plan: AccTransferPlan) -> Tuple[List[str], List[str]]:
+class AccStaging(NamedTuple):
+    pre: List[str]
+    post: List[str]
+
+
+def build_acc_staging(plan: AccTransferPlan) -> AccStaging:
     """``(pre_lines, post_lines)`` staging ICON's device-resident arguments
     around the whole wrapper body, mirroring what
     ``scripts/build_icon_dace_libs.render_icon_wrapper`` hand-rolls: drain
@@ -973,10 +984,10 @@ def build_acc_staging(plan: AccTransferPlan) -> Tuple[List[str], List[str]]:
     from dace_fortran.bindings.acc_transfers import render_post_call, render_pre_call, render_sync
 
     if plan is None or not plan.active:
-        return [], []
+        return AccStaging([], [])
     pre = render_sync(plan, _ACC_INDENT) + render_pre_call(plan, _ACC_INDENT)
     post = render_post_call(plan, _ACC_INDENT) + render_sync(plan, _ACC_INDENT)
-    return pre, post
+    return AccStaging(pre, post)
 
 
 def splice_acc_staging(blocks: Dict[str, str], entry: str, plan: AccTransferPlan) -> Dict[str, str]:
@@ -1127,9 +1138,14 @@ def _is_default_logical(fortran_type: str) -> bool:
     return False
 
 
-def _build_logical_bridges(
-    frozen: FrozenSignature, iface: OriginalInterface
-) -> tuple[List[str], List[str], List[str], Dict[str, str]]:
+class LogicalBridges(NamedTuple):
+    declarations: List[str]
+    copy_in: List[str]
+    copy_out: List[str]
+    name_override: Dict[str, str]
+
+
+def _build_logical_bridges(frozen: FrozenSignature, iface: OriginalInterface) -> LogicalBridges:
     """Emit scratch buffers + entry/exit copies for a LOGICAL outer dummy the SDFG
     sees as bool: the wrapper's 4-byte logical would corrupt a bool* read, so a
     logical(c_bool) scratch bridges via Fortran's intrinsic kind-conversion.
@@ -1188,16 +1204,40 @@ def _build_logical_bridges(
             name_override[fa.sdfg_name] = scratch
             continue
 
-    return decl_lines, copy_in_lines, copy_out_lines, name_override
+    return LogicalBridges(decl_lines, copy_in_lines, copy_out_lines, name_override)
 
 
 _OFFSET_SYM_RE = re.compile(r"^offset_(.+)_d(\d+)$")
 _EXTENT_SYM_RE = re.compile(r"^(.+)_d(\d+)$")
 
 
-def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str, str, int]]:
+class ExtentQuery(Enum):
+    """The Fortran intrinsic that reads an array's lower bound or extent."""
+
+    LBOUND = "lbound"
+    SIZE = "size"
+
+
+class IntrinsicExtent(NamedTuple):
+    query: ExtentQuery
+    array: str
+    dim: int
+
+
+class ArrayExtent(NamedTuple):
+    array: str
+    dim: int
+
+
+class OrphanModuleArg(NamedTuple):
+    arg: FrozenArg
+    module: str
+    entity: str
+
+
+def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[IntrinsicExtent]:
     """Map a free SDFG symbol to the Fortran intrinsic that populates it:
-    offset_<arr>_d<i> -> ("lbound", expr, i+1); <arr>_d<i> -> ("size", expr, i+1).
+    offset_<arr>_d<i> -> LBOUND of dim i+1; <arr>_d<i> -> SIZE of dim i+1.
     None when sym isn't an offset/extent of a known array arg."""
     by_sdfg = {a.sdfg_name: a for a in frozen.args}
 
@@ -1210,17 +1250,17 @@ def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str
     m = _OFFSET_SYM_RE.match(sym)
     if m:
         e = _expr(m.group(1))
-        return ("lbound", e, int(m.group(2)) + 1) if e else None
+        return IntrinsicExtent(ExtentQuery.LBOUND, e, int(m.group(2)) + 1) if e else None
     m = _EXTENT_SYM_RE.match(sym)
     if m:
         e = _expr(m.group(1))
-        return ("size", e, int(m.group(2)) + 1) if e else None
+        return IntrinsicExtent(ExtentQuery.SIZE, e, int(m.group(2)) + 1) if e else None
     return None
 
 
 def _sym_from_array_extent(
     sym: str, frozen: FrozenSignature, exclude: Container[str] | None = None
-) -> Optional[Tuple[str, int]]:
+) -> Optional[ArrayExtent]:
     """A free symbol that's a NAMED extent of an array arg (e.g. n_zlev is dim 2 of
     vn(nproma, n_zlev, nblks_e)). Must take precedence over a same-named module
     global: ICON's n_zlev is unset (0) in an extracted kernel, and using it would
@@ -1236,7 +1276,7 @@ def _sym_from_array_extent(
         if sym in shape:
             expr = a.from_struct_member or a.fortran_name
             if expr:
-                return (expr, shape.index(sym) + 1)
+                return ArrayExtent(expr, shape.index(sym) + 1)
     return None
 
 
@@ -1263,7 +1303,7 @@ def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
 
 def effective_module_sources(
     frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan | None = None
-) -> Dict[str, Tuple[str, str]]:
+) -> Dict[str, ModuleOrigin]:
     """Merge bridge-auto-detected module-global provenance (the primary source,
     FrozenSignature.module_symbol_origins) with the flatten plan's synthetic-global
     side table and hand-authored iface.module_symbol_sources, which wins on conflict
@@ -1273,23 +1313,21 @@ def effective_module_sources(
     not exist (``_QM<mod>E<entity>_<member>`` reads as a variable named
     ``<entity>_<member>``), so the side table's ``(module, entity)`` must displace the
     bridge's decode -- the ``%<member>`` step is applied by :func:`_module_value_expr`."""
-    merged: Dict[str, Tuple[str, str]] = dict(frozen.module_symbol_origins)
+    merged: Dict[str, ModuleOrigin] = dict(frozen.module_symbol_origins)
     for s in plan.synthetic_globals if plan is not None else ():
-        merged[s.sdfg_name] = (s.module, s.entity)
+        merged[s.sdfg_name] = ModuleOrigin(s.module, s.entity)
     merged.update(iface.module_symbol_sources)  # explicit override wins
     return merged
 
 
-def _orphan_module_args(
-    frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan
-) -> List[Tuple[FrozenArg, str, str]]:
+def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> List[OrphanModuleArg]:
     """SDFG args that are neither an outer dummy, flat companion, nor extent/offset
     symbol -- Fortran module globals the kernel reads directly (ICON's nrdmax,
-    i_am_accel_node, timer handles). Returns (FrozenArg, module, member) tuples."""
+    i_am_accel_node, timer handles)."""
     sources = effective_module_sources(frozen, iface, plan)
     dummy = {a.name for a in iface.args}
     flat = {f for e in plan.entries for f in e.recipe.flat_names}
-    out = []
+    out: List[OrphanModuleArg] = []
     for a in frozen.args:
         n = a.sdfg_name
         if n in dummy or n in flat:
@@ -1300,7 +1338,7 @@ def _orphan_module_args(
             continue
         src = sources.get(n)
         if src is not None:
-            out.append((a, src[0], src[1]))
+            out.append(OrphanModuleArg(a, src.module, src.entity))
     return out
 
 
@@ -1449,7 +1487,14 @@ def _recipe_presence_guard(iface: OriginalInterface, recipe: FlattenRecipe) -> s
     return _entry_presence_guard(iface, strip_index_args(recipe.read_exprs[0]))
 
 
-def _aos_loop_pieces(a: FrozenArg) -> tuple[List[str], List[str], int, str]:
+class AosLoopPieces(NamedTuple):
+    loop_vars: List[str]
+    cap_vars: List[str]
+    member_rank: int
+    accessor: str
+
+
+def _aos_loop_pieces(a: FrozenArg) -> AosLoopPieces:
     """Per-outer-dim loop vars / per-member-dim cap-var names + host element
     accessor for an AoS-component arg. aos_outer_rank == N: N element-index loop
     vars are the SoA buffer's LEADING dims, matching the bridge's
@@ -1458,13 +1503,13 @@ def _aos_loop_pieces(a: FrozenArg) -> tuple[List[str], List[str], int, str]:
     base = a.sdfg_name
     member_rank = a.rank - a.aos_outer_rank
     if a.aos_outer_rank == 0:
-        return [], [], member_rank, f"{a.aos_origin_struct}%{a.aos_member_path}"
+        return AosLoopPieces([], [], member_rank, f"{a.aos_origin_struct}%{a.aos_member_path}")
     # Fortran identifiers must start with a letter (no leading ``_``).
     its = [f"aos_{base}_i{k}" for k in range(a.aos_outer_rank)]
     caps = [f"aos_{base}_c{j}" for j in range(member_rank)]
     # member_path is %-joined (k / x / a%b): becxx(i0)%k / p_diag%p_vn_dual(i0,i1,i2)%x
     elem = f"{a.aos_origin_struct}({', '.join(its)})%{a.aos_member_path}"
-    return its, caps, member_rank, elem
+    return AosLoopPieces(its, caps, member_rank, elem)
 
 
 def _aos_member_is_static(a: FrozenArg) -> bool:
@@ -1646,7 +1691,12 @@ def _render_aos_copy_out(a: FrozenArg) -> List[str]:
     return out
 
 
-def _struct_member_symbol_sources(iface: OriginalInterface) -> Tuple[Dict[str, str], Dict[str, str]]:
+class MemberSymbolSources(NamedTuple):
+    sources: Dict[str, str]
+    member_paths: Dict[str, str]
+
+
+def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSources:
     """Map a struct dummy's member free-symbol to the Fortran expr that reads it.
     A symbolic-only member (loop bound / array extent) gets no FlattenEntry, so this
     rebuilds its name from the static struct_types layout. Bridge naming (``%``->``_``,
@@ -1684,7 +1734,7 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Tuple[Dict[str, s
             st = iface.struct_types.get(a.struct_type)
             if st is not None:
                 walk(st, a.name, a.name)
-    return sources, member_paths
+    return MemberSymbolSources(sources, member_paths)
 
 
 def _build_symbol_assigns(
@@ -1812,11 +1862,11 @@ def _build_symbol_assigns(
         # assumed-shape / non-default-lower-bound dummies).
         intr = _sym_from_intrinsic(sym, frozen)
         if intr is not None:
-            fn, expr, dim = intr
+            query, expr, dim = intr
             guard = optional_array_guards.get((expr or "").lower(), "")
             # Absent: extent 1 / lower bound 1, matching the degenerate local the
             # wrapper aliases the absent optional onto.
-            out.extend(_guarded_assign(sym, f"{fn}({expr}, dim={dim})", guard, absent="1"))
+            out.extend(_guarded_assign(sym, f"{query.value}({expr}, dim={dim})", guard, absent="1"))
             continue
         # A NAMED array extent must beat the module-global fallback below: the SDFG
         # sized its transients by this symbol, so it must equal the actual

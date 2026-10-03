@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 import math
 import re
-from typing import TYPE_CHECKING, Any, Sequence, TypeVar, cast
+from typing import Any, NamedTuple, Sequence, TYPE_CHECKING, TypeVar, cast
 
 import dace.symbolic
 from dace import dtypes, InterstateEdge, Memlet
@@ -423,7 +423,12 @@ def resolve_mpi_op(opname: str) -> str:
     )
 
 
-def query_target(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, str | None]:
+class QueryTarget(NamedTuple):
+    data: str
+    symbol: str | None
+
+
+def query_target(builder: SDFGBuilder, ctx: Ctx, name: str) -> QueryTarget:
     """Pick the data name an ``MPI_Comm_rank`` / ``_size`` result writes into.
 
     Normally the Fortran integer itself.  But when that integer goes on to drive a branch
@@ -435,10 +440,10 @@ def query_target(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, str | 
     Returns ``(target_name, symbol_to_bind)``, where the symbol is ``None`` in the plain case.
     """
     if name in ctx.sdfg.arrays or name not in ctx.sdfg.symbols:
-        return name, None
+        return QueryTarget(name, None)
     backing = f"__{name}_query_{builder.nid()}"
     ctx.sdfg.add_array(backing, [1], dace.int32, transient=True)
-    return backing, name
+    return QueryTarget(backing, name)
 
 
 def bind_query_symbol(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, backing: str, sym: str | None) -> None:

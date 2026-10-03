@@ -44,7 +44,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Iterator, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, NamedTuple, Sequence, Tuple
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two import Fortran2003 as f03
@@ -199,10 +199,15 @@ def _routine_node(ast: f03.Program, routine: str) -> f03.Base:
     raise ValueError(f"routine {routine!r} not found in source")
 
 
-def _node_span(node: f03.Base) -> Tuple[int, int]:
+class LineSpan(NamedTuple):
+    first: int
+    last: int
+
+
+def _node_span(node: f03.Base) -> LineSpan:
     """1-based (first, last) source line of ``node``'s subtree."""
     spans = [n.item.span for n in walk(node) if getattr(n, "item", None) is not None]
-    return min(s[0] for s in spans), max(s[1] for s in spans)
+    return LineSpan(min(s[0] for s in spans), max(s[1] for s in spans))
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +237,12 @@ class _Logical:
         return self.line
 
 
-def _sentinel_body(line: str) -> Tuple[str, bool]:
+class SentinelBody(NamedTuple):
+    text: str
+    continued: bool
+
+
+def _sentinel_body(line: str) -> SentinelBody:
     """The directive text of one physical ``!$acc`` line, plus its continues-flag."""
     match = _ACC_SENTINEL_RE.match(line)
     if match is None:
@@ -244,7 +254,7 @@ def _sentinel_body(line: str) -> Tuple[str, bool]:
     body = body.strip()
     if body.startswith("&"):
         body = body[1:].strip()
-    return body, continued
+    return SentinelBody(body, continued)
 
 
 def acc_directives(source: str) -> List[_Logical]:
@@ -277,7 +287,18 @@ def _head(text: str) -> str:
     return words[0].lower()
 
 
-def _clause_entities(text: str, start: int, end: int) -> List[Tuple[str, str, int]]:
+class ClauseEntity(NamedTuple):
+    base: str
+    ref: str
+    offset: int
+
+
+class Clause(NamedTuple):
+    name: str
+    entities: List[ClauseEntity]
+
+
+def _clause_entities(text: str, start: int, end: int) -> List[ClauseEntity]:
     """``(base_name, full_ref, offset)`` per comma-separated clause item.
 
     An item is a variable reference: plain name, component path (``a%b%c``),
@@ -286,7 +307,8 @@ def _clause_entities(text: str, start: int, end: int) -> List[Tuple[str, str, in
     removed.  Items that do not start with an identifier (e.g. a ``*``) are
     skipped.
     """
-    out, depth, token_start = [], 0, start
+    out: List[ClauseEntity] = []
+    depth, token_start = 0, start
     for i in range(start, end + 1):
         ch = text[i] if i < end else ","
         if ch == "(":
@@ -298,12 +320,12 @@ def _clause_entities(text: str, start: int, end: int) -> List[Tuple[str, str, in
             match = _IDENT_RE.match(item)
             if match is not None:
                 ref = re.sub(r"\s+", "", item)
-                out.append((match.group(1).lower(), ref, token_start + match.start(1)))
+                out.append(ClauseEntity(match.group(1).lower(), ref, token_start + match.start(1)))
             token_start = i + 1
     return out
 
 
-def _clauses(logical: _Logical) -> Iterator[Tuple[str, List[Tuple[str, str, int]]]]:
+def _clauses(logical: _Logical) -> Iterator[Clause]:
     """Yield ``(clause_name, [(base, ref, offset), ...])`` for one directive."""
     text, i = logical.text, 0
     while True:
@@ -317,7 +339,7 @@ def _clauses(logical: _Logical) -> Iterator[Tuple[str, List[Tuple[str, str, int]
             elif text[j] == ")":
                 depth -= 1
             j += 1
-        yield match.group(1).lower(), _clause_entities(text, match.end(), j - 1)
+        yield Clause(match.group(1).lower(), _clause_entities(text, match.end(), j - 1))
         i = j
 
 

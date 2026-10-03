@@ -43,7 +43,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union, cast
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union, cast
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -510,7 +510,12 @@ def _module_name_of_use(use: f03.Use_Stmt) -> Optional[str]:
     return nm.string.lower() if nm else None
 
 
-def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]) -> Tuple[Set[str], Set[str]]:
+class VisibleNames(NamedTuple):
+    bound: Set[str]
+    whole_use_modules: Set[str]
+
+
+def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]) -> VisibleNames:
     """Names already bound in ``scope`` that must NOT be re-imported / shadowed,
     plus the set of modules ``scope`` imports *whole* (``USE x`` with no
     ``ONLY:``, which brings in every public name of ``x``).
@@ -542,7 +547,7 @@ def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part
             nm = next(iter(children_of_type(ent, f03.Name)), None)
             if nm:
                 visible.add(nm.string.lower())
-    return visible, whole_use_mods
+    return VisibleNames(visible, whole_use_mods)
 
 
 def _prepend_use(scope: Base, clause: str) -> None:
@@ -1270,7 +1275,12 @@ _ACC_MARKER_CALL_RE = re.compile(rf"^\s*CALL\s+{_ACC_MARKER_STEM}(\d+)\s*$", re.
 _ACC_SPEC_PART_HEADS = frozenset({"declare", "routine"})
 
 
-def encode_acc_directives(src_map: Dict[str, str]) -> Tuple[Dict[str, str], Dict[int, List[str]]]:
+class EncodedAccDirectives(NamedTuple):
+    sources: Dict[str, str]
+    directives: Dict[int, List[str]]
+
+
+def encode_acc_directives(src_map: Dict[str, str]) -> EncodedAccDirectives:
     """Replace each logical ``!$acc`` directive (continuations joined) with a
     ``CALL dace_acc_dirmark_<n>`` marker statement, returning the rewritten
     sources and the ``{n: [original lines]}`` table :func:`decode_acc_directives`
@@ -1312,7 +1322,7 @@ def encode_acc_directives(src_map: Dict[str, str]) -> Tuple[Dict[str, str], Dict
             out.append(f"{indent}CALL {_ACC_MARKER_STEM}{counter}")
             counter += 1
         out_map[name] = "\n".join(out) + ("\n" if text.endswith("\n") else "")
-    return out_map, table
+    return EncodedAccDirectives(out_map, table)
 
 
 def decode_acc_directives(text: str, table: Dict[int, List[str]]) -> str:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import TYPE_CHECKING, Any, Callable, Container, Iterator, Sequence, overload
+from typing import TYPE_CHECKING, Any, Callable, Container, Iterator, NamedTuple, Sequence
 
 from dace_fortran.builder.records import AccessLike, ComplexAliasSpec, NodeLike, SyntheticAccess, SyntheticVar
 
@@ -26,7 +26,13 @@ if TYPE_CHECKING:
 _INDIRECTION_GIDS = itertools.count()
 
 
-def iter_view_dim_map(view_dim_map: Sequence[str]) -> Iterator[tuple[int, str, int | None]]:
+class ViewDim(NamedTuple):
+    src_dim: int
+    slot: str
+    dummy_dim: int | None
+
+
+def iter_view_dim_map(view_dim_map: Sequence[str]) -> Iterator[ViewDim]:
     """Decode one ``section_alias`` ``view_dim_map`` entry: ``"_d<N>"`` =
     surviving dim (dummy-dim index N), else a dropped scalar's 1-based
     Fortran expr. Yields ``(src_dim, slot, dummy_dim | None)``; callers
@@ -40,9 +46,9 @@ def iter_view_dim_map(view_dim_map: Sequence[str]) -> Iterator[tuple[int, str, i
                 dummy_dim = int(slot[2:])
             except ValueError:
                 dummy_dim = src_dim
-            yield src_dim, slot, dummy_dim
+            yield ViewDim(src_dim, slot, dummy_dim)
         else:
-            yield src_dim, slot, None
+            yield ViewDim(src_dim, slot, None)
 
 
 def resolve_object_member(builder: SDFGBuilder, name: str) -> str | None:
@@ -107,23 +113,12 @@ def resolve_object_member_expr(builder: SDFGBuilder, expr: str) -> str:
     return re.sub(r"\b[A-Za-z_]\w*\b", _repl, expr)
 
 
-@overload
-def resolve_section_alias(builder: SDFGBuilder, array_name: str, access: AccessLike) -> tuple[str, AccessLike]: ...
+class AliasResolution(NamedTuple):
+    name: str
+    access: AccessLike
 
 
-@overload
-def resolve_section_alias(builder: SDFGBuilder, array_name: str, access: None) -> tuple[str, None]: ...
-
-
-@overload
-def resolve_section_alias(
-    builder: SDFGBuilder, array_name: str, access: AccessLike | None
-) -> tuple[str, AccessLike | None]: ...
-
-
-def resolve_section_alias(
-    builder: SDFGBuilder, array_name: str, access: AccessLike | None
-) -> tuple[str, AccessLike | None]:
+def resolve_section_alias(builder: SDFGBuilder, array_name: str, access: AccessLike) -> AliasResolution:
     """If ``array_name`` is a trivial ``section_alias`` slice (full-range
     triplets + scalar drops only), return ``(source_name, spliced_access)``
     with the source's index list spliced via ``view_dim_map``; otherwise
@@ -134,13 +129,11 @@ def resolve_section_alias(
     # indices unchanged (same rank/shape), only descriptor name/offset symbols differ.
     obj_real = resolve_object_member(builder, array_name)
     if obj_real is not None:
-        return obj_real, access
+        return AliasResolution(obj_real, access)
     v = builder.arrays.get(array_name)
     if v is None or v.role != "section_alias":
-        return array_name, access
+        return AliasResolution(array_name, access)
     src = v.view_source
-    if access is None:
-        return src, access
     dummy_exprs = list(access.index_exprs or [])
     dummy_vars = list(access.index_vars or [])
     new_exprs, new_vars = [], []
@@ -158,7 +151,7 @@ def resolve_section_alias(
         index_exprs=new_exprs,
         index_vars=new_vars,
     )
-    return src, spliced
+    return AliasResolution(src, spliced)
 
 
 def resolve_full_dim_markers(view_subset: Sequence[str], src_shape: Sequence[Any]) -> list[str]:
@@ -478,9 +471,16 @@ def deref_len1_array_scalars(sdfg: SDFG, expr: str) -> str:
     return "".join(out)
 
 
+class ArraySubscript(NamedTuple):
+    start: int
+    end: int
+    array: str
+    parts: list[str]
+
+
 def find_array_subscripts(
     expr: str, names: Container[str], resolver: Callable[[str], str | None] | None = None
-) -> Iterator[tuple[int, int, str, list[str]]]:
+) -> Iterator[ArraySubscript]:
     """Generator yielding ``(start, end, arr_name, parts)`` for each
     top-level ``<arr>[...]`` substring in ``expr`` whose ``<arr>`` is in
     ``names`` or resolves (via ``resolver``) to an array.  Walks
@@ -531,7 +531,7 @@ def find_array_subscripts(
                 parts.append(inner[sp:k].strip())
                 sp = k + 1
         parts.append(inner[sp:].strip())
-        yield (start, j + 1, resolved, parts)
+        yield ArraySubscript(start, j + 1, resolved, parts)
         i = j + 1
 
 
@@ -544,7 +544,12 @@ def indirect_host(expr: str) -> str:
     return m.group(1) if m and expr.endswith("]") else ""
 
 
-def indirect_exprs(builder: SDFGBuilder, a: NodeLike) -> list[tuple[str, str]]:
+class IndirectExpr(NamedTuple):
+    subscript: str
+    array: str
+
+
+def indirect_exprs(builder: SDFGBuilder, a: NodeLike) -> list[IndirectExpr]:
     """The *inline* indirect index expressions assign ``a`` reads, as
     ``(expression, source array)`` pairs, innermost-first and deduplicated.
 
@@ -552,7 +557,7 @@ def indirect_exprs(builder: SDFGBuilder, a: NodeLike) -> list[tuple[str, str]]:
     indirection level.  Innermost-first is what lets a caller materialise the
     levels in order without forward references.
     """
-    out: list[tuple[str, str]] = []
+    out: list[IndirectExpr] = []
     seen: set[str] = set()
 
     def _visit(expr: str) -> None:
@@ -574,7 +579,7 @@ def indirect_exprs(builder: SDFGBuilder, a: NodeLike) -> list[tuple[str, str]]:
             sub = expr[start:end]
             if sub not in seen:
                 seen.add(sub)
-                out.append((sub, arr))
+                out.append(IndirectExpr(sub, arr))
 
     for ac in a.accesses:
         for expr in ac.index_exprs or []:

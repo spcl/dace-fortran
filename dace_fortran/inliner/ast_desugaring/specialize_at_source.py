@@ -30,7 +30,7 @@ inliners to a fixpoint).
 """
 
 import re
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union
 
 import logging
 
@@ -144,9 +144,12 @@ def _optional_dummy_names(callee_spec: Optional[f03.Base], dummies: Set[str]) ->
     return opt
 
 
-def _bind_actuals_to_dummies(
-    call: f03.Call_Stmt, dummies: List[str], optionals: Set[str]
-) -> Optional[Tuple[Dict[str, str], Set[str]]]:
+class DummyBinding(NamedTuple):
+    present: Dict[str, str]
+    absent: Set[str]
+
+
+def _bind_actuals_to_dummies(call: f03.Call_Stmt, dummies: List[str], optionals: Set[str]) -> Optional[DummyBinding]:
     """Map each dummy to its actual argument text at ``call``, classifying omitted
     optionals as ABSENT.
 
@@ -180,7 +183,7 @@ def _bind_actuals_to_dummies(
             # A forwarded optional that was itself omitted upstream.
             del present[dl]
             absent.add(dl)
-    return present, absent
+    return DummyBinding(present, absent)
 
 
 def _statically_present(
@@ -347,7 +350,12 @@ def _fold_logical_literal_locals(exec_text: str) -> str:
     return _subst("\n".join(kept), const)
 
 
-def _reparse_fragment(uses: List[str], decls: List[str], exec_text: str) -> Tuple[List[f03.Base], List[f03.Base]]:
+class ReparsedFragment(NamedTuple):
+    specification: List[f03.Base]
+    execution: List[f03.Base]
+
+
+def _reparse_fragment(uses: List[str], decls: List[str], exec_text: str) -> ReparsedFragment:
     """Reparse a substituted body fragment (carried USEs + renamed local decls +
     substituted executable text) and return ``(spec_children, exec_children)``."""
     # An omitted optional makes ``PRESENT(it)`` fold to ``.FALSE.`` and ``PRESENT`` of
@@ -374,7 +382,7 @@ def _reparse_fragment(uses: List[str], decls: List[str], exec_text: str) -> Tupl
     expart = next(iter(children_of_type(sub, f03.Execution_Part)), None)
     spec_children = list(spec.children) if spec is not None else []
     exec_children = list(expart.children) if expart is not None else []
-    return spec_children, exec_children
+    return ReparsedFragment(spec_children, exec_children)
 
 
 def _fragment_has_absent(frag_spec: List[f03.Base], frag_exec: List[f03.Base]) -> bool:
@@ -707,7 +715,12 @@ def inline_named_subprograms(ast: f03.Program, targets: Iterable[str]) -> int:
     return inlined
 
 
-def specialize_at_source(ast: f03.Program, targets: Iterable[str]) -> Tuple[int, int]:
+class SpecializedCounts(NamedTuple):
+    subprograms: int
+    functions: int
+
+
+def specialize_at_source(ast: f03.Program, targets: Iterable[str]) -> SpecializedCounts:
     """Specialize every call to a ``targets`` procedure to its call site by
     inlining its body (SUBROUTINE calls and FUNCTION references both), so the
     call-site-constant arguments fold the body.  Returns ``(n_subprograms,
@@ -729,4 +742,4 @@ def specialize_at_source(ast: f03.Program, targets: Iterable[str]) -> Tuple[int,
         logger.warning(
             "specialize_at_source: %d TARGET call(s) NOT inlined (will block lowering): %s", len(survivors), survivors
         )
-    return n_sub, n_fun
+    return SpecializedCounts(n_sub, n_fun)

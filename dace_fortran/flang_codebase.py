@@ -16,7 +16,7 @@ import tarfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .llvm_toolchain import require_flang
 from .preprocess import merge_used_modules
@@ -332,6 +332,11 @@ def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str
 # ---------------------------------------------------------------------------
 
 
+class TranslationUnit(NamedTuple):
+    source: str
+    flags: List[str]
+
+
 def prepare_flang_translation_unit(
     entry_source: str,
     *,
@@ -342,7 +347,7 @@ def prepare_flang_translation_unit(
     include_dirs: Sequence[Path] = (),
     cache_dir: Optional[Path] = None,
     openmpi_include: Optional[str] = None,
-) -> Tuple[str, List[str]]:
+) -> TranslationUnit:
     """Stitch a flang-ready translation unit from a real-world Fortran
     codebase.  Composes four steps:
 
@@ -402,7 +407,7 @@ def prepare_flang_translation_unit(
         except KeyError as e:
             raise KeyError(f"unknown flang patch {name!r}; available: {sorted(FLANG_BUG_PATCHES)}") from e
 
-    return source, flags
+    return TranslationUnit(source, flags)
 
 
 # ---------------------------------------------------------------------------

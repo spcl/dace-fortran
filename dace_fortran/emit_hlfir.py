@@ -33,7 +33,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from dace_fortran.entry_names import split_qualified_entry
 from dace_fortran.llvm_toolchain import require_flang
@@ -174,12 +174,17 @@ _SUBR_DEF_RE = re.compile(
 )
 
 
-def _scan_subroutine_defs(text: str) -> List[Tuple[str, Optional[str]]]:
+class ResolvedEntry(NamedTuple):
+    proc: str
+    module: Optional[str]
+
+
+def _scan_subroutine_defs(text: str) -> List[ResolvedEntry]:
     """``[(subroutine_lower, enclosing_module_lower_or_None), ...]`` for the
     subroutine *definitions* in ``text``.  Tracks ``MODULE`` / ``END MODULE``
     for the qualifier and skips ``INTERFACE`` blocks (those are declarations,
     not definitions)."""
-    defs = []
+    defs: List[ResolvedEntry] = []
     mod = None
     in_iface = False
     for raw in text.splitlines():
@@ -201,11 +206,11 @@ def _scan_subroutine_defs(text: str) -> List[Tuple[str, Optional[str]]]:
             continue
         sm = _SUBR_DEF_RE.match(line)
         if sm:
-            defs.append((sm.group(1).lower(), mod))
+            defs.append(ResolvedEntry(sm.group(1).lower(), mod))
     return defs
 
 
-def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tuple[str, Optional[str]]:
+def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> ResolvedEntry:
     """``(proc, module_or_None)`` for a Fortran entry, scanning ``sources``
     for the subroutine definition.
 
@@ -231,10 +236,10 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tupl
         m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) or re.match(
             r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE
         )
-        return (m.group(1).lower() if m else name), mod
+        return ResolvedEntry((m.group(1).lower() if m else name), mod)
     want_mod, want_proc = split_qualified_entry(name)
 
-    matches = set()
+    matches: set[ResolvedEntry] = set()
     for src in sources:
         # Each source is a file path (read it) or already-inline source text
         # (tier-1 passes the kernel string straight through).
@@ -244,7 +249,7 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Tupl
             text = str(src)
         for proc, mod in _scan_subroutine_defs(text):
             if proc == want_proc and (want_mod is None or mod == want_mod):
-                matches.add((proc, mod))
+                matches.add(ResolvedEntry(proc, mod))
     if not matches:
         raise ValueError(f"resolve_entry: no subroutine {name!r} found in the sources")
     if len(matches) > 1:

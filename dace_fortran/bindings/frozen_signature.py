@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, NamedTuple, Optional, Tuple, cast
 
 import dace
 from dace.data import Data
@@ -36,6 +36,13 @@ DEVICE_STORAGE_PREFIX = "GPU_"
 class SignatureDriftError(RuntimeError):
     """Raised when the live SDFG's arglist / free_symbols disagrees with
     a ``FrozenSignature`` attached to it."""
+
+
+class ModuleOrigin(NamedTuple):
+    """The module and entity a module-global SDFG name reads."""
+
+    module: str
+    entity: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +148,7 @@ class FrozenSignature:
     # outer dummies.  Maps sdfg_name -> (module, entity).  Binding emitter
     # merges with hand-authored OriginalInterface.module_symbol_sources
     # (explicit map wins on conflict).
-    module_symbol_origins: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    module_symbol_origins: Dict[str, ModuleOrigin] = field(default_factory=dict)
     # Integer communicator dummy the wrapper feeds (via MPI_Comm_f2c +
     # MPI_Comm_size) into __user_comm/__user_comm_size at dace_init_<entry>
     # time.  None if no runtime MPI comm.
@@ -173,7 +180,7 @@ class FrozenSignature:
             args=tuple(FrozenArg.from_dict(a) for a in d["args"]),
             free_symbols=tuple(d.get("free_symbols", [])),
             schema_version=d.get("schema_version", 1),
-            module_symbol_origins={k: tuple(v) for k, v in d.get("module_symbol_origins", {}).items()},
+            module_symbol_origins={k: ModuleOrigin(*v) for k, v in d.get("module_symbol_origins", {}).items()},
             user_comm_source=d.get("user_comm_source"),
         )
 

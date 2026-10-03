@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import TYPE_CHECKING, Sequence
+from typing import NamedTuple, Sequence, TYPE_CHECKING
 
 import dace
 from dace import InterstateEdge
@@ -1022,6 +1022,11 @@ def emit_loop(
                 _emit_one(prev, a, idx)
 
 
+class StagedCondition(NamedTuple):
+    state: SDFGState
+    expr: str
+
+
 def _stage_cond_scalar(
     builder: SDFGBuilder,
     ctx: Ctx,
@@ -1030,7 +1035,7 @@ def _stage_cond_scalar(
     sym: str,
     cond: str,
     cond_accesses: list[AccessLike],
-) -> tuple[SDFGState, str]:
+) -> StagedCondition:
     """Compute an array-dependent control-flow condition into a SCALAR
     transient via a tasklet; return ``(new_pre_state, scalar_name)``.
 
@@ -1051,7 +1056,7 @@ def _stage_cond_scalar(
     ctx.cur = nxt
     synth = SyntheticNode(kind="assign", target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
     emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
-    return nxt, sym
+    return StagedCondition(nxt, sym)
 
 
 def emit_while(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:
@@ -1131,7 +1136,7 @@ def emit_while(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlo
 
 def _prepare_cond_expr(
     builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, pre: SDFGState, n: NodeLike
-) -> tuple[SDFGState, str]:
+) -> StagedCondition:
     """Return ``(pre_state, cond_expr)`` for a single ``conditional`` branch.
 
     Staging for one branch of ``emit_cond``: section-alias rewriting, scalar-output subscripting, tasklet-lifting for
@@ -1148,7 +1153,7 @@ def _prepare_cond_expr(
                 cond = re.sub(rf"\b{re.escape(nm)}\b", f"{nm}[0]", cond)
 
     if _is_trivial_bound(cond, builder):
-        return pre, cond
+        return StagedCondition(pre, cond)
 
     cond_accesses = []
     if accesses:
@@ -1191,7 +1196,7 @@ def _prepare_cond_expr(
             pre = nxt
             ctx.cur = nxt
             cond = sym
-    return pre, cond
+    return StagedCondition(pre, cond)
 
 
 def emit_cond(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:

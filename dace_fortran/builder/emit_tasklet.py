@@ -10,7 +10,7 @@ is the predicate ``emit_assign`` uses to pick between them.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Container, Sequence
+from typing import Container, NamedTuple, Sequence, TYPE_CHECKING
 
 from dace import Memlet
 
@@ -53,7 +53,13 @@ def _is_len1_scalar_view(builder: SDFGBuilder, nm: str) -> bool:
     return a is not None and a.role == "view_alias" and list(a.shape_symbols) == ["1"]
 
 
-def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tuple[str, str, str] | None:
+class ViewLink(NamedTuple):
+    source: str
+    source_subset: str
+    view_subset: str
+
+
+def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> ViewLink | None:
     """Resolve ``(src, src_subset, view_subset)`` for a View ``target``'s source
     linking memlet, or ``None`` if not a View.  Normalises all three View flavours
     (complex-component alias, ``bounds_remap_view``, plain ``view_alias``) so the
@@ -89,7 +95,7 @@ def _view_link_spec(builder: SDFGBuilder, state: SDFGState, target: str) -> tupl
         src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
     view_dims = [str(d) for d in state.parent.arrays[target].shape]
     view_subset = ", ".join(f"0:{d}" for d in view_dims)
-    return src, src_subset, view_subset
+    return ViewLink(src, src_subset, view_subset)
 
 
 def ensure_view_writeback_link(builder: SDFGBuilder, state: SDFGState, write_node: AccessNode, target: str) -> None:

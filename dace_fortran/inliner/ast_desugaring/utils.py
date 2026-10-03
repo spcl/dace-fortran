@@ -6,7 +6,7 @@ from __future__ import annotations
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from copy import deepcopy
-from typing import Union, Tuple, Optional, List, Iterable
+from typing import Iterable, List, NamedTuple, Optional, Tuple, Union
 
 from fparser.api import get_reader
 import fparser.two.Fortran2003 as f03
@@ -229,14 +229,16 @@ def copy_fparser_node(n: Base) -> Base:
         return deepcopy(n)
 
 
+class ModuleParts(NamedTuple):
+    stmt: Union[f03.Module_Stmt, f03.Program_Stmt]
+    spec: Optional[f03.Specification_Part]
+    execution: Optional[f03.Execution_Part]
+    subprograms: Optional[f03.Module_Subprogram_Part]
+
+
 def get_module_or_program_parts(
     mod: Union[f03.Module, f03.Main_Program],
-) -> Tuple[
-    Union[f03.Module_Stmt, f03.Program_Stmt],
-    Optional[f03.Specification_Part],
-    Optional[f03.Execution_Part],
-    Optional[f03.Module_Subprogram_Part],
-]:
+) -> ModuleParts:
     """Splits a Module/Main_Program node into (stmt, spec_part, exec_part, subprogram_part)."""
     # A module/program statement must exist.
     stmt = ast_utils.singular(
@@ -248,4 +250,4 @@ def get_module_or_program_parts(
     assert len(exparts) <= 1, f"A module/program cannot have more than one execution parts, found {exparts} in {mod}"
     subps = list(ast_utils.children_of_type(mod, f03.Module_Subprogram_Part))
     assert len(subps) <= 1, f"A module/program cannot have more than one subprogram parts, found {subps} in {mod}"
-    return stmt, specs[0] if specs else None, exparts[0] if exparts else None, subps[0] if subps else None
+    return ModuleParts(stmt, specs[0] if specs else None, exparts[0] if exparts else None, subps[0] if subps else None)

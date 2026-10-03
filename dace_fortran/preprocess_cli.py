@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, NamedTuple, Sequence
 
 from dace_fortran.preprocess import (
     merge_used_modules,
@@ -141,7 +141,12 @@ def _parse_kind_map(items: Iterable[str] | None) -> dict[str, int | None]:
     return out
 
 
-def _apply_passes(source: str, args: argparse.Namespace) -> tuple[str, dict]:
+class PassResult(NamedTuple):
+    source: str
+    enum_maps: dict
+
+
+def _apply_passes(source: str, args: argparse.Namespace) -> PassResult:
     """Apply the requested passes (in canonical order) to one source
     string.  Returns ``(rewritten_source, enum_maps)``."""
     if args.all_defaults:
@@ -169,7 +174,7 @@ def _apply_passes(source: str, args: argparse.Namespace) -> tuple[str, dict]:
     enum_maps: dict = {}
     if args.rewrite_string_enum:
         source, enum_maps = rewrite_string_enum_to_integer(source)
-    return source, enum_maps
+    return PassResult(source, enum_maps)
 
 
 def _rewrite_inplace(in_path: Path, args: argparse.Namespace) -> dict:

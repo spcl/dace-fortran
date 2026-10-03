@@ -18,6 +18,8 @@ is only needed for a dummy shape the snapshot can't name (e.g.
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
+from dace_fortran.bindings.frozen_signature import ModuleOrigin
+
 # SDFG dtype -> iso_c_binding Fortran type.  bool is the uniform image for
 # any LOGICAL(KIND) (bridge converts kind width at the boundary).  No
 # unsigned entries -- Fortran <2023 has none; flang lowers to signless ints.
@@ -95,7 +97,7 @@ class OriginalInterface:
     # ICON's mo_parallel_config::nproma) rather than a dummy arg.  Maps
     # sym -> (module, member); emitter imports as <sym>__mod => <member>
     # and assigns <sym> = int(<sym>__mod, c_int).  Empty = no-op for flat kernels.
-    module_symbol_sources: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    module_symbol_sources: Dict[str, ModuleOrigin] = field(default_factory=dict)
 
 
 def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
