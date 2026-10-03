@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Tuple
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenRecipe:
     """One recorded unpacking.  Three emitter shapes, by flag combo:
     ``aliasable=True`` zero-copy ``c_f_pointer`` alias;
@@ -104,7 +104,7 @@ class FlattenRecipe:
         return cls(**d)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenEntry:
     """One outer dummy / storage path that was unpacked.
 
@@ -140,7 +140,7 @@ class FlattenEntry:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyntheticGlobal:
     """One scalar struct member ``hlfir-flatten-global-scalar-reads`` lifted
     out of a module-global record into a standalone ``fir.global``.
@@ -185,7 +185,7 @@ class SyntheticGlobal:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FlattenPlan:
     """All unpacks ``hlfir-flatten-structs`` performed for one entry
     subroutine.  One entry per flattened outer dummy; untouched

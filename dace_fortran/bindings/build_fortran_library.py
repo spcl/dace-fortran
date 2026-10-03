@@ -92,7 +92,7 @@ _RELEASE_FLAGS = ("-O3", "-ffast-math")
 _MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
 
-@dataclass
+@dataclass(slots=True)
 class FortranLibrary:
     """A built Fortran-callable shared library: linked ``.so``, its SDFG
     kernel ``.so``, the emitted bindings wrapper, and (if requested) the
@@ -157,7 +157,7 @@ def build_fortran_library(
         raise ValueError(f"unknown mode {mode!r}; expected 'debug', "
                          f"'release', or an explicit flags= list")
 
-    frozen = getattr(sdfg, "_frozen_signature", None)
+    frozen = sdfg._frozen_signature
     if frozen is None:
         raise ValueError("build_fortran_library requires an SDFG built by "
                          "SDFGBuilder.build() (no _frozen_signature attached). "
@@ -171,13 +171,13 @@ def build_fortran_library(
     # Auto-derive when not given, after the drift gate so a drift error
     # surfaces first; iface is built against final ``name`` for symbol match.
     if plan is None:
-        raw = getattr(sdfg, "_flatten_plan_raw", None)
+        raw = sdfg.__dict__.get("_flatten_plan_raw")  # sidecar set by SDFGBuilder.build()
         if raw is None:
             raise ValueError("build_fortran_library: no plan given and the SDFG "
                              "carries no _flatten_plan_raw (build via SDFGBuilder).")
         plan = FlattenPlan.from_dict(raw)
     if iface is None:
-        raw = getattr(sdfg, "_fortran_interface_raw", None)
+        raw = sdfg.__dict__.get("_fortran_interface_raw")  # sidecar set by SDFGBuilder.build()
         if raw is None:
             raise ValueError("build_fortran_library: no iface given and the SDFG "
                              "carries no _fortran_interface_raw (build via SDFGBuilder).")
@@ -189,7 +189,7 @@ def build_fortran_library(
     # Authoritative __program_<entry> arg order comes live from
     # CompiledSDFG._sig (codegen output, transform-dependent -- NOT
     # snapshotted in FrozenSignature).  Empty -> falls back to frozen.args.
-    dace_arglist = tuple(getattr(compiled, "_sig", None) or ())
+    dace_arglist = tuple(compiled._sig or ())
 
     bindings_f90 = out_dir / f"{name}_bindings.f90"
     emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist)

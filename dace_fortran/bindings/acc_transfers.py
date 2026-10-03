@@ -81,7 +81,7 @@ class AccResidencyError(Exception):
     """A sidecar/SDFG residency crossing with no defined emission."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AccResidency:
     """Parsed ``<routine>.acc_residency.json`` sidecar.
 
@@ -136,7 +136,7 @@ class AccResidency:
         return cls.from_dict(raw)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AccTransferPlan:
     """The emission slots of the wrapper, in wrapper-argument order.
 
@@ -162,8 +162,8 @@ class AccTransferPlan:
     @property
     def data_region(self) -> Tuple[Tuple[str, str], ...]:
         """``(clause, name)`` pairs for the ``!$ACC DATA`` region, in emission order."""
-        return tuple(
-            (clause, name) for clause in ('COPYIN', 'COPY', 'COPYOUT') for name in getattr(self, clause.lower()))
+        groups = (('COPYIN', self.copyin), ('COPY', self.copy), ('COPYOUT', self.copyout))
+        return tuple((clause, name) for clause, names in groups for name in names)
 
 
 def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> Tuple[str, ...]:

@@ -309,7 +309,7 @@ def _optional_outer_dummies(frozen: FrozenSignature, iface: OriginalInterface) -
     branches on via <name>_present. Scalars forward through a value local, arrays
     through a contiguous pointer local -- either way the SDFG never sees the outer
     dummy itself, whose storage and descriptor are undefined while absent."""
-    optional_names = {a.name.lower() for a in iface.args if getattr(a, 'optional', False)}
+    optional_names = {a.name.lower() for a in iface.args if a.optional}
     if not optional_names:
         return []
     by_name = {a.name.lower(): a for a in iface.args}
@@ -356,7 +356,7 @@ def build_wrapper_head(frozen: FrozenSignature,
             max_len = max((len(lit) for lit in literals), default=1)
             return (f"    character(len={max_len}),"
                     f" intent({a.intent or 'in'}) :: {a.name}")
-        opt = ", optional" if getattr(a, 'optional', False) else ""
+        opt = ", optional" if a.optional else ""
         attr = "pointer" if a.name in ptr_outer_args else "target"
         return (f"    {a.fortran_type},"
                 f" intent({a.intent or 'inout'}), {attr}{opt} :: {a.name}"
@@ -662,9 +662,9 @@ def build_wrapper_body(frozen: FrozenSignature,
         body.append("    ! ----- Module-global args sourced from use-imports -----")
         for a, _mod, _member in orphans:
             alias = _module_value_expr(a.sdfg_name, synth_members)
-            alloc_inside = getattr(a, 'global_alloc_inside', False)
-            is_alloc = getattr(a, 'module_origin_allocatable', False)
-            is_ptr = getattr(a, 'module_origin_pointer', False)
+            alloc_inside = a.global_alloc_inside
+            is_alloc = a.module_origin_allocatable
+            is_ptr = a.module_origin_pointer
             # A DEFERRED-storage host global may be unallocated on entry (kernel
             # only reads it on a path the caller need not take); its SDFG extents
             # are its own size symbols, so an explicit allocate would be circular.
@@ -998,7 +998,10 @@ def build_finalize(iface: OriginalInterface) -> str:
 # ---------------------------------------------------------------------------
 
 
-def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: dict, plan: FlattenPlan = None) -> str:
+def assemble_module(iface: OriginalInterface,
+                    frozen: FrozenSignature,
+                    blocks: dict,
+                    plan: FlattenPlan | None = None) -> str:
     """Stitch the rendered blocks into the complete Fortran module
     (template: templates/module.f90.in)."""
     use_lines = [f"  use {mod}, only: {', '.join(syms)}" for mod, syms in sorted(iface.used_modules.items())]
@@ -1196,11 +1199,11 @@ def _module_symbol_alias(sym: str) -> str:
     return f"{sym}__mod"
 
 
-def _synthetic_members(plan: FlattenPlan) -> Dict[str, str]:
+def _synthetic_members(plan: FlattenPlan | None) -> Dict[str, str]:
     """SDFG name -> struct member for every ``hlfir-flatten-global-scalar-reads``
     lift.  The host entity, not the lifted scalar, is what the binding imports;
     this map says which component to read off it."""
-    return {s.sdfg_name: s.member for s in getattr(plan, 'synthetic_globals', ()) or ()}
+    return {s.sdfg_name: s.member for s in (plan.synthetic_globals if plan is not None else ())}
 
 
 def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
@@ -1213,7 +1216,7 @@ def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
 
 def effective_module_sources(frozen: FrozenSignature,
                              iface: OriginalInterface,
-                             plan: FlattenPlan = None) -> Dict[str, Tuple[str, str]]:
+                             plan: FlattenPlan | None = None) -> Dict[str, Tuple[str, str]]:
     """Merge bridge-auto-detected module-global provenance (the primary source,
     FrozenSignature.module_symbol_origins) with the flatten plan's synthetic-global
     side table and hand-authored iface.module_symbol_sources, which wins on conflict
@@ -1223,8 +1226,8 @@ def effective_module_sources(frozen: FrozenSignature,
     not exist (``_QM<mod>E<entity>_<member>`` reads as a variable named
     ``<entity>_<member>``), so the side table's ``(module, entity)`` must displace the
     bridge's decode -- the ``%<member>`` step is applied by :func:`_module_value_expr`."""
-    merged: Dict[str, Tuple[str, str]] = dict(getattr(frozen, 'module_symbol_origins', {}) or {})
-    for s in (getattr(plan, 'synthetic_globals', ()) or ()):
+    merged: Dict[str, Tuple[str, str]] = dict(frozen.module_symbol_origins)
+    for s in (plan.synthetic_globals if plan is not None else ()):
         merged[s.sdfg_name] = (s.module, s.entity)
     merged.update(iface.module_symbol_sources)  # explicit override wins
     return merged
@@ -1259,7 +1262,7 @@ def _aos_module_args(frozen: FrozenSignature):
     DUMMY-rooted nested member (aos_origin_mod empty, root already a wrapper arg).
     Restricted to ARRAY args -- a rank-0 member reaches the SDFG as a by-value free
     symbol and must not be re-declared here (duplicate-decl error)."""
-    return [a for a in frozen.args if getattr(a, 'aos_origin_struct', '') and getattr(a, 'rank', 0) > 0]
+    return [a for a in frozen.args if a.aos_origin_struct and a.rank > 0]
 
 
 def _unsourced_array_args(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan):
@@ -1271,8 +1274,8 @@ def _unsourced_array_args(frozen: FrozenSignature, iface: OriginalInterface, pla
     declared |= {a.sdfg_name for a in _aos_module_args(frozen)}
     declared |= {a.name for a in iface.args}
     return [
-        a for a in frozen.args if a.kind == 'array' and getattr(a, 'rank', 0) > 0 and a.sdfg_name not in declared
-        and not getattr(a, 'aos_origin_struct', '')
+        a for a in frozen.args
+        if a.kind == 'array' and a.rank > 0 and a.sdfg_name not in declared and not a.aos_origin_struct
     ]
 
 
@@ -1310,7 +1313,7 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
             out[a.sdfg_name] = (_fortran_c_value_type(a.dtype), _rhs(a.sdfg_name, a.dtype, False))
     # (b) bare-identifier shape symbols of any arg
     for a in frozen.args:
-        for s in (getattr(a, 'shape', ()) or ()):
+        for s in a.shape:
             s = str(s)
             if ident.match(s) and s not in declared and s not in out:
                 out[s] = ("integer(c_int)", _rhs(s, 'int32', True))
@@ -1791,9 +1794,8 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         pres_base = next((sym[:-len(suf)] for suf in ("_allocated", "_present") if sym.endswith(suf)), None)
         if pres_base is not None:
             fa = arg_by_sdfg.get(pres_base)
-            if fa is not None and (getattr(fa, 'module_origin_allocatable', False)
-                                   or getattr(fa, 'module_origin_pointer', False)):
-                present = _present(_module_symbol_alias(pres_base), getattr(fa, 'module_origin_pointer', False))
+            if fa is not None and (fa.module_origin_allocatable or fa.module_origin_pointer):
+                present = _present(_module_symbol_alias(pres_base), fa.module_origin_pointer)
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
             # An AoS-materialised companion's own local is unconditionally

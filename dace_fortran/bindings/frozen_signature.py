@@ -17,6 +17,9 @@ import json
 from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Optional, Tuple
 
+import dace
+from dace.data import Data
+
 # Where a Fortran caller's buffers live unless a pass says otherwise.  Anything a
 # transformation moves into a ``GPU_*`` storage is a device relocation the binding has
 # to bridge; everything else is still reachable through the pointer the caller passed.
@@ -29,7 +32,7 @@ class SignatureDriftError(RuntimeError):
     a ``FrozenSignature`` attached to it."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FrozenArg:
     """One argument in the frozen signature.
 
@@ -115,7 +118,7 @@ class FrozenArg:
         return cls(**d)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FrozenSignature:
     """Full snapshot of one entry subroutine's SDFG signature.
 
@@ -212,7 +215,7 @@ class FrozenSignature:
         for a in self.args:
             if a.sdfg_name in snap_fs or a.sdfg_name not in live_arglist:
                 continue
-            live_dtype = _dtype_string(live_arglist[a.sdfg_name])
+            live_dtype = dtype_string(live_arglist[a.sdfg_name])
             if live_dtype != a.dtype:
                 raise SignatureDriftError(f"signature drift on {self.entry!r}: arg {a.sdfg_name!r} "
                                           f"dtype {a.dtype!r} in snapshot but {live_dtype!r} now")
@@ -239,7 +242,7 @@ _MAY_SHRINK = frozenset({'scalar', 'symbol'})
 
 def get_frozen_signature(sdfg) -> Optional["FrozenSignature"]:
     """Deserialise the snapshot stored on ``sdfg``; None if it carries none."""
-    raw = getattr(sdfg, 'frontend_metadata', {}).get(SDFG_METADATA_KEY)
+    raw = sdfg.frontend_metadata.get(SDFG_METADATA_KEY)
     if raw is None:
         return None
     # Hand back the same object while the stored dict is untouched, so repeated
@@ -269,7 +272,7 @@ def _install_sdfg_accessor():
 
     if isinstance(SDFG.__dict__.get('_frozen_signature'), property):
         return
-    if 'frontend_metadata' not in getattr(SDFG, '__properties__', {}):
+    if 'frontend_metadata' not in SDFG.__properties__:
         raise RuntimeError("this dace has no SDFG.frontend_metadata property, so a frozen "
                            "signature could not survive save/load; update dace")
     SDFG._frozen_signature = property(get_frozen_signature, attach_to_sdfg)
@@ -301,7 +304,7 @@ def refreeze(sdfg) -> "FrozenSignature":
 
     Returns the new snapshot and attaches it to ``sdfg._frozen_signature``.
     """
-    frozen: FrozenSignature = getattr(sdfg, "_frozen_signature", None)
+    frozen: FrozenSignature | None = sdfg._frozen_signature
     if frozen is None:
         raise RuntimeError(f"refreeze: SDFG {sdfg.name!r} carries no _frozen_signature; "
                            "it must come from SDFGBuilder.build()")
@@ -330,8 +333,8 @@ def refreeze(sdfg) -> "FrozenSignature":
     def _relocate(a: FrozenArg) -> FrozenArg:
         # Host-side storage churn (Register, Pinned) still hands the caller's pointer
         # straight through, so only a move into device memory is worth recording.
-        live = getattr(sdfg.arrays.get(a.sdfg_name), 'storage', None)
-        name = live.name if live is not None else ''
+        live = sdfg.arrays.get(a.sdfg_name)
+        name = live.storage.name if live is not None else ''
         return replace(a, device_storage=name if name.startswith(DEVICE_STORAGE_PREFIX) else '')
 
     new = replace(
@@ -345,15 +348,11 @@ def refreeze(sdfg) -> "FrozenSignature":
     return new
 
 
-def _dtype_string(desc) -> str:
+def dtype_string(desc: Data) -> str:
     """Stringify a DaCe data descriptor's dtype for comparison."""
-    import dace
-
-    t = getattr(desc, 'dtype', None)
-    if t is None:
-        return '?'
+    t = desc.dtype
     if isinstance(t, dace.dtypes.opaque):
         # opaque.to_string() is unimplemented here; ctype is its identity.
         return t.ctype
-    # typeclass instances have to_string; fall back to repr otherwise.
-    return getattr(t, 'to_string', lambda: str(t))()
+    # typeclass instances have to_string; fall back to str otherwise.
+    return t.to_string() if isinstance(t, dace.dtypes.typeclass) else str(t)
