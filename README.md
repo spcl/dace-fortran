@@ -293,18 +293,20 @@ python -m pytest -m "not mpi and not long and not integration and not e2e" tests
 python -m pytest -m e2e tests/e2e/test_cloudsc.py
 python -m pytest -m "not mpi and not long and not integration and not e2e" tests/cloudsc/full tests/cloudsc/variants
 
-# heavy-icon -- needs ICON built from source: tests/icon/dycore/setup_icon_dycore.sh and the icon_build fixture
-# (ICON_BUILD names its tree; CI caches both builds per icon-model commit):
-pytest -n auto --dist loadgroup -m "long and icon_build and not mpi and not integration and not e2e" tests/
+# heavy-icon -- long tests outside tests/icon/{atmosphere,ocean}; some need ICON built from source
+# (tests/icon/dycore/setup_icon_dycore.sh and the icon_build fixture, whose tree ICON_BUILD names; CI caches both):
+pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
+    --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean tests/
 
-# heavy-src -- the remaining long tests, which only read the icon-model submodule:
-pytest -n auto --dist loadgroup -m "long and not icon_build and not mpi and not integration and not e2e" tests/
+# heavy-atmo, heavy-ocean-a/-b -- the long atmosphere and ocean tests (CI splits the ocean ones in two with -k):
+pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" tests/icon/atmosphere
+pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" tests/icon/ocean
 
 # Dump built SDFGs for inspection:
 __DACE_HLFIR_GEN_TEST_SDFGS=1 python -m pytest tests/
 ```
 
-`tests/conftest.py` sets test-env defaults automatically (via `setdefault` — explicit override still wins): `HWLOC_COMPONENTS=-gl` (stop hwloc's GL/X11 probe hanging `MPI_Init` on a desktop X display), `UCX_VFS_ENABLE=n` + `OMPI_MCA_pml=ob1`/`OMPI_MCA_btl=self,vader` (in-node transports, so UCX/PMIx finalize can't abort xdist workers), raises the stack soft-limit to its hard limit for deeply-inlined kernels. Pytest markers: `long`, `icon_build`, `sequential`, `mpi`, `integration`, `e2e`, `xdist_group`, `fftw` (see `pyproject.toml`).
+`tests/conftest.py` sets test-env defaults automatically (via `setdefault` — explicit override still wins): `HWLOC_COMPONENTS=-gl` (stop hwloc's GL/X11 probe hanging `MPI_Init` on a desktop X display), `UCX_VFS_ENABLE=n` + `OMPI_MCA_pml=ob1`/`OMPI_MCA_btl=self,vader` (in-node transports, so UCX/PMIx finalize can't abort xdist workers), raises the stack soft-limit to its hard limit for deeply-inlined kernels. Pytest markers: `long`, `sequential`, `mpi`, `integration`, `e2e`, `xdist_group`, `fftw` (see `pyproject.toml`).
 
 `TMPDIR` controls where scratch `.f90`/`.hlfir`/`.dacecache` build artifacts land. Executable-Fortran tests compile+run with `gfortran`/`f2py` against a seeded numerical reference.
 

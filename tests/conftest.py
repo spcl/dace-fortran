@@ -130,7 +130,7 @@ def isolate_external_registry():
 # session and is a no-op when a build (developer tree or CI cache
 # restore) is already present.
 def pytest_collection_modifyitems(config, items):
-    """Mark every ``icon_build``-requesting test ``long`` and ``icon_build`` and pin them to ONE xdist worker.
+    """Mark every ``icon_build``-requesting test ``long`` and pin them to ONE xdist worker.
 
     * ``long`` -- the from-source ICON build is minutes of wall time; excluded via ``-m "not
       long"`` locally, but CI (``-m "not mpi"``) still runs it. Marking the test (not the dir)
@@ -145,7 +145,6 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "icon_build" in getattr(item, "fixturenames", ()):  # uses the fixture
             item.add_marker(pytest.mark.long)
-            item.add_marker(pytest.mark.icon_build)
             item.add_marker(pytest.mark.xdist_group("icon_build"))
 
 

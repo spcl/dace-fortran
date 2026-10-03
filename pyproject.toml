@@ -138,7 +138,6 @@ dace_fortran = [
 [tool.pytest.ini_options]
 markers = [
     "long: Slow test that needs the icon-model submodule (ICON built from source, ICON-O / atmosphere single-TU extractions); the CI heavy lanes run it.",
-    "icon_build: Needs ICON configured and built from source (the icon_build fixture); the CI heavy-icon lane runs it.",
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
     "mpi: Multi-rank MPI test, run under mpirun (select with '-m \"mpi\"')",
     "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, short run)",

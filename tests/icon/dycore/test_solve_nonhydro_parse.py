@@ -51,7 +51,6 @@ _SETUP_HINT = (
 # The heavy-icon CI lane generates compile_commands.json (setup_icon_dycore.sh) before its run.
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.icon_build,
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(_resolve_compile_commands() is None, reason=_SETUP_HINT),
 ]

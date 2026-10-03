@@ -38,13 +38,15 @@ jobs:
     #   e2e         the e2e pipeline tests except CloudSC, the multi-rank mpi tests, the integration tests, QE h_psi
     #   e2e-cloudsc CloudSC through the pipeline, then the CloudSC numerical tests (each a multi-GB -O3 build, so
     #               one at a time: four at once exhaust the runner's memory)
-    #   heavy-icon  tests that need ICON configured and built from source (both builds cached)
-    #   heavy-src   the remaining long tests, which read the ICON sources only
+    #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean}, including those that need ICON built from source
+    #               (both builds cached per icon-model commit)
+    #   heavy-atmo  long atmosphere tests; the single-TU extractions run one at a time (~9 GB each)
+    #   heavy-ocean-a / heavy-ocean-b  long ocean tests, split in two: one at a time, they take ~40 minutes
     strategy:
       fail-fast: false
       matrix:
         llvm: ['21', '22']
-        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-src]
+        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-atmo, heavy-ocean-a, heavy-ocean-b]
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
     # A cold ICON cache adds two ICON builds to heavy-icon.
@@ -53,6 +55,8 @@ jobs:
       LLVM_VERSION: ${{ matrix.llvm }}
       ICON_BUILD: ${{ github.workspace }}/../icon_build/stock_cpu
       PYTEST_OPTS: --maxfail=20 -p no:cacheprovider --tb=short --durations=30
+      LONG: long and not mpi and not integration and not e2e
+      OCEAN_A: inlined or ppm_vflux or numerical
     steps:
     - uses: actions/checkout@v4
 
@@ -134,8 +138,18 @@ jobs:
 
     - name: heavy-icon
       if: ${{ matrix.lane == 'heavy-icon' }}
-      run: pytest -n auto --dist loadgroup -m "long and icon_build and not mpi and not integration and not e2e" $PYTEST_OPTS tests/
+      run: |
+        pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS \
+          --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean tests/
 
-    - name: heavy-src
-      if: ${{ matrix.lane == 'heavy-src' }}
-      run: pytest -n auto --dist loadgroup -m "long and not icon_build and not mpi and not integration and not e2e" $PYTEST_OPTS tests/
+    - name: heavy-atmo
+      if: ${{ matrix.lane == 'heavy-atmo' }}
+      run: pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS tests/icon/atmosphere
+
+    - name: heavy-ocean-a
+      if: ${{ matrix.lane == 'heavy-ocean-a' }}
+      run: pytest -n auto --dist loadgroup -m "$LONG" -k "$OCEAN_A" $PYTEST_OPTS tests/icon/ocean
+
+    - name: heavy-ocean-b
+      if: ${{ matrix.lane == 'heavy-ocean-b' }}
+      run: pytest -n auto --dist loadgroup -m "$LONG" -k "not ($OCEAN_A)" $PYTEST_OPTS tests/icon/ocean
