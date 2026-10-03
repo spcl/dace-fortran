@@ -1,7 +1,9 @@
-! E2E frontend-recognition probes for the BLAS extension lib nodes added
-! in this session.  One ``run_<routine>`` subroutine per recognised
-! Fortran callee.  The bridge pattern-matches the callee name and emits
-! the matching ``dace.libraries.blas.*`` library node.
+! E2E probes for the BLAS routines beyond axpy/scal/gemv/gemm.  One
+! ``run_<routine>`` subroutine per Fortran callee.  The bridge
+! pattern-matches the callee name and emits the matching
+! ``dace.libraries.blas.*`` library node; copy and swap lower to a copy
+! node and a map, and the triangular routines (trsv, trmv, trsm, trmm)
+! have no node and are rejected as unsupported library calls.
 MODULE blas_extension_probes
   IMPLICIT NONE
   INTEGER, PARAMETER :: dp = KIND(1.0D0)

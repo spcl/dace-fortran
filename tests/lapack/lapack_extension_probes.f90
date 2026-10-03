@@ -1,5 +1,5 @@
-! E2E frontend-recognition probes for the LAPACK extension lib nodes
-! (Potrs, Geqrf, Orgqr) added in this session.
+! Probes for the LAPACK routines the bridge has no library node for
+! (potrs, geqrf, orgqr): each must be rejected as an unsupported library call.
 MODULE lapack_extension_probes
   IMPLICIT NONE
   INTEGER, PARAMETER :: dp = KIND(1.0D0)

@@ -2,17 +2,16 @@
 ``.dacecache/<name>/build`` must remain rebuildable after editing the
 generated C++.
 
-DaCe's command cache can skip the CMake configure step; in that mode the
-build directory keeps ``rebuild.sh`` instead of ``CMakeCache.txt``/``Makefile``.
-Either path is acceptable, so the test verifies that ONE documented in-place
-rebuild command works after ``sdfg.compile()``.
+DaCe's command cache replays a recorded build without configuring CMake, which
+leaves nothing to rebuild with in place. A build meant for hand-editing therefore
+turns ``compiler.command_cache`` off, and ``cmake --build .`` then rebuilds it.
 
 Companion doc: bug5_stale_cmake_cache.md
 """
+import os
 import subprocess
+import tempfile
 from pathlib import Path
-
-import pytest
 
 import dace
 
@@ -29,33 +28,27 @@ def _tiny_sdfg(tmp_path: Path):
 
 
 def test_generated_kernel_is_rebuildable_in_place(tmp_path: Path):
-    """After ``sdfg.compile()``, a hand-edited generated .cpp can be rebuilt
-    with either ``cmake --build .`` (when CMake configured in the build dir)
-    or the shipped ``rebuild.sh`` recipe (when the command cache replayed)."""
+    """With the command cache off, a hand-edited generated .cpp rebuilds with ``cmake --build .``."""
     sdfg = _tiny_sdfg(tmp_path)
-    sdfg.compile()
+    with dace.config.set_temporary("compiler", "command_cache", value=False):
+        sdfg.compile()
 
     build_dir = Path(sdfg.build_folder) / "build"
-    assert build_dir.is_dir(), f"no build dir at {build_dir}"
+    assert (build_dir / "CMakeCache.txt").exists(), f"CMake did not configure {build_dir}"
 
     cpps = list((Path(sdfg.build_folder) / "src").rglob("*.cpp"))
     assert cpps, "no generated kernel sources found"
-    cpps[0].touch()
-
-    so = Path(sdfg.build_folder) / "build" / f"lib{sdfg.name}.so"
+    so = build_dir / f"lib{sdfg.name}.so"
     assert so.exists(), f"expected shared library at {so}"
     mtime_before = so.stat().st_mtime
+    os.utime(cpps[0], (mtime_before + 10, mtime_before + 10))  # a hand-edit, without waiting a clock tick
 
-    if (build_dir / "CMakeCache.txt").exists():
-        res = subprocess.run(["cmake", "--build", "."], cwd=build_dir, capture_output=True, text=True, timeout=300)
-        recipe = "cmake --build ."
-    else:
-        rebuild_script = build_dir / "rebuild.sh"
-        assert rebuild_script.exists(), ("build dir has neither CMakeCache.txt nor rebuild.sh; "
-                                         "hand-fixed kernel .cpps cannot be rebuilt")
-        res = subprocess.run(["sh", str(rebuild_script)], cwd=build_dir, capture_output=True, text=True, timeout=300)
-        recipe = str(rebuild_script)
-
-    assert res.returncode == 0, (f"in-place rebuild broken: {recipe} -> rc={res.returncode}\n"
+    res = subprocess.run(["cmake", "--build", "."], cwd=build_dir, capture_output=True, text=True, timeout=300)
+    assert res.returncode == 0, (f"in-place rebuild broken: rc={res.returncode}\n"
                                  f"stdout: {res.stdout[-400:]}\nstderr: {res.stderr[-400:]}")
     assert so.stat().st_mtime > mtime_before, "shared library was not re-linked"
+
+
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmp:
+        test_generated_kernel_is_rebuildable_in_place(Path(tmp))
