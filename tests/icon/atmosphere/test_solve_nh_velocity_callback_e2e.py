@@ -26,7 +26,16 @@ from _util import build_sdfg, have_flang
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim, scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.build import make_builder
-from dace_fortran.external import Arg, ExternalCall, apply_external_functions, clear_external_registry, keep_external
+from dace_fortran.external import (
+    Arg,
+    ArgKind,
+    CAbi,
+    ExternalCall,
+    Intent,
+    apply_external_functions,
+    clear_external_registry,
+    keep_external,
+)
 from dace_fortran.flang_codebase import find_openmpi_include
 
 pytestmark = [
@@ -45,16 +54,16 @@ _VELOCITY_ENTRY = "mo_velocity_advection::velocity_tendencies"
 # five derived types cross per-member SoA (matches the inner bind_c_shim), then three rank-3
 # arrays + scalars; same shape as scripts/build_icon_dace_libs.py's dycore wrapper.
 _VELOCITY_CALLBACK_ARGS = tuple(
-    [Arg(kind="aos", intent="inout", c_abi="per_member_soa")]  # p_prog
-    + [Arg(kind="aos", intent="in", c_abi="per_member_soa")]  # p_patch
-    + [Arg(kind="aos", intent="in", c_abi="per_member_soa")]  # p_int
-    + [Arg(kind="aos", intent="inout", c_abi="per_member_soa")]  # p_metrics
-    + [Arg(kind="aos", intent="inout", c_abi="per_member_soa")]  # p_diag
-    + [Arg(kind="array", dtype="float64", intent="inout")] * 3  # z_w_concorr_me / z_kin_hor_e / z_vt_ie
-    + [Arg(kind="scalar", dtype="int32", intent="in")] * 2  # ntnd / istep
-    + [Arg(kind="scalar", dtype="bool", intent="in")]  # lvn_only
-    + [Arg(kind="scalar", dtype="float64", intent="in")] * 2  # dtime / dt_linintp_ubc
-    + [Arg(kind="scalar", dtype="bool", intent="in")]
+    [Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA)]  # p_prog
+    + [Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA)]  # p_patch
+    + [Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA)]  # p_int
+    + [Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA)]  # p_metrics
+    + [Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA)]  # p_diag
+    + [Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT)] * 3  # z_w_concorr_me / z_kin_hor_e / z_vt_ie
+    + [Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN)] * 2  # ntnd / istep
+    + [Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN)]  # lvn_only
+    + [Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN)] * 2  # dtime / dt_linintp_ubc
+    + [Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN)]
 )  # ldeepatmo
 
 # halo/sync/diagnostics dropped so no MPI survives and velocity is the only external;

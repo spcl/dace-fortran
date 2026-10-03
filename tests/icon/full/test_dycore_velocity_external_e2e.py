@@ -7,7 +7,7 @@ Velocity-scale, struct-shaped generalisation of the small-scale architecture pro
 Architecture: (1) inner SDFG built from ``velocity_full.f90`` with
 ``bind_c_shim=True`` exposing ``velocity_tendencies_c`` (one ``c_ptr`` per marshal
 leaf); (2) outer ``dycore_wrapper`` SDFG registers ``velocity_tendencies`` as
-``keep_external`` with ``Arg(kind='aos', c_abi='per_member_soa')`` per derived-type
+``keep_external`` with ``Arg(kind=AOS, c_abi=PER_MEMBER_SOA)`` per derived-type
 arg, forwarding the marshal-expanded SoA pointers directly; (3) caller drives the
 outer via standard bindings, a flat-C-ABI shim retargeting ``run_velocity_flat_c`` to
 ``dycore_wrapper_dace``; (4) reference is the gfortran-compiled untransformed source.
@@ -36,7 +36,7 @@ from dace_fortran.bindings import (
     build_fortran_library,
 )
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
 
 # ``-O0 -fno-fast-math -ffp-contract=off`` matched across every build layer so the
 # SDFG path's arithmetic order matches gfortran exactly.  Without this DaCe's default
@@ -479,20 +479,20 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
         "velocity_tendencies",
         c_name="velocity_tendencies_c",
         args=(
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),  # p_prog
-            Arg(kind="aos", intent="in", c_abi="per_member_soa"),  # p_patch
-            Arg(kind="aos", intent="in", c_abi="per_member_soa"),  # p_int
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),  # p_metrics
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),  # p_diag
-            Arg(kind="array", dtype="float64", intent="inout"),  # z_w_concorr_me
-            Arg(kind="array", dtype="float64", intent="inout"),  # z_kin_hor_e
-            Arg(kind="array", dtype="float64", intent="inout"),  # z_vt_ie
-            Arg(kind="scalar", dtype="int32", intent="in"),  # ntnd
-            Arg(kind="scalar", dtype="int32", intent="in"),  # istep
-            Arg(kind="scalar", dtype="bool", intent="in"),  # lvn_only
-            Arg(kind="scalar", dtype="float64", intent="in"),  # dtime
-            Arg(kind="scalar", dtype="float64", intent="in"),  # dt_linintp_ubc
-            Arg(kind="scalar", dtype="bool", intent="in"),  # ldeepatmo
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),  # p_prog
+            Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),  # p_patch
+            Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),  # p_int
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),  # p_metrics
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),  # p_diag
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # z_w_concorr_me
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # z_kin_hor_e
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # z_vt_ie
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # ntnd
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # istep
+            Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN),  # lvn_only
+            Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN),  # dtime
+            Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN),  # dt_linintp_ubc
+            Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN),  # ldeepatmo
         ),
         libraries=(str(inner_lib.so_path),),
         # bind_c_shim ABI: one int extent per dim ahead of each dynamic-shape leaf pointer
@@ -506,8 +506,8 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
     # (tag, d0, d1, d2, field_p); dynamic_extents_abi prepends the extents for
     # c_f_pointer reconstruction; libraries resolves both _c symbols.
     _sync_args = (
-        Arg(kind="scalar", dtype="int32", intent="in"),  # tag
-        Arg(kind="array", dtype="float64", intent="inout"),  # field
+        Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # tag
+        Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # field
     )
     keep_external(
         "sync_patch_array",

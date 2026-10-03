@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable, NamedTuple, Sequence
 
 from dace_fortran.preprocess import (
+    MergeEngine,
     merge_used_modules,
     normalize_kind_parameters,
     preprocess_fortran,
@@ -78,8 +79,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--merge-modules", action="store_true", help="Inline every ``USE``-d module's source.")
     p.add_argument(
         "--merge-engine",
-        choices=("regex", "fparser"),
-        default="regex",
+        type=MergeEngine,
+        choices=list(MergeEngine),
+        default=MergeEngine.REGEX,
         help="Which --merge-modules engine to use: 'regex' "
         "(default, the fparser-free text-splicer) or 'fparser' "
         "(the AST inliner -- also desugars + prunes).",
@@ -155,7 +157,7 @@ def _apply_passes(source: str, args: argparse.Namespace) -> PassResult:
         args.normalize_kind = True
         args.rewrite_integer_powers = True
     if args.merge_modules:
-        if args.merge_engine == "fparser":
+        if args.merge_engine is MergeEngine.FPARSER:
             from dace_fortran.preprocess import fparser_merge
 
             source = fparser_merge(source, search_dirs=args.search_dirs, entry=args.merge_entry)

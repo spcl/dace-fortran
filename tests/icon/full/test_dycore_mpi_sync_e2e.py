@@ -27,7 +27,7 @@ import pytest
 from _util import build_on_root, build_sdfg, have_flang
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 
 pytestmark = [
     pytest.mark.mpi,
@@ -235,9 +235,9 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
             "sync_patch_array",
             c_name="sync_patch_array_c",
             args=(
-                Arg(kind="scalar", dtype="int32", intent="in"),  # tag
-                Arg(kind="array", dtype="float64", intent="inout"),  # field
-                Arg(kind="scalar", dtype="int32", intent="in"),  # comm
+                Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # tag
+                Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # field
+                Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # comm
             ),
             libraries=(sync_so_str,),
             dynamic_extents_abi=True,

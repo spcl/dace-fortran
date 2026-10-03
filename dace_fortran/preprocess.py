@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from enum import Enum
 from typing import Iterable, Iterator, NamedTuple, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -77,6 +78,13 @@ class StringSpan(NamedTuple):
 class ScannedLine(NamedTuple):
     comment: int
     strings: list[StringSpan]
+
+
+class MergeEngine(Enum):
+    """How ``merge_used_modules`` splices the ``USE``-d modules into one TU."""
+
+    REGEX = "regex"
+    FPARSER = "fparser"
 
 
 def _scan_line(body: str) -> ScannedLine:
@@ -1239,7 +1247,7 @@ def fparser_merge(
     keep_acc_directives: bool = False,
 ) -> str:
     """Single-TU merge via the fparser inliner engine (opt-in via
-    ``merge_engine="fparser"``; the regex splicer stays default).
+    ``merge_engine=MergeEngine.FPARSER``; the regex splicer stays default).
 
     Sibling of :func:`merge_used_modules`: parses ``source`` + every file
     under ``search_dirs`` into one fparser AST, resolves ``USE``, inlines,
@@ -1296,7 +1304,7 @@ def preprocess_fortran_source(
     *,
     search_dirs: Sequence[str | Path] = (),
     merge: bool = True,
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
     merge_entry: Optional[str] = None,
     external_names: Iterable[str] = (),
     if_intvar: bool = False,
@@ -1309,7 +1317,7 @@ def preprocess_fortran_source(
     Order matters -- composes:
 
     1. ``merge_used_modules`` (if ``merge``) -- inline ``USE``-d modules into
-       one TU.  ``merge_engine="fparser"`` routes through
+       one TU.  ``merge_engine=MergeEngine.FPARSER`` routes through
        :func:`fparser_merge` instead (also desugars/prunes; ``merge_entry``
        scopes its pruning, ignored by the regex engine).
     2. ``strip_openmp_directives`` -- drop OpenMP/OpenACC sentinels + the
@@ -1330,7 +1338,7 @@ def preprocess_fortran_source(
     MERGED text; the SDFG path is unchanged.
     """
     if merge:
-        if merge_engine == "fparser":
+        if merge_engine is MergeEngine.FPARSER:
             source = fparser_merge(
                 source,
                 search_dirs=search_dirs,
@@ -1338,10 +1346,10 @@ def preprocess_fortran_source(
                 external_names=external_names,
                 keep_acc_directives=keep_acc_directives,
             )
-        elif merge_engine == "regex":
+        elif merge_engine is MergeEngine.REGEX:
             source = merge_used_modules(source, search_dirs=search_dirs, do_not_emit=external_names)
         else:
-            raise ValueError(f"merge_engine must be 'regex' or 'fparser', got {merge_engine!r}")
+            raise ValueError(f"merge_engine must be a MergeEngine, got {merge_engine!r}")
     source = strip_openmp_directives(source)
     source = normalize_kind_parameters(source, kind_map=kind_map, passthrough=kind_passthrough)
     source = rewrite_integer_powers(source)

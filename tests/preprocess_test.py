@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from dace_fortran.preprocess import (
+    MergeEngine,
     merge_used_modules,
     normalize_kind_parameters,
     preprocess_fortran,
@@ -460,10 +461,10 @@ def _two_module_project(tmp_path):
 
 
 def test_merge_engine_fparser_produces_compilable_single_tu(tmp_path):
-    """``merge_engine='fparser'`` inlines the helper module and the result is a
+    """``merge_engine=MergeEngine.FPARSER`` inlines the helper module and the result is a
     single, self-contained, compilable translation unit."""
     driver = _two_module_project(tmp_path)
-    out = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="fparser")
+    out = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine=MergeEngine.FPARSER)
     assert "FUNCTION dbl" in out
     assert "SUBROUTINE run" in out
     assert _gfortran_compiles(out)
@@ -472,8 +473,8 @@ def test_merge_engine_fparser_produces_compilable_single_tu(tmp_path):
 def test_merge_engine_regex_and_fparser_both_compile(tmp_path):
     """Both engines turn the multi-file project into one compilable TU."""
     driver = _two_module_project(tmp_path)
-    rgx = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="regex")
-    fps = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="fparser")
+    rgx = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine=MergeEngine.REGEX)
+    fps = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine=MergeEngine.FPARSER)
     assert _gfortran_compiles(rgx)
     assert _gfortran_compiles(fps)
 
@@ -489,7 +490,7 @@ def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
         "  a = a * 2.0_c_double\n"
         "end subroutine\n"
     )
-    out = preprocess_fortran_source(src, search_dirs=[tmp_path], merge_engine="fparser")
+    out = preprocess_fortran_source(src, search_dirs=[tmp_path], merge_engine=MergeEngine.FPARSER)
     # stub module not emitted; USE iso_c_binding kept so the compiler's own intrinsic
     # module resolves c_double -- single TU compiles without a colliding stub definition
     assert "MODULE ISO_C_BINDING" not in out.upper()

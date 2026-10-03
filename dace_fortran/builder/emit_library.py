@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import math
 import re
+from enum import Enum
 from typing import Any, NamedTuple, Sequence, TYPE_CHECKING, TypeVar, cast
 
 import dace.symbolic
@@ -18,13 +19,13 @@ from dace import dtypes, InterstateEdge, Memlet
 from dace_fortran.builder.access import acc, iter_view_dim_map
 from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.builder.records import NodeLike, SyntheticNode
+from dace_fortran.external import Arg, ArgKind, CAbi, Intent
 
 if TYPE_CHECKING:
     from dace.sdfg.nodes import LibraryNode, Node
     from dace.sdfg.state import ControlFlowRegion, SDFGState
     from dace_fortran.builder import SDFGBuilder
     from dace_fortran.builder.context import Ctx
-    from dace_fortran.external import Arg
 
 _N = TypeVar("_N", bound="LibraryNode")
 
@@ -1367,6 +1368,44 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         ensure_view_writeback_link(builder, state, out_node, out_arr)
 
 
+class PlannedArg(NamedTuple):
+    """One call argument of an external call; ``group`` is the marshalled struct an AOS member belongs to."""
+
+    kind: ArgKind
+    dtype: str
+    intent: Intent
+    group: int | None
+
+
+class MemberSlot(NamedTuple):
+    """One leaf member of a marshalled struct argument; ``elements == 0`` marks a dynamic shape."""
+
+    ctype: str
+    elements: int
+    in_conn: str | None
+    out_conn: str | None
+    shape: tuple
+    by_value_symbol: str | None
+
+
+class CallEdge(NamedTuple):
+    data: str
+    connector: str
+    writes: bool
+
+
+class TermKind(Enum):
+    """A C call argument: one rendered expression, or a whole marshalled struct group."""
+
+    LITERAL = "literal"
+    STRUCT_GROUP = "struct_group"
+
+
+class CallTerm(NamedTuple):
+    kind: TermKind
+    value: Any
+
+
 def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a *registered* external ``bind(c)`` call to an
     :class:`dace_fortran.external.ExternalCall` library node.
@@ -1388,7 +1427,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     :raises ValueError: registered arg count disagrees with the call.
     """
     import dace
-    from dace_fortran.external import Arg, ExternalCall, lookup_external
+    from dace_fortran.external import ExternalCall, lookup_external
 
     # Normalise the bridge's callee name to the registry key the user
     # registered.  The C++ side may hand us an MLIR symbol (leading
@@ -1436,7 +1475,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # writes: a missed write is a correctness bug, an over-declared one only
     # costs optimisation -- see ``Arg.intent``); a scalar / free symbol crosses
     # by value (read-only).  AoS-struct marshalling has no single natural ABI,
-    # so it still needs an authored ``Arg(kind='aos')``.
+    # so it still needs an authored ``Arg(kind=AOS)``.
     if not sig.args and names:
         from dataclasses import replace
         from dace.data import Scalar
@@ -1446,17 +1485,19 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 f"external {callee!r}: the call site marshalled a derived-type "
                 f"argument (aos), which has no default C ABI.  Register an "
                 f"authored signature -- e.g. keep_external({callee!r}, "
-                f"args=[..., Arg(kind='aos', c_abi=...)]) -- instead of a bare "
+                f"args=[..., Arg(kind=ArgKind.AOS, c_abi=...)]) -- instead of a bare "
                 f"ExternalFunction."
             )
         derived: list = []
         for name in names:
             desc = ctx.sdfg.arrays.get(name)
             if desc is not None and not isinstance(desc, Scalar):
-                derived.append(Arg(kind="array", dtype=desc.dtype.to_string(), intent="inout"))
+                derived.append(Arg(kind=ArgKind.ARRAY, dtype=desc.dtype.to_string(), intent=Intent.INOUT))
             else:
                 dt = desc.dtype if desc is not None else ctx.sdfg.symbols.get(name)
-                derived.append(Arg(kind="scalar", dtype=dt.to_string() if dt is not None else "int32", intent="in"))
+                derived.append(
+                    Arg(kind=ArgKind.SCALAR, dtype=dt.to_string() if dt is not None else "int32", intent=Intent.IN)
+                )
         sig = replace(sig, args=tuple(derived))
 
     # Expand ``sig.args`` to a per-call-arg plan.  An ``aos`` signature arg was
@@ -1472,11 +1513,11 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # from its C-ABI shape this way is what lets a sibling-SDFG callee
     # receive the same SoA flats the marshal expansion already produces,
     # with no intermediate AoS round-trip.
-    plan: list = []
-    group_c_abi: dict = {}
+    plan: list[PlannedArg] = []
+    group_c_abi: dict[int, CAbi] = {}
     gi = 0
     for a in sig.args:
-        if a.kind == "aos":
+        if a.kind is ArgKind.AOS:
             if gi >= len(group_pairs):
                 # ``hlfir-marshal-external-structs`` only tags structs whose
                 # every member is inline-flat (scalar or static-shape array
@@ -1509,10 +1550,10 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             _, count = group_pairs[gi]
             group_c_abi[gi] = a.resolved_c_abi()
             for _ in range(count):
-                plan.append(("aos", a.dtype, a.intent, gi))
+                plan.append(PlannedArg(ArgKind.AOS, a.dtype, a.intent, gi))
             gi += 1
         else:
-            plan.append((a.kind, a.dtype, a.intent, None))
+            plan.append(PlannedArg(a.kind, a.dtype, a.intent, None))
     if len(plan) != len(names):
         raise ValueError(
             f"external {callee!r}: expanded signature expects "
@@ -1533,15 +1574,15 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     out_conns: list = []
     ptr_of: dict = {}
     comm_conns: set = set()
-    edges: list = []  # (name, conn, direction)  direction: 'r' | 'w'
-    logical_terms: list = []
+    edges: list[CallEdge] = []
+    logical_terms: list[CallTerm] = []
     # gid -> [(ctype, n_elems, in_conn|None, out_conn|None, shape)]; n_elems
     # == 1 for a scalar member, else the member array's total element count.
     # ``shape`` is the SDFG-array shape tuple (sympy expressions), used
     # when ``sig.dynamic_extents_abi`` and ``n_elems == 0`` to prepend
     # one ``int`` extent per dim before the leaf pointer.
-    group_members: dict = defaultdict(list)
-    # Per-``logical_terms``-position record for ``kind='array'`` args
+    group_members: dict[int, list[MemberSlot]] = defaultdict(list)
+    # Per-``logical_terms``-position record for ``kind=ARRAY`` args
     # whose connected SDFG array carries a symbolic shape; consumed by
     # the body / decl-types builders when ``sig.dynamic_extents_abi`` is
     # true so each such pointer arg gets one ``int`` extent per dim
@@ -1566,17 +1607,17 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 # memlet, the symbol rendered in-scope at emit time.
                 if name in ctx.sdfg.symbols:
                     sym_dt = ctx.sdfg.symbols[name]
-                    if group_c_abi.get(gid) != "per_member_soa":
+                    if group_c_abi.get(gid) is not CAbi.PER_MEMBER_SOA:
                         raise ValueError(
                             f"external {callee!r}: aos member {name!r} is a scalar "
                             f"symbol (extent / loop bound), which only the "
                             f"per_member_soa C ABI can forward by value; the "
                             f"aos_struct_ptr path needs a materialised array. "
-                            f"Register this arg with c_abi='per_member_soa'."
+                            f"Register this arg with c_abi=CAbi.PER_MEMBER_SOA."
                         )
-                    group_members[gid].append((sym_dt.ctype, 1, None, None, (), name))
+                    group_members[gid].append(MemberSlot(sym_dt.ctype, 1, None, None, (), name))
                     if gid != prev_gid:
-                        logical_terms.append(("aos", gid))
+                        logical_terms.append(CallTerm(TermKind.STRUCT_GROUP, gid))
                     prev_gid = gid
                     continue
                 raise ValueError(f"external {callee!r}: aos member {name!r} is not an SDFG array")
@@ -1599,58 +1640,58 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                     nel = 0
             else:
                 nel = 1
-            reads = intent in ("in", "inout")
-            writes = intent in ("out", "inout")
+            reads, writes = intent.reads, intent.writes
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
                 in_conns.append(cin)
                 ptr_of[cin] = dt
-                edges.append((name, cin, "r"))
+                edges.append(CallEdge(name, cin, False))
             if writes:
                 out_conns.append(cout)
                 ptr_of[cout] = dt
-                edges.append((name, cout, "w"))
+                edges.append(CallEdge(name, cout, True))
             group_members[gid].append(
-                (ctype, nel, cin if reads else None, cout if writes else None, tuple(shape) if shape else (), None)
+                MemberSlot(
+                    ctype, nel, cin if reads else None, cout if writes else None, tuple(shape) if shape else (), None
+                )
             )
             if gid != prev_gid:
-                logical_terms.append(("aos", gid))
+                logical_terms.append(CallTerm(TermKind.STRUCT_GROUP, gid))
             prev_gid = gid
             continue
         prev_gid = None
         if name not in ctx.sdfg.arrays:
-            logical_terms.append(("lit", name))  # free symbol -- in scope
+            logical_terms.append(CallTerm(TermKind.LITERAL, name))  # free symbol -- in scope
             continue
-        if kind == "comm":
+        if kind is ArgKind.COMM:
             ctx.sdfg.arrays[name].dtype = dace.dtypes.opaque("MPI_Comm")
             cin = f"_a{i}"
             in_conns.append(cin)
             comm_conns.add(cin)
-            edges.append((name, cin, "r"))
-            logical_terms.append(("lit", cin))
+            edges.append(CallEdge(name, cin, False))
+            logical_terms.append(CallTerm(TermKind.LITERAL, cin))
             continue
         dt = ctx.sdfg.arrays[name].dtype
-        if kind == "array":
-            reads = intent in ("in", "inout")
-            writes = intent in ("out", "inout")
+        if kind is ArgKind.ARRAY:
+            reads, writes = intent.reads, intent.writes
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
                 in_conns.append(cin)
                 ptr_of[cin] = dt
-                edges.append((name, cin, "r"))
+                edges.append(CallEdge(name, cin, False))
             if writes:
                 out_conns.append(cout)
                 ptr_of[cout] = dt
-                edges.append((name, cout, "w"))
+                edges.append(CallEdge(name, cout, True))
             arr_shape = tuple(ctx.sdfg.arrays[name].shape)
             if sig.dynamic_extents_abi and _shape_is_symbolic(arr_shape):
                 array_shape_at_term[len(logical_terms)] = arr_shape
-            logical_terms.append(("lit", cout if writes else cin))
-        else:  # 'scalar'
+            logical_terms.append(CallTerm(TermKind.LITERAL, cout if writes else cin))
+        else:  # SCALAR
             cin = f"_a{i}"
             in_conns.append(cin)
-            edges.append((name, cin, "r"))
-            logical_terms.append(("lit", cin))
+            edges.append(CallEdge(name, cin, False))
+            logical_terms.append(CallTerm(TermKind.LITERAL, cin))
 
     # Assemble the C body.  Per aos group, ``group_c_abi[gid]`` picks
     # the route:
@@ -1666,8 +1707,8 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     body_lines: list = []
     call_args_c: list = []
     bufname: dict = {}
-    for term_index, (kind, val) in enumerate(logical_terms):
-        if kind == "lit":
+    for term_index, (term_kind, val) in enumerate(logical_terms):
+        if term_kind is TermKind.LITERAL:
             shape = array_shape_at_term.get(term_index)
             if shape:
                 for s in shape:
@@ -1676,8 +1717,8 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             continue
         gid = val
         mems = group_members[gid]
-        abi = group_c_abi.get(gid, "aos_struct_ptr")
-        if abi == "per_member_soa":
+        abi = group_c_abi.get(gid, CAbi.AOS_STRUCT_PTR)
+        if abi is CAbi.PER_MEMBER_SOA:
             # Per-leaf pass-through: every leaf forwards its writable
             # connector when present (so codegen sees the write
             # dependency), else its readable one.  No struct buffer,
@@ -1686,7 +1727,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             # each dynamic-shape leaf (``nel == 0``) gets one ``int``
             # extent per dim prepended to feed the shim's
             # ``c_f_pointer`` shape constructor.
-            for ct, nel, cin, cout, shape, by_value_sym in mems:
+            for ct, nel, slot_in, slot_out, shape, by_value_sym in mems:
                 # A by-value symbol member (an extent / loop bound the caller
                 # never materialised as an array) rides its in-scope value,
                 # matching the inner shim's ``<type>, value`` slot -- no
@@ -1706,7 +1747,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                     else:
                         call_args_c.append(f"({ct})({_sym2c(by_value_sym)})")
                     continue
-                tok = cout if cout is not None else cin
+                tok = slot_out if slot_out is not None else slot_in
                 if sig.dynamic_extents_abi and nel == 0 and shape:
                     # The inner bind_c_shim takes a ``<flat>_lb<i>`` lower-bound
                     # slot ahead of each dynamic member's extent (bind_c_shim
@@ -1762,13 +1803,13 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             for k, (ct, nel, _, _, _, _) in enumerate(mems)
         )
         body_lines.append(f"struct {{ {fields} }} {buf};")
-        for k, (ct, nel, cin, cout, _shape, _sym) in enumerate(mems):
-            if cin is None or nel == 0:
+        for k, (ct, nel, slot_in, slot_out, _shape, _sym) in enumerate(mems):
+            if slot_in is None or nel == 0:
                 continue
             if nel == 1:
-                body_lines.append(f"{buf}.m{k} = (*{cin});")
+                body_lines.append(f"{buf}.m{k} = (*{slot_in});")
             else:
-                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) {buf}.m{k}[_i] = {cin}[_i];")
+                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) {buf}.m{k}[_i] = {slot_in}[_i];")
         call_args_c.append(f"(void*)(&{buf})")
     # Forward Fortran module globals across the C ABI: read each
     # ``__<module>_MOD_<member>`` symbol directly from the OUTER
@@ -1784,48 +1825,48 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     module_extern_decls: list = []
     for module, member, dtype, rank in sig.module_symbol_forward:
         sym = f"__{module}_MOD_{member}"
-        ct = _MOD_FORWARD_CTYPE.get(dtype)
-        if ct is None:
+        fwd_ct = _MOD_FORWARD_CTYPE.get(dtype)
+        if fwd_ct is None:
             raise ValueError(
                 f"external {callee!r}: unsupported module_symbol_forward dtype {dtype!r} for ``{module}::{member}``"
             )
         if rank == 0:
-            # gfortran emits the scalar BSS as a ``<ct>``.  Pass the
+            # gfortran emits the scalar BSS as a ``<ctype>``.  Pass the
             # value by value.  ``extern`` (no language linkage --
             # the body declarations are inside a function scope where
             # ``extern "C"`` is illegal; the symbol's ABI is fixed by
             # gfortran's mangling regardless).
-            module_extern_decls.append(f"extern {ct} {sym};")
+            module_extern_decls.append(f"extern {fwd_ct} {sym};")
             call_args_c.append(sym)
         else:
             # Rank-N module array: gfortran emits a flat BSS region;
             # the symbol decays to a pointer, which the C ABI takes
             # directly.
-            module_extern_decls.append(f"extern {ct} {sym}[];")
+            module_extern_decls.append(f"extern {fwd_ct} {sym}[];")
             call_args_c.append(sym)
     body_lines = module_extern_decls + body_lines
     body_lines.append(f"{sig.c_name}({', '.join(call_args_c)});")
     # AoS-struct-ptr copy-out (per_member_soa needs no unpack: writes
     # land in the connector directly via the call).
     for gid, mems in group_members.items():
-        if group_c_abi.get(gid, "aos_struct_ptr") != "aos_struct_ptr":
+        if group_c_abi.get(gid, CAbi.AOS_STRUCT_PTR) is not CAbi.AOS_STRUCT_PTR:
             continue
-        for k, (ct, nel, cin, cout, _shape, _sym) in enumerate(mems):
-            if cout is None or nel == 0:
+        for k, (ct, nel, slot_in, slot_out, _shape, _sym) in enumerate(mems):
+            if slot_out is None or nel == 0:
                 continue
             if nel == 1:
-                body_lines.append(f"(*{cout}) = {bufname[gid]}.m{k};")
+                body_lines.append(f"(*{slot_out}) = {bufname[gid]}.m{k};")
             else:
-                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) {cout}[_i] = {bufname[gid]}.m{k}[_i];")
+                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) {slot_out}[_i] = {bufname[gid]}.m{k}[_i];")
 
     # Build the ``extern "C"`` declaration at the call site so an
-    # ``Arg(kind='aos', c_abi='per_member_soa')`` arg expands to its
+    # ``Arg(kind=AOS, c_abi=PER_MEMBER_SOA)`` arg expands to its
     # actual leaf signature (one ``<ctype>*`` per leaf member, in
     # marshal-expansion order).  An ``aos_struct_ptr`` group keeps the
     # single ``void*`` shape; any non-aos arg lifts its
     # ``Arg.c_decl_type()`` verbatim.  When the callee's ABI is
     # ``dynamic_extents_abi``, each dynamic-shape leaf (per_member_soa
-    # member with ``nel == 0`` or ``kind='array'`` with symbolic
+    # member with ``nel == 0`` or ``kind=ARRAY`` with symbolic
     # shape) is prefixed with one ``int`` per dim -- matching the
     # extents the body emission prepends.
     decl_types: list = []
@@ -1852,7 +1893,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             last_member_idx = -1
             cur_sig_arg = next(sig_arg_iter, None)  # consume the aos sig arg
         last_member_idx += 1
-        if group_c_abi.get(gid) == "per_member_soa":
+        if group_c_abi.get(gid) is CAbi.PER_MEMBER_SOA:
             ct, nel, _cin, _cout, shape, by_value_sym = group_members[gid][last_member_idx]
             # A by-value symbol member is a scalar C arg (no ``*``, no
             # extent prefix) -- matches the inner shim's ``value`` slot -- UNLESS
@@ -1886,12 +1927,12 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # ride by value (``int`` / ``double`` / ...); rank-N module
     # arrays decay to the matching pointer (``<ct>*``) on the C ABI.
     for module, member, dtype, rank in sig.module_symbol_forward:
-        ct = _MOD_FORWARD_CTYPE.get(dtype)
-        if ct is None:
+        fwd_ct = _MOD_FORWARD_CTYPE.get(dtype)
+        if fwd_ct is None:
             raise ValueError(
                 f"external {callee!r}: unsupported module_symbol_forward dtype {dtype!r} for ``{module}::{member}``"
             )
-        decl_types.append(f"{ct}*" if rank > 0 else ct)
+        decl_types.append(f"{fwd_ct}*" if rank > 0 else fwd_ct)
     c_decl = f'extern "C" void {sig.c_name}({", ".join(decl_types) or "void"});'
 
     body_text = "\n".join(body_lines)
@@ -1920,7 +1961,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     from dace_fortran.builder.access import acc as _acc
     from dace_fortran.builder.emit_tasklet import ensure_view_writeback_link
 
-    for name, conn, direction in edges:
+    for name, conn, writes in edges:
         if conn in comm_conns:
             # Comm: by-value opaque scalar (subset '0', single element).
             mem = Memlet(data=name, subset="0")
@@ -1933,7 +1974,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         # and write-back (``ensure_view_writeback_link``) helpers the tasklet
         # emitter uses so the external reads / writes the target in place.
         is_view = isinstance(ctx.sdfg.arrays.get(name), _dd.View)
-        if direction == "r":
+        if not writes:
             rnode = _acc(builder, state, name) if is_view else state.add_read(name)
             state.add_memlet_path(rnode, node, dst_conn=conn, memlet=mem)
         else:

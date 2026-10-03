@@ -16,6 +16,7 @@ dict this rides in and never reads it -- the contract is dace-fortran-only.
 from __future__ import annotations
 
 import json
+from enum import Enum
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, NamedTuple, Optional, Tuple, cast
 
@@ -45,31 +46,37 @@ class ModuleOrigin(NamedTuple):
     entity: str
 
 
+class FrozenArgKind(Enum):
+    """How an SDFG argument crosses the binding."""
+
+    ARRAY = "array"
+    SCALAR = "scalar"
+    SYMBOL = "symbol"
+    #: An integer communicator; the wrapper converts it via ``MPI_Comm_f2c``.
+    MPI_COMM = "mpi_comm"
+
+
 @dataclass(frozen=True, slots=True)
 class FrozenArg:
     """One argument in the frozen signature.
 
     sdfg_name: name DaCe sees, may differ from fortran_name after struct
         flattening (``st%u`` -> ``st_u``).
-    kind: 'array'|'scalar'|'symbol'|'mpi_comm' (integer communicator,
-        wrapper converts via MPI_Comm_f2c).
+    kind: how the argument crosses the binding (:class:`FrozenArgKind`).
     from_struct_member: original Fortran expr (``st%u``) if extracted by
         hlfir-flatten-structs, else None.
-    layout: 'same' (alias via c_loc) | 'complex_split' | 'transpose' --
-        binding emitter picks its copy strategy off this tag.
     is_written: True if this is a module-scope global the kernel WRITES;
         binding copies the final value back to the host module var.
     """
 
     fortran_name: str
     sdfg_name: str
-    kind: str
+    kind: FrozenArgKind
     dtype: str
     rank: int
     shape: Tuple[str, ...] = field(default_factory=tuple)
     intent: str = ""
     from_struct_member: Optional[str] = None
-    layout: str = "same"
     is_written: bool = False
     # Provenance for a flattened component of a MODULE-LEVEL array-of-structs
     # global (QE ``becxx(ikq)%k``, TYPE(bec_type) ALLOCATABLE).  This arg is
@@ -108,7 +115,7 @@ class FrozenArg:
         only the host->device leg, an ``out`` dummy only the device->host one, anything
         else both.
         """
-        if self.kind != "array" or not self.device_storage or self.device_storage == self.storage:
+        if self.kind is not FrozenArgKind.ARRAY or not self.device_storage or self.device_storage == self.storage:
             return ""
         intent = self.intent.lower()
         if intent == "in" and not self.is_written:
@@ -121,6 +128,7 @@ class FrozenArg:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""
         d = asdict(self)
         d["shape"] = list(self.shape)
+        d["kind"] = self.kind.value
         return d
 
     @classmethod
@@ -128,6 +136,7 @@ class FrozenArg:
         """Rebuild from a :meth:`to_dict` mapping (list back to tuple)."""
         d = dict(d)
         d["shape"] = tuple(d.get("shape", []))
+        d["kind"] = FrozenArgKind(d["kind"])
         return cls(**d)
 
 
@@ -248,7 +257,7 @@ SDFG_METADATA_KEY = "frozen_signature"
 _CACHE_ATTR = "_frozen_signature_cache"
 
 # Argument kinds an optimization pass is allowed to delete; see :func:`refreeze`.
-_MAY_SHRINK = frozenset({"scalar", "symbol"})
+_MAY_SHRINK = frozenset({FrozenArgKind.SCALAR, FrozenArgKind.SYMBOL})
 
 
 def get_frozen_signature(sdfg: SDFG) -> Optional["FrozenSignature"]:

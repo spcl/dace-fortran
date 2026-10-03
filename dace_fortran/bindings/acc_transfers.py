@@ -58,9 +58,11 @@ the extractor reports ``velocity_tendencies``' six scalars as
 
 from __future__ import annotations
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import json
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
@@ -75,8 +77,16 @@ _GPU_STORAGE = (
     dace.dtypes.StorageType.GPU_Shared,
 )
 
-DEVICE = "device"
-HOST = "host"
+
+class Residency(Enum):
+    """Where a buffer lives: ICON's side (from the sidecar) or the SDFG's (from its storage)."""
+
+    DEVICE = "device"
+    HOST = "host"
+
+
+DEVICE = Residency.DEVICE
+HOST = Residency.HOST
 
 # ICON launches its dycore kernels on ASYNC(1); putting our copies on the
 # same queue orders them after ICON's in-flight work with no extra fence.
@@ -98,14 +108,14 @@ class AccResidency:
 
     routine: str
     source: str
-    args: Mapping[str, str]
+    args: Mapping[str, Residency]
     unclassified: Tuple[str, ...] = ()
     refs: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def has_device_args(self) -> bool:
         """True iff at least one argument was classified device-resident."""
-        return any(r == DEVICE for r in self.args.values())
+        return any(r is DEVICE for r in self.args.values())
 
     @classmethod
     def from_dict(cls, raw: Mapping) -> "AccResidency":
@@ -113,12 +123,14 @@ class AccResidency:
         args = {}
         refs = {}
         for name, entry in (raw.get("args") or {}).items():
-            residency = (entry or {}).get("residency")
-            if residency not in (DEVICE, HOST):
+            raw_residency = (entry or {}).get("residency")
+            try:
+                residency = Residency(raw_residency)
+            except ValueError:
                 raise AccResidencyError(
                     f"acc residency sidecar: argument {name!r} has residency "
-                    f"{residency!r}; expected {DEVICE!r} or {HOST!r}"
-                )
+                    f"{raw_residency!r}; expected {DEVICE.value!r} or {HOST.value!r}"
+                ) from None
             args[str(name)] = residency
             entry_refs = (entry or {}).get("refs") or ([(entry or {}).get("ref")] if (entry or {}).get("ref") else [])
             if entry_refs:
@@ -157,7 +169,7 @@ class AccTransferPlan:
     update_host: Tuple[str, ...] = ()
     update_device: Tuple[str, ...] = ()
     use_device: Tuple[str, ...] = ()
-    storage: Mapping[str, str] = field(default_factory=dict)
+    storage: Mapping[str, Residency] = field(default_factory=dict)
     copyin: Tuple[str, ...] = ()
     copyout: Tuple[str, ...] = ()
     copy: Tuple[str, ...] = ()
@@ -199,7 +211,7 @@ def is_scalar_arg(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> bool:
     return all(isinstance(sdfg.arrays[n], dace.data.Scalar) for n in containers)
 
 
-def _arg_storage(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> str:
+def _arg_storage(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> Residency:
     """Classify ``arg`` as ``host`` or ``device`` storage from the SDFG."""
     if not containers:
         raise AccResidencyError(
@@ -252,7 +264,7 @@ def validate_acc_mappability(sdfg: dace.SDFG, residency: AccResidency, arg_order
     """
     problems = []
     for arg in arg_order:
-        if residency.args.get(arg) != DEVICE:
+        if residency.args.get(arg) is not DEVICE:
             continue
         containers = sdfg_containers_for_arg(sdfg, arg)
         if is_scalar_arg(sdfg, arg, containers):
@@ -321,13 +333,13 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
     update_host, update_device, use_device, bad = [], [], [], []
     for arg in buffers:
         side = residency.args.get(arg, HOST)
-        if side == DEVICE and storage[arg] == HOST:
+        if side is DEVICE and storage[arg] is HOST:
             update_host.append(arg)
             if arg in written:
                 update_device.append(arg)
-        elif side == DEVICE and storage[arg] == DEVICE:
+        elif side is DEVICE and storage[arg] is DEVICE:
             use_device.append(arg)
-        elif side == HOST and storage[arg] == DEVICE:
+        elif side is HOST and storage[arg] is DEVICE:
             bad.append(f"{arg} (host-resident in ICON, GPU storage in the SDFG)")
     if bad:
         raise AccResidencyError(
@@ -368,7 +380,9 @@ def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
         copyin=tuple(by_clause["copyin"]),
         copyout=tuple(by_clause["copyout"]),
         copy=tuple(by_clause["copy"]),
-        storage={a.sdfg_name: DEVICE if a.acc_data_clause else HOST for a in frozen.args if a.kind == "array"},
+        storage={
+            a.sdfg_name: DEVICE if a.acc_data_clause else HOST for a in frozen.args if a.kind is FrozenArgKind.ARRAY
+        },
     )
 
 

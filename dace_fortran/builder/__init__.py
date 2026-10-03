@@ -54,7 +54,7 @@ from dace.subsets import Subset
 
 from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
-from dace_fortran.bindings.frozen_signature import ModuleOrigin
+from dace_fortran.bindings.frozen_signature import FrozenArgKind, ModuleOrigin
 from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
@@ -1713,15 +1713,15 @@ class SDFGBuilder:
                 # descriptor ``emit_mpi`` retyped to ``opaque(MPI_Comm)``;
                 # the binding wrapper does ``MPI_Comm_f2c`` on the
                 # integer handle.
-                kind = "mpi_comm"
+                kind = FrozenArgKind.MPI_COMM
             elif user_key in self.symbols:
-                kind = "symbol"
+                kind = FrozenArgKind.SYMBOL
             elif isinstance(desc, Scalar):
-                kind = "scalar"
+                kind = FrozenArgKind.SCALAR
             elif isinstance(desc, Array):
-                kind = "array"
+                kind = FrozenArgKind.ARRAY
             else:
-                kind = "scalar"
+                kind = FrozenArgKind.SCALAR
             dtype_str = dtype_string(desc)
             shape = tuple(str(s) for s in desc.shape)
             # Caller-side location, pinned here so a later offload pass can be told
@@ -1739,7 +1739,7 @@ class SDFGBuilder:
                     sdfg_name=sdfg_name_,
                     kind=kind,
                     dtype=dtype_str,
-                    rank=len(shape) if kind == "array" else 0,
+                    rank=len(shape) if kind is FrozenArgKind.ARRAY else 0,
                     shape=shape,
                     intent=(v.intent if v is not None else ""),
                     is_written=bool(v.is_written) if v is not None else False,

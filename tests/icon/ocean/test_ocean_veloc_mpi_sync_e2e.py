@@ -36,7 +36,7 @@ import pytest
 from _util import build_on_root, have_flang
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import build_sdfg
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 from icon.ocean._ocean_e2e import (
     _invoke,
     _resolve_module_seeds,
@@ -116,12 +116,12 @@ def _build_artifacts(tmp_path: Path) -> dict:
         "vort_v_halo_sync",
         c_name="vort_v_halo_sync_c",
         args=(
-            Arg(kind="scalar", dtype="int32", intent="in"),  # typ
-            Arg(kind="scalar", dtype="int32", intent="in"),  # n1 = nproma
-            Arg(kind="scalar", dtype="int32", intent="in"),  # n2 = n_zlev
-            Arg(kind="scalar", dtype="int32", intent="in"),  # n3 = nblks_v
-            Arg(kind="array", dtype="float64", intent="inout"),  # vort_v
-            Arg(kind="scalar", dtype="int32", intent="in"),  # comm
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # typ
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # n1 = nproma
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # n2 = n_zlev
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # n3 = nblks_v
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # vort_v
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # comm
         ),
         libraries=(str(sync_so),),
         dynamic_extents_abi=False,

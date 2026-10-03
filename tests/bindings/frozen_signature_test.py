@@ -12,7 +12,7 @@ from dace_fortran.bindings import (
     FrozenSignature,
     SignatureDriftError,
 )
-from dace_fortran.bindings.frozen_signature import HOST_STORAGE, refreeze
+from dace_fortran.bindings.frozen_signature import FrozenArgKind, HOST_STORAGE, refreeze
 
 
 def _demo_signature() -> FrozenSignature:
@@ -21,10 +21,22 @@ def _demo_signature() -> FrozenSignature:
         mangled="_QPcompute",
         args=(
             FrozenArg(
-                fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=2, shape=("n", "m"), intent="in"
+                fortran_name="a",
+                sdfg_name="a",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=2,
+                shape=("n", "m"),
+                intent="in",
             ),
             FrozenArg(
-                fortran_name="b", sdfg_name="b", kind="array", dtype="float64", rank=2, shape=("n", "m"), intent="inout"
+                fortran_name="b",
+                sdfg_name="b",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=2,
+                shape=("n", "m"),
+                intent="inout",
             ),
         ),
         free_symbols=("m", "n"),
@@ -40,13 +52,12 @@ def _rich_signature() -> FrozenSignature:
             FrozenArg(
                 fortran_name="st%u",
                 sdfg_name="st_u",
-                kind="array",
+                kind=FrozenArgKind.ARRAY,
                 dtype="float64",
                 rank=2,
                 shape=("n", "m"),
                 intent="inout",
                 from_struct_member="st%u",
-                layout="transpose",
                 is_written=True,
                 aos_origin_mod="mo_becxx",
                 aos_origin_struct="becxx",
@@ -58,8 +69,17 @@ def _rich_signature() -> FrozenSignature:
                 module_origin_allocatable=True,
                 module_origin_pointer=True,
             ),
-            FrozenArg(fortran_name="tol", sdfg_name="tol", kind="scalar", dtype="float64", rank=0, intent="in"),
-            FrozenArg(fortran_name="comm", sdfg_name="comm", kind="mpi_comm", dtype="MPI_Comm", rank=0, intent="in"),
+            FrozenArg(
+                fortran_name="tol", sdfg_name="tol", kind=FrozenArgKind.SCALAR, dtype="float64", rank=0, intent="in"
+            ),
+            FrozenArg(
+                fortran_name="comm",
+                sdfg_name="comm",
+                kind=FrozenArgKind.MPI_COMM,
+                dtype="MPI_Comm",
+                rank=0,
+                intent="in",
+            ),
         ),
         free_symbols=("m", "n"),
         module_symbol_origins={"tol": ("mo_cfg", "tol")},
@@ -113,9 +133,9 @@ def test_refreeze_drops_specialized_scalar_and_symbol():
         entry="compute",
         mangled="_QPcompute",
         args=(
-            FrozenArg(fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",)),
-            FrozenArg(fortran_name="alpha", sdfg_name="alpha", kind="scalar", dtype="float64", rank=0),
-            FrozenArg(fortran_name="m", sdfg_name="m", kind="symbol", dtype="int64", rank=0),
+            FrozenArg(fortran_name="a", sdfg_name="a", kind=FrozenArgKind.ARRAY, dtype="float64", rank=1, shape=("n",)),
+            FrozenArg(fortran_name="alpha", sdfg_name="alpha", kind=FrozenArgKind.SCALAR, dtype="float64", rank=0),
+            FrozenArg(fortran_name="m", sdfg_name="m", kind=FrozenArgKind.SYMBOL, dtype="int64", rank=0),
         ),
         free_symbols=("m", "n"),
     )
@@ -135,8 +155,8 @@ def test_refreeze_refuses_dropped_array():
         entry="compute",
         mangled="_QPcompute",
         args=(
-            FrozenArg(fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",)),
-            FrozenArg(fortran_name="b", sdfg_name="b", kind="array", dtype="float64", rank=1, shape=("n",)),
+            FrozenArg(fortran_name="a", sdfg_name="a", kind=FrozenArgKind.ARRAY, dtype="float64", rank=1, shape=("n",)),
+            FrozenArg(fortran_name="b", sdfg_name="b", kind=FrozenArgKind.ARRAY, dtype="float64", rank=1, shape=("n",)),
         ),
         free_symbols=("n",),
     )
@@ -163,7 +183,14 @@ def _acc_sdfg(*names: str) -> "dace.SDFG":
 
 def _acc_arg(name: str, intent: str, **kw) -> FrozenArg:
     return FrozenArg(
-        fortran_name=name, sdfg_name=name, kind="array", dtype="float64", rank=1, shape=("n",), intent=intent, **kw
+        fortran_name=name,
+        sdfg_name=name,
+        kind=FrozenArgKind.ARRAY,
+        dtype="float64",
+        rank=1,
+        shape=("n",),
+        intent=intent,
+        **kw,
     )
 
 

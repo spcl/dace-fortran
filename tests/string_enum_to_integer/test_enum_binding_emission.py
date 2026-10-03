@@ -13,6 +13,7 @@ Pure emitter test -- no SDFG build / no f2py run.
 
 from pathlib import Path
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings import (
     FlattenPlan,
     FrozenArg,
@@ -39,13 +40,15 @@ def _enum_kernel_signature(tmp_path: Path) -> tuple:
             FrozenArg(
                 fortran_name="out_val",
                 sdfg_name="out_val",
-                kind="array",
+                kind=FrozenArgKind.ARRAY,
                 dtype="float64",
                 rank=1,
                 shape=("1",),
                 intent="out",
             ),
-            FrozenArg(fortran_name="flag", sdfg_name="flag", kind="scalar", dtype="int32", rank=0, intent="in"),
+            FrozenArg(
+                fortran_name="flag", sdfg_name="flag", kind=FrozenArgKind.SCALAR, dtype="int32", rank=0, intent="in"
+            ),
         ),
         free_symbols=(),
     )

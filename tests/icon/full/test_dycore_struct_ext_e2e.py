@@ -3,7 +3,7 @@
 Scales the flat-arg architecture proof in test_dycore_ext_velocity_e2e.py (inner_axpy(n,a,x,y))
 to a struct-shaped inner (type(state_t)) -- the velocity_tendencies shape at small scale.
 
-What Arg(kind='aos', c_abi='per_member_soa') enables and this test pins:
+What Arg(kind=AOS, c_abi=PER_MEMBER_SOA) enables and this test pins:
   * inner's emit_bind_c_shim expands type(state_t) to one c_ptr per member.
   * outer's emit_call forwards the marshal-expanded per-member SoA flats verbatim to the C
     call site -- no stack AoS buffer, no pack/unpack copy.
@@ -29,7 +29,7 @@ from dace_fortran.bindings import (
     OriginalInterface,
     build_fortran_library,
 )
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
@@ -151,12 +151,12 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     assert inner_lib.bind_c_shim_f90 is not None
 
     # ---- 2. Register the inner as a per-member-SoA external ----
-    # c_name is the inner's bind_c_shim entry; Arg(kind='aos', c_abi='per_member_soa') tells
+    # c_name is the inner's bind_c_shim entry; Arg(kind=AOS, c_abi=PER_MEMBER_SOA) tells
     # emit_call to forward the marshal-expanded leaves verbatim, matching the shim's inputs.
     keep_external(
         "inner_state",
         c_name="inner_state_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),),
         libraries=(str(inner_lib.so_path),),
     )
     try:
@@ -361,7 +361,7 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     keep_external(
         "inner_state_dyn",
         c_name="inner_state_dyn_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),),
         libraries=(str(inner_lib.so_path),),
         dynamic_extents_abi=True,
     )
@@ -593,7 +593,7 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     keep_external(
         inner_name,
         c_name=f"{inner_name}_c",
-        args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+        args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),),
         libraries=(str(inner_lib.so_path),),
     )
     try:

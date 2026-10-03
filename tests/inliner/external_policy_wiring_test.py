@@ -16,7 +16,7 @@ import pytest
 
 from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.fparser_inliner import inline_to_ast
-from dace_fortran.preprocess import merge_used_modules, preprocess_fortran_source
+from dace_fortran.preprocess import MergeEngine, merge_used_modules, preprocess_fortran_source
 
 
 def _have_gfortran() -> bool:
@@ -234,7 +234,7 @@ def test_preprocess_source_threads_external_names_regex(tmp_path):
     _write_halo(tmp_path)
     out = (
         preprocess_fortran_source(
-            _CALLER, search_dirs=[tmp_path], merge_engine="regex", external_names=["halo_exchange"]
+            _CALLER, search_dirs=[tmp_path], merge_engine=MergeEngine.REGEX, external_names=["halo_exchange"]
         )
         .replace(" ", "")
         .lower()
@@ -250,7 +250,7 @@ def test_preprocess_source_threads_external_names_fparser(tmp_path):
         preprocess_fortran_source(
             _CALLER,
             search_dirs=[tmp_path],
-            merge_engine="fparser",
+            merge_engine=MergeEngine.FPARSER,
             merge_entry="mo_user::run",
             external_names=["halo_exchange"],
         )
@@ -264,7 +264,11 @@ def test_preprocess_source_threads_external_names_fparser(tmp_path):
 def test_preprocess_source_no_external_names_keeps_body(tmp_path):
     """Default (no policy) keeps the spliced body -- the threading is opt-in."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER, search_dirs=[tmp_path], merge_engine="regex").replace(" ", "").lower()
+    out = (
+        preprocess_fortran_source(_CALLER, search_dirs=[tmp_path], merge_engine=MergeEngine.REGEX)
+        .replace(" ", "")
+        .lower()
+    )
     assert "a(i)=a(i)+1.0" in out
 
 

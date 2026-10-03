@@ -44,6 +44,7 @@ from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
 from dace_fortran.entry_names import split_qualified_entry
+from dace_fortran.preprocess import MergeEngine
 from dace_fortran.external import (
     Arg,
     ExternalSignature,
@@ -244,7 +245,7 @@ def _emit_hlfir(
     merge: bool,
     preprocess: bool,
     merge_entry: Optional[str] = None,
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
     external_names: Sequence[str] = (),
     defines: Sequence[str] = (),
     kind_map: dict | None = None,
@@ -332,7 +333,7 @@ def make_builder(
     defines: Sequence[str] = (),
     kind_map: dict | None = None,
     kind_passthrough: bool = False,
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
 ) -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
@@ -405,7 +406,7 @@ def build_sdfg(
     defines: Sequence[str] = (),
     kind_map: dict | None = None,
     kind_passthrough: bool = False,
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
 ) -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
@@ -436,7 +437,7 @@ def build_sdfg(
         entirely -- for build pipelines that already resolve every
         kind alias upstream (e.g. via cpp expansion or by emitting
         HLFIR with the constants module pre-merged).
-    :param merge_engine: ``"regex"`` (default) or ``"fparser"`` -- which
+    :param merge_engine: ``MergeEngine.REGEX`` (default) or ``MergeEngine.FPARSER`` -- which
         ``USE``-merge engine preprocesses the source (see
         :func:`build_sdfg_from_files`).
     :returns: a built, validated SDFG.
@@ -639,7 +640,7 @@ def build_sdfg_from_files(
     pipeline: Optional[str] = None,
     out_dir: Optional[Union[str, Path]] = None,
     preprocess: bool = False,
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
 ) -> SDFG:
     """Build a :class:`dace.SDFG` from a multi-file Fortran project.
 
@@ -660,8 +661,8 @@ def build_sdfg_from_files(
     :param out_dir: scratch directory; a temporary one is used and
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
-    :param merge_engine: ``"regex"`` (default) inlines the ``USE``-d modules
-        with the text-splicer (:func:`merge_used_modules`); ``"fparser"``
+    :param merge_engine: ``MergeEngine.REGEX`` (default) inlines the ``USE``-d modules
+        with the text-splicer (:func:`merge_used_modules`); ``MergeEngine.FPARSER``
         uses the fparser AST engine, which resolves ``ONLY:`` / ``=>``
         renames the splicer cannot see.  Needs ``fparser > 0.2``.
     :returns: a built, validated SDFG.

@@ -15,7 +15,15 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import Arg, apply_external_functions, clear_external_registry, keep_external
+from dace_fortran.external import (
+    Arg,
+    ArgKind,
+    CAbi,
+    Intent,
+    apply_external_functions,
+    clear_external_registry,
+    keep_external,
+)
 from dace_fortran.external_functions import ExternalFunction
 
 #: Standalone "fake" mo_velocity_advection (full velocity_tendencies + its USE
@@ -112,7 +120,7 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_swap", args=(Arg(kind="aos", intent="inout"),), libraries=(str(so),))
+        keep_external("ext_swap", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),), libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_aos::kern").build()
         f1 = np.array([3.0])
         f2 = np.array([5.0])
@@ -157,7 +165,7 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_state", args=(Arg(kind="aos", intent="inout"),), libraries=(str(so),))
+        keep_external("ext_state", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),), libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_vel::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
         v = np.array([10.0, 20.0, 30.0, 40.0])
@@ -264,7 +272,7 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_velstate", args=(Arg(kind="aos", intent="inout"),), libraries=(str(so),))
+        keep_external("ext_velstate", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),), libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_velstate::kern").build()
         rng = np.random.default_rng(0)
         u = np.asfortranarray(rng.random((4, 4)))
@@ -372,9 +380,9 @@ end module
         keep_external(
             "ext_mixed",
             args=(
-                Arg(kind="array", dtype="float64", intent="inout"),
-                Arg(kind="scalar", dtype="int32", intent="in"),
-                Arg(kind="aos", intent="inout"),
+                Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
+                Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+                Arg(kind=ArgKind.AOS, intent=Intent.INOUT),
             ),
             libraries=(str(so),),
         )
@@ -431,14 +439,14 @@ end module
 
 
 def test_v2_aos_external_with_nested_struct(tmp_path):
-    """``keep_external(kind='aos')`` on a struct with a nested derived-type member:
+    """``keep_external(kind=AOS)`` on a struct with a nested derived-type member:
     recursive expansion produces one SoA flat per leaf (``ip%u``, ``ip%v``, ``scale``),
     laid out field-by-field; build succeeds and the ExternalCall carries all three."""
     from dace_fortran.external import ExternalCall
 
     clear_external_registry()
     try:
-        keep_external("ext_v2", args=(Arg(kind="aos", intent="inout"),))
+        keep_external("ext_v2", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),))
         sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern", entry="m_v2::kern").build()
         # Three leaves (ip%u, ip%v, scale) wired in declaration order as s_ip_u/s_ip_v/s_scale.
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
@@ -477,14 +485,14 @@ end module
 
 
 def test_v2_aos_external_with_allocatable_member(tmp_path):
-    """``Arg(kind='aos')`` with an allocatable array member: v2's ``isBoxOfScalarArray``
+    """``Arg(kind=AOS)`` with an allocatable array member: v2's ``isBoxOfScalarArray``
     + ``rewriteCall`` extracts the data pointer, tagging two leaves (``w`` + scalar ``n``);
     build succeeds with no error (was a diagnostic-anchor before v2)."""
     from dace_fortran.external import ExternalCall
 
     clear_external_registry()
     try:
-        keep_external("ext_v2_alloc", args=(Arg(kind="aos", intent="inout"),))
+        keep_external("ext_v2_alloc", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),))
         sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern", entry="m_v2_alloc::kern").build()
         # One ExternalCall node with the per-leaf marshal-expansion shape.
         ext = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
@@ -528,14 +536,14 @@ end module
 
 
 def test_v2_aos_external_with_value_record_array_member(tmp_path):
-    """``Arg(kind='aos', c_abi='per_member_soa')`` with a box-of-value-record-array member:
+    """``Arg(kind=AOS, c_abi=PER_MEMBER_SOA)`` with a box-of-value-record-array member:
     v2.2 expands to one leaf per record field (``s_e_v1``/``s_e_v2``), not the AoS box.
     Milestone-1 anchor for the ICON solve_nh velocity callback (``t_patch.primal_normal_cell``)."""
     from dace_fortran.external import ExternalCall
 
     clear_external_registry()
     try:
-        keep_external("ext_v2_vra", args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),))
+        keep_external("ext_v2_vra", args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),))
         sdfg = build_sdfg(_V2_VALUE_RECORD_ARRAY_SRC, tmp_path, name="kern", entry="m_v2_vra::kern").build()
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None, "marshal expansion did not produce an ExternalCall"
@@ -554,13 +562,13 @@ def test_v2_aos_external_with_value_record_array_member(tmp_path):
 # ---------------------------------------------------------------------------
 # Arg.c_abi axis (Fortran shape x C ABI shape, decoupled): the same state_t shape
 # as test_array_member_struct_aos_external, here passed as per-member SoA pointers
-# (c_abi='per_member_soa') instead of an AoS struct pointer -- same marshal
+# (c_abi=PER_MEMBER_SOA) instead of an AoS struct pointer -- same marshal
 # expansion, but no _aosbuf / pack-unpack, leaves forwarded verbatim.
 # ---------------------------------------------------------------------------
 
 
 def test_aos_external_per_member_soa_skips_aos_buffer(tmp_path):
-    """``Arg(kind='aos', c_abi='per_member_soa')``: whole struct from Fortran, but the C
+    """``Arg(kind=AOS, c_abi=PER_MEMBER_SOA)``: whole struct from Fortran, but the C
     external takes per-member SoA pointers -- no stack AoS struct materialised. Same
     registration pattern reaches both an opaque SoA-speaking C library and a sibling SDFG."""
     so = _build_c_so(
@@ -568,7 +576,7 @@ def test_aos_external_per_member_soa_skips_aos_buffer(tmp_path):
         "ext_per_member",
         "void ext_per_member(double* u, double* v){ for (int i = 0; i < 4; ++i) u[i] += v[i]; }",
     )
-    # Fortran passes the whole struct s (tagged aos group of 2); c_abi='per_member_soa'
+    # Fortran passes the whole struct s (tagged aos group of 2); c_abi=PER_MEMBER_SOA
     # tells emit_call to forward the SoA flats directly.
     src = """
 module m_perm
@@ -595,7 +603,9 @@ end module
     clear_external_registry()
     try:
         keep_external(
-            "ext_per_member", args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),), libraries=(str(so),)
+            "ext_per_member",
+            args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),),
+            libraries=(str(so),),
         )
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_perm::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
@@ -673,7 +683,9 @@ def test_marshal_skips_unused_pointer_to_record_handle(tmp_path):
     clear_external_registry()
     try:
         keep_external(
-            "ext_handle", args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"),), dynamic_extents_abi=True
+            "ext_handle",
+            args=(Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),),
+            dynamic_extents_abi=True,
         )
         sdfg = build_sdfg(_HANDLE_UNUSED_SRC, tmp_path, name="kern", entry="m_handle_ok::kern").build()
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
@@ -735,7 +747,9 @@ def test_marshal_loud_fails_on_used_pointer_to_record_handle(tmp_path):
     clear_external_registry()
     try:
         keep_external(
-            "ext_handle", args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"),), dynamic_extents_abi=True
+            "ext_handle",
+            args=(Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),),
+            dynamic_extents_abi=True,
         )
         with pytest.raises(Exception) as ei:
             build_sdfg(_HANDLE_USED_SRC, tmp_path, name="kern", entry="m_handle_bad::kern").build()
@@ -786,7 +800,11 @@ def test_marshal_scalar_symbol_member_forwarded_by_value(tmp_path):
 
     clear_external_registry()
     try:
-        keep_external("ext_sym", args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"),), dynamic_extents_abi=True)
+        keep_external(
+            "ext_sym",
+            args=(Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),),
+            dynamic_extents_abi=True,
+        )
         sdfg = build_sdfg(_SYMBOL_MEMBER_SRC, tmp_path, name="kern", entry="m_symmem::kern").build()
         sdfg.validate()
         # The member ``n`` is a symbol, not an array.

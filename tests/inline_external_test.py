@@ -10,7 +10,15 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import Arg, apply_external_functions, clear_external_registry, inline_external, keep_external
+from dace_fortran.external import (
+    Arg,
+    ArgKind,
+    Intent,
+    apply_external_functions,
+    clear_external_registry,
+    inline_external,
+    keep_external,
+)
 from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
@@ -140,7 +148,7 @@ contains
   end subroutine
 end module
 """
-    # Caller USEs the same module + CALLs add_vec; Arg(kind="aos") makes
+    # Caller USEs the same module + CALLs add_vec; Arg(kind=ArgKind.AOS) makes
     # hlfir-marshal-external-structs expand the struct arg into per-member SoA connectors (_a0=u, _a1=v).
     caller_src = """
 module caller_mod
@@ -165,7 +173,7 @@ end module caller_mod
     caller_dir.mkdir(parents=True, exist_ok=True)
     (caller_dir / "aos_mod.f90").write_text(callee_src)
     try:
-        keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"),))
+        keep_external(callee_ext_name, args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),))
         caller_sdfg = build_sdfg(caller_src, caller_dir, name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
@@ -188,7 +196,7 @@ end module caller_mod
     callee_args = list(callee_sdfg.arglist().keys())
     assert len(callee_args) == 2, f"callee expected to flatten its struct dummy to 2 leaves, got {callee_args}"
 
-    keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"),))
+    keep_external(callee_ext_name, args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT),))
     try:
         replaced = inline_external(caller_sdfg, callee_ext_name, callee_sdfg=callee_sdfg)
     finally:

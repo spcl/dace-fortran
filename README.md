@@ -40,7 +40,7 @@ Run before flang, on raw source. SED-style regex transforms with shared comment/
 
 | Pass | Default | What it does |
 |---|---|---|
-| `merge_used_modules` | on | Inlines `USE`-d module sources so flang sees one self-contained TU. Regex text-splice by default; an **fparser** AST engine is available via `merge_engine="fparser"`. |
+| `merge_used_modules` | on | Inlines `USE`-d module sources so flang sees one self-contained TU. Regex text-splice by default; an **fparser** AST engine is available via `merge_engine=MergeEngine.FPARSER`. |
 | `strip_openmp_directives` | on | Drops `!$OMP` / `!$ACC` / `!$` sentinels and `#ifdef _OPENMP` / `_OPENACC` blocks. |
 | `normalize_kind_parameters` | on | Substitutes precision aliases (`wp`, `sp`, `dp`, `qp`) with literal kind integers when the alias isn't locally bound. |
 | `rewrite_integer_powers` | on | Expands integer-valued REAL-literal powers (`x**2.0` → `x*x`). |
@@ -230,7 +230,7 @@ sdfg = dace_fortran.build_sdfg_from_files([driver, mod], entry="mo_x::kernel")
 # text-splicer -- it resolves the ``ONLY:`` / ``=>`` renames the splicer cannot
 # see.  Needs ``fparser > 0.2``.
 sdfg = dace_fortran.build_sdfg_from_files([driver, mod], entry="mo_x::kernel",
-                                          merge_engine="fparser")
+                                          merge_engine=dace_fortran.MergeEngine.FPARSER)
 
 # A large / dependency-tangled project: emit .hlfir from your own build,
 # then consume compile_commands.json directly (tier 3):

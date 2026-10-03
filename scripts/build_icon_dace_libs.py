@@ -58,7 +58,7 @@ from dace_fortran.bindings.acc_transfers import (
 from dace_fortran.llvm_toolchain import find_flang
 from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
 
 _RELEASE_FFLAGS = (
     "-O3",
@@ -506,28 +506,28 @@ def build_dycore_wrapper(
 
     velocity_src = velocity_source.read_text()
     sync_args = (
-        Arg(kind="scalar", dtype="int32", intent="in"),
-        Arg(kind="array", dtype="float64", intent="inout"),
+        Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+        Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
     )
     clear_external_registry()
     keep_external(
         "velocity_tendencies",
         c_name="velocity_tendencies_c",
         args=(
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),
-            Arg(kind="aos", intent="in", c_abi="per_member_soa"),
-            Arg(kind="aos", intent="in", c_abi="per_member_soa"),
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),
-            Arg(kind="aos", intent="inout", c_abi="per_member_soa"),
-            Arg(kind="array", dtype="float64", intent="inout"),
-            Arg(kind="array", dtype="float64", intent="inout"),
-            Arg(kind="array", dtype="float64", intent="inout"),
-            Arg(kind="scalar", dtype="int32", intent="in"),
-            Arg(kind="scalar", dtype="int32", intent="in"),
-            Arg(kind="scalar", dtype="bool", intent="in"),
-            Arg(kind="scalar", dtype="float64", intent="in"),
-            Arg(kind="scalar", dtype="float64", intent="in"),
-            Arg(kind="scalar", dtype="bool", intent="in"),
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="bool", intent=Intent.IN),
         ),
         libraries=(str(inner_lib_so),),
         dynamic_extents_abi=True,

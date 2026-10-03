@@ -6,7 +6,7 @@ This test RUNS both paths (not just checks ABI order) and verifies the fields ro
 mis-scattered SoA leaf or off-by-one stride changes the numerical output and trips here.
 
 Inner SDFG (inner_vrec) reads the value-record fields, built bind_c_shim=True (per-field SoA C ABI).
-Outer SDFG (outer_vrec) scales around a call to inner_vrec as a keep_external(c_abi='per_member_soa')
+Outer SDFG (outer_vrec) scales around a call to inner_vrec as a keep_external(c_abi=PER_MEMBER_SOA)
 so a dropped/miswired external changes the result. Reference is gfortran-compiled untransformed kernels
 + a hand bind(c) driver sharing the exact same C ABI, scattering/gathering SoA v1/v2 into AoS pnc(i)%v1/%v2.
 
@@ -26,7 +26,7 @@ import dace
 from _util import build_sdfg, gfortran_compile_so, have_flang
 from dace_fortran.bindings import FlattenPlan, build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
@@ -167,7 +167,7 @@ def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
         keep_external(
             "inner_vrec",
             c_name="inner_vrec_c",
-            args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"),),
+            args=(Arg(kind=ArgKind.AOS, intent=Intent.INOUT, c_abi=CAbi.PER_MEMBER_SOA),),
             libraries=(str(inner_lib.so_path),),
             dynamic_extents_abi=True,
         )

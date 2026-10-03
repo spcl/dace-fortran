@@ -7,7 +7,7 @@ this pins explicit-override precedence, the auto-only path, and serialisation st
 
 from dace_fortran.bindings.block_builders import effective_module_sources
 from dace_fortran.bindings.fortran_interface import OriginalInterface
-from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature
 
 
 def _frozen(origins):
@@ -60,7 +60,7 @@ def test_frozen_signature_json_roundtrip(tmp_path):
             FrozenArg(
                 fortran_name="nrdmax",
                 sdfg_name="nrdmax",
-                kind="array",
+                kind=FrozenArgKind.ARRAY,
                 dtype="int32",
                 rank=1,
                 shape=("10",),

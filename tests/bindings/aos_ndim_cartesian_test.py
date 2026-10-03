@@ -7,7 +7,7 @@ emitted. Text-only checks on emitted Fortran -- no flang/gfortran needed.
 """
 
 from dace_fortran.bindings.block_builders import _render_aos_copy_in, _render_aos_copy_out
-from dace_fortran.bindings.frozen_signature import FrozenArg
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind
 
 
 def _cartesian_member_arg(is_written=False):
@@ -16,7 +16,7 @@ def _cartesian_member_arg(is_written=False):
     return FrozenArg(
         fortran_name="p_diag_p_vn_dual_x",
         sdfg_name="p_diag_p_vn_dual_x",
-        kind="array",
+        kind=FrozenArgKind.ARRAY,
         dtype="float64",
         rank=4,
         shape=("p_diag_p_vn_dual_x_d0", "p_diag_p_vn_dual_x_d1", "p_diag_p_vn_dual_x_d2", "3"),
@@ -35,7 +35,7 @@ def _becxx_member_arg():
     return FrozenArg(
         fortran_name="becxx_k",
         sdfg_name="becxx_k",
-        kind="array",
+        kind=FrozenArgKind.ARRAY,
         dtype="float64",
         rank=3,
         shape=("becxx_k_d0", "becxx_k_d1", "becxx_k_d2"),

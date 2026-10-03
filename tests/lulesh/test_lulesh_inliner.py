@@ -16,10 +16,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from _util import build_sdfg, have_flang
+
 from dace_fortran.fparser_inliner import inline_to_ast
-from dace_fortran.preprocess import merge_used_modules
+from dace_fortran.preprocess import MergeEngine, merge_used_modules
 
 _HERE = Path(__file__).parent
 _KERNELS = _HERE / "lulesh_comp_kernels.f90"
@@ -121,8 +121,8 @@ def _f2py_reference(tu_text: str, out_dir: Path, mod: str):
 
 
 @pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
-@pytest.mark.parametrize("engine", ["regex", "fparser"])
-def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: str):
+@pytest.mark.parametrize("engine", list(MergeEngine), ids=lambda e: e.value)
+def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: MergeEngine):
     """SDFG of the inlined kernel matches the gfortran reference element-wise."""
     if not (_have("gfortran") and _have("meson")):
         pytest.skip("gfortran + meson needed for the f2py reference")
@@ -144,7 +144,7 @@ def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: str):
     dvdz_r = np.zeros(8, order="F")
     ref.calcelemvolumederivative(dvdx_r, dvdy_r, dvdz_r, x, y, z)
 
-    sdfg = build_sdfg(merged, tmp_path / f"sdfg_{engine}", name="cevd", entry=_ENTRY, merge_engine=engine).build()
+    sdfg = build_sdfg(merged, tmp_path / f"sdfg_{engine.value}", name="cevd", entry=_ENTRY, merge_engine=engine).build()
     dvdx = np.zeros(8, order="F")
     dvdy = np.zeros(8, order="F")
     dvdz = np.zeros(8, order="F")

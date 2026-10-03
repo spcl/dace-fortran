@@ -16,7 +16,7 @@ Architecture:
     ABI; ``ctypes`` invokes both identically and asserts bit-for-bit equality.
 
 Scaling to ``velocity_tendencies``: register each derived-type arg with
-``Arg(kind="aos", c_abi="per_member_soa")`` so :func:`emit_call` forwards per-member
+``Arg(kind=ArgKind.AOS, c_abi=CAbi.PER_MEMBER_SOA)`` so :func:`emit_call` forwards per-member
 pointers verbatim -- the inner's ``bind_c_shim`` already receives per-member slots, so
 the two sides agree by construction without an intermediate shim.
 """
@@ -34,7 +34,7 @@ from dace_fortran.bindings import (
     OriginalInterface,
     build_fortran_library,
 )
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
@@ -140,10 +140,10 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         "inner_axpy",
         c_name="inner_axpy_c",
         args=(
-            Arg(kind="scalar", dtype="int32", intent="in"),
-            Arg(kind="scalar", dtype="float64", intent="in"),
-            Arg(kind="array", dtype="float64", intent="in"),
-            Arg(kind="array", dtype="float64", intent="inout"),
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="float64", intent=Intent.IN),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.IN),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
         ),
         libraries=(str(inner_lib.so_path),),
     )

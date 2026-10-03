@@ -1,5 +1,5 @@
 """Milestone-1 ABI-alignment contract for the ICON velocity-callback shape: an OUTER kernel
-calling an INNER kernel via ``keep_external(c_abi='per_member_soa')`` must produce a
+calling an INNER kernel via ``keep_external(c_abi=PER_MEMBER_SOA)`` must produce a
 marshalled per-member-SoA leaf sequence that EQUALS the INNER's ``bind_c_shim`` slot
 sequence, member-for-member, when both compile against the SAME union struct type. Both
 sides walk the struct in Fortran declaration order, so the sequences coincide iff every
@@ -15,7 +15,7 @@ import pytest
 from _util import build_sdfg, have_flang
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.external import Arg, ExternalCall, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ArgKind, CAbi, ExternalCall, Intent, clear_external_registry, keep_external
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -101,10 +101,10 @@ def _outer_patch_leaf_order(tmp_path):
     keep_external(
         "velo",
         args=(
-            Arg(kind="aos", intent="in", c_abi="per_member_soa"),
-            Arg(kind="scalar", dtype="int32", intent="in"),
-            Arg(kind="scalar", dtype="int32", intent="in"),
-            Arg(kind="array", dtype="float64", intent="inout"),
+            Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
         ),
         dynamic_extents_abi=True,
     )
@@ -263,10 +263,10 @@ end module
 """
 
 _NEG_LB_CALLBACK_ARGS = (
-    Arg(kind="aos", intent="in", c_abi="per_member_soa"),  # p
-    Arg(kind="scalar", dtype="int32", intent="in"),  # je
-    Arg(kind="scalar", dtype="int32", intent="in"),  # jb
-    Arg(kind="array", dtype="float64", intent="inout"),  # out / acc
+    Arg(kind=ArgKind.AOS, intent=Intent.IN, c_abi=CAbi.PER_MEMBER_SOA),  # p
+    Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # je
+    Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),  # jb
+    Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),  # out / acc
 )
 
 

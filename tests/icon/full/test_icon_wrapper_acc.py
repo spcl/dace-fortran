@@ -20,6 +20,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings.acc_transfers import (
     AccResidency,
     AccResidencyError,
@@ -424,7 +425,13 @@ def _emit_fixture(tmp_path: Path, name: str, acc=None) -> str:
         mangled="_QPkernel",
         args=(
             FrozenArg(
-                fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",), intent="inout"
+                fortran_name="a",
+                sdfg_name="a",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=1,
+                shape=("n",),
+                intent="inout",
             ),
         ),
         free_symbols=("n",),

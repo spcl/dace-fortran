@@ -8,6 +8,7 @@ it, any interstate-edge expression mentioning the array crashes sympy with
 
 from pathlib import Path
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import numpy as np
 import pytest
 
@@ -134,12 +135,18 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
         mangled="_QPmain",
         args=(
             FrozenArg(
-                fortran_name="d", sdfg_name="d", kind="array", dtype="float64", rank=1, shape=("2",), intent="inout"
+                fortran_name="d",
+                sdfg_name="d",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=1,
+                shape=("2",),
+                intent="inout",
             ),
             FrozenArg(
                 fortran_name="test",
                 sdfg_name="program_test",
-                kind="array",
+                kind=FrozenArgKind.ARRAY,
                 dtype="int32",
                 rank=1,
                 shape=("2",),

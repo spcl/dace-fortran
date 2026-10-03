@@ -31,8 +31,9 @@ treats every entry uniformly.
 from __future__ import annotations
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Dict, Mapping, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Collection, Dict, Mapping, Iterable, List, NamedTuple, Optional, Tuple
 
 import dace
 import dace.library
@@ -56,10 +57,54 @@ _C_TYPES = {
     "bool": "bool",
 }
 
-#: C type emitted for an ``Arg(kind="comm")`` parameter.  Full
+#: C type emitted for an ``Arg(kind=ArgKind.COMM)`` parameter.  Full
 #: contract (opaque-retype, who calls ``MPI_Comm_f2c``) is on
-#: ``Arg`` 's ``kind="comm"`` docstring.
+#: ``Arg`` 's ``kind=COMM`` docstring.
 _OPAQUE_COMM_DTYPE = "MPI_Comm"
+
+
+class ArgKind(Enum):
+    """Fortran-side shape of an external argument (see :class:`Arg`)."""
+
+    ARRAY = "array"
+    SCALAR = "scalar"
+    AOS = "aos"
+    COMM = "comm"
+
+
+class CAbi(Enum):
+    """How an external argument crosses the C ABI (see :class:`Arg`)."""
+
+    VALUE = "value"
+    POINTER = "pointer"
+    AOS_STRUCT_PTR = "aos_struct_ptr"
+    PER_MEMBER_SOA = "per_member_soa"
+
+
+class Intent(Enum):
+    """Whether the external reads, writes or both reads and writes an argument."""
+
+    IN = "in"
+    OUT = "out"
+    INOUT = "inout"
+
+    @property
+    def reads(self) -> bool:
+        return self is not Intent.OUT
+
+    @property
+    def writes(self) -> bool:
+        return self is not Intent.IN
+
+
+class ModuleSymbolForward(NamedTuple):
+    """A Fortran module global forwarded across a library boundary (see
+    :attr:`ExternalSignature.module_symbol_forward`)."""
+
+    module: str
+    member: str
+    dtype: str
+    rank: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,15 +119,15 @@ class Arg:
 
     :ivar kind: Fortran-side shape of the arg.
 
-        * ``'array'`` -- a flat array dummy.  C ABI defaults to a
+        * ``ARRAY`` -- a flat array dummy.  C ABI defaults to a
           pointer (``<ctype> *``).
-        * ``'scalar'`` -- a scalar dummy.  C ABI defaults to by-value.
-        * ``'aos'`` -- a whole derived-type dummy that
+        * ``SCALAR`` -- a scalar dummy.  C ABI defaults to by-value.
+        * ``AOS`` -- a whole derived-type dummy that
           ``hlfir-marshal-external-structs`` expanded into per-member
           slots.  The :ivar:`c_abi` choice picks how those slots
           reach the external (see below).
-        * ``'comm'`` -- a C ``MPI_Comm`` handle.  ``c_abi`` is forced
-          opaque-by-value; ``intent`` is forced ``'in'``.  The
+        * ``COMM`` -- a C ``MPI_Comm`` handle.  ``c_abi`` is forced
+          opaque-by-value; ``intent`` is forced ``IN``.  The
           SDFG-side container is retyped to
           ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen emits
           the parameter as ``MPI_Comm`` directly -- the ``bind(c)``
@@ -93,18 +138,18 @@ class Arg:
         ``None`` (the default) picks the natural mapping for the
         arg's :ivar:`kind`:
 
-        * ``'value'`` -- pass-by-value (the natural default for
-          ``kind='scalar'``).
-        * ``'pointer'`` -- pass-by-pointer (the natural default for
-          ``kind='array'``).
-        * ``'aos_struct_ptr'`` -- the natural default for
-          ``kind='aos'``: emit_call locally re-packs the SoA flats
+        * ``VALUE`` -- pass-by-value (the natural default for
+          ``kind=SCALAR``).
+        * ``POINTER`` -- pass-by-pointer (the natural default for
+          ``kind=ARRAY``).
+        * ``AOS_STRUCT_PTR`` -- the natural default for
+          ``kind=AOS``: emit_call locally re-packs the SoA flats
           into a stack AoS struct, passes ``&buf``, then unpacks out
           (the inline pack/unpack body that has shipped in this
           tree since v1).  ``intent`` drives the pack-in / unpack-out
           directions.  The C parameter is ``void *`` (the callee
           casts to its concrete struct).
-        * ``'per_member_soa'`` -- for ``kind='aos'`` only.  The
+        * ``PER_MEMBER_SOA`` -- for ``kind=AOS`` only.  The
           per-member SoA slots the marshal-expansion produced are
           forwarded *verbatim* to the external (no AoS buffer, no
           pack / unpack copy).  This is the shape a *sibling SDFG*
@@ -115,43 +160,35 @@ class Arg:
 
     :ivar dtype: element dtype string -- a key of :data:`_C_TYPES`
         (``'float64'`` / ``'int32'`` / ...).  Ignored when ``kind``
-        is ``'aos'`` or ``'comm'``.
-    :ivar intent: ``'in'`` | ``'out'`` | ``'inout'``.  Defaults to
-        ``'inout'`` -- an external function is opaque, so the safe
+        is ``AOS`` or ``COMM``.
+    :ivar intent: ``IN`` | ``OUT`` | ``INOUT``.  Defaults to
+        ``INOUT`` -- an external function is opaque, so the safe
         conservative assumption is that it both reads and writes an
         array arg: a missed write is a correctness bug (the mutation
         is invisible to dataflow -> wrong results / illegal
         reordering / DCE), an over-declared read/write only costs
-        optimisation.  Narrow to ``'in'`` / ``'out'`` only when the
+        optimisation.  Narrow to ``IN`` / ``OUT`` only when the
         true behaviour is known.  A by-value scalar is read-only
         regardless of this field (the callee gets a copy -- an ABI
-        fact, not a choice); ``'comm'`` is always read-only.
+        fact, not a choice); ``COMM`` is always read-only.
     """
 
-    kind: str
-    dtype: str = ""  # ignored when kind == "comm" or kind == "aos"
-    intent: str = "inout"
-    c_abi: Optional[str] = None
+    kind: ArgKind
+    dtype: str = ""  # ignored when kind is COMM or AOS
+    intent: Intent = Intent.INOUT
+    c_abi: Optional[CAbi] = None
 
-    def resolved_c_abi(self) -> str:
+    def resolved_c_abi(self) -> CAbi:
         """The :ivar:`c_abi` choice resolved to its concrete value
         with the per-:ivar:`kind` natural default applied."""
         if self.c_abi is not None:
             return self.c_abi
-        if self.kind == "scalar":
-            return "value"
-        if self.kind == "array":
-            return "pointer"
-        if self.kind == "aos":
-            return "aos_struct_ptr"
-        if self.kind == "comm":
-            return "value"
-        raise ValueError(f"external Arg: unknown kind {self.kind!r}; expected one of array / scalar / aos / comm")
+        return _DEFAULT_C_ABI[self.kind]
 
     def c_decl_type(self) -> str:
         """C parameter type for this arg's ``extern "C"`` declaration.
 
-        For ``kind='aos'`` with ``c_abi='per_member_soa'`` the decl
+        For ``kind=AOS`` with ``c_abi=PER_MEMBER_SOA`` the decl
         expands to multiple parameters (one per leaf member); that
         expansion is per-call-site and lives in
         :func:`builder.emit_library.emit_call`.  This method returns
@@ -160,24 +197,33 @@ class Arg:
 
         :raises ValueError: unsupported ``kind`` or ``dtype``.
         """
-        if self.kind == "comm":
+        if self.kind is ArgKind.COMM:
             return _OPAQUE_COMM_DTYPE
-        if self.kind == "aos":
+        if self.kind is ArgKind.AOS:
             abi = self.resolved_c_abi()
-            if abi == "aos_struct_ptr":
+            if abi is CAbi.AOS_STRUCT_PTR:
                 return "void *"  # address of the re-packed AoS buffer
-            if abi == "per_member_soa":
+            if abi is CAbi.PER_MEMBER_SOA:
                 # The leaf-expanded decl is rendered by the caller
                 # from the marshal-expansion groups; nothing
                 # single-parameter to surface here.
                 return ""
             raise ValueError(
-                f"external Arg(kind='aos'): unsupported c_abi {abi!r}; expected aos_struct_ptr or per_member_soa"
+                f"external Arg(kind=AOS): unsupported c_abi {abi}; expected AOS_STRUCT_PTR or PER_MEMBER_SOA"
             )
         base = _C_TYPES.get(self.dtype)
         if base is None:
             raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; known: {sorted(_C_TYPES)}")
-        return f"{base} *" if self.kind == "array" else base
+        return f"{base} *" if self.kind is ArgKind.ARRAY else base
+
+
+#: The natural C ABI of each argument kind.
+_DEFAULT_C_ABI = {
+    ArgKind.SCALAR: CAbi.VALUE,
+    ArgKind.ARRAY: CAbi.POINTER,
+    ArgKind.AOS: CAbi.AOS_STRUCT_PTR,
+    ArgKind.COMM: CAbi.VALUE,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +250,7 @@ class ExternalSignature:
     libraries: Tuple[str, ...] = field(default_factory=tuple)
     stub: bool = False
     # Fortran module globals to forward into the callee's library
-    # before each call.  Each tuple = ``(module, member, dtype, rank)``:
+    # before each call.  Each entry is a :class:`ModuleSymbolForward`:
     #
     #   * ``module``  -- defining module (``"mo_parallel_config"``).
     #   * ``member``  -- member name within that module (``"nproma"``).
@@ -227,12 +273,12 @@ class ExternalSignature:
     # outer's caller wrote.  See the velocity e2e ASan ODR-violation
     # diagnostic for the per-library Fortran-module-globals issue
     # this contract addresses.
-    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = field(default_factory=tuple)
+    module_symbol_forward: Tuple[ModuleSymbolForward, ...] = field(default_factory=tuple)
     # When true, ``emit_call`` prepends one ``int`` extent per
     # dynamic-shape dim ahead of every dynamic-shape leaf -- the C
     # ABI :func:`dace_fortran.bindings.emit_bind_c_shim` exports
     # ("dynamic-shape" = ``per_member_soa`` AoS member with ``nel ==
-    # 0``, or ``kind='array'`` whose connected SDFG array has any
+    # 0``, or ``kind=ARRAY`` whose connected SDFG array has any
     # symbolic shape entry).  Set this on every registration whose
     # callee was produced by ``build_fortran_library(...,
     # bind_c_shim=True)``: the shim needs the runtime extents to
@@ -344,7 +390,7 @@ def keep_external(
     libraries: Tuple[str, ...] = (),
     stub: bool = False,
     dynamic_extents_abi: bool = False,
-    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = (),
+    module_symbol_forward: Tuple[ModuleSymbolForward, ...] = (),
     callee_ptr_scalar_members: frozenset = frozenset(),
 ) -> None:
     """Mark ``name`` to be left external -- the bridge emits an
@@ -382,8 +428,8 @@ def keep_external(
         ``c_f_pointer`` aliases need the runtime extents (see
         :attr:`ExternalSignature.dynamic_extents_abi`).
     :param module_symbol_forward: Fortran module globals to forward
-        across the library boundary.  Each tuple is ``(module,
-        member, dtype, rank)`` -- see
+        across the library boundary.  Each entry is a
+        :class:`ModuleSymbolForward` ``(module, member, dtype, rank)`` -- see
         :attr:`ExternalSignature.module_symbol_forward` for the
         rationale (per-library Fortran-module-globals issue exposed
         by the velocity dycore + external e2e ASan diagnostic).
@@ -403,7 +449,7 @@ def keep_external(
             libraries=tuple(libraries),
             stub=stub,
             dynamic_extents_abi=dynamic_extents_abi,
-            module_symbol_forward=tuple(module_symbol_forward),
+            module_symbol_forward=tuple(ModuleSymbolForward(*f) for f in module_symbol_forward),
             callee_ptr_scalar_members=frozenset(callee_ptr_scalar_members),
         ),
     )

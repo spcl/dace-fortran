@@ -10,6 +10,7 @@ synthetic kernel, but never with SignatureDriftError.
 import dace
 import pytest
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings import (
     FrozenArg,
     FrozenSignature,
@@ -33,10 +34,22 @@ def _pin(sdfg: dace.SDFG) -> FrozenSignature:
         mangled="_QPdemo",
         args=(
             FrozenArg(
-                fortran_name="a", sdfg_name="a", kind="array", dtype="float64", rank=1, shape=("n",), intent="in"
+                fortran_name="a",
+                sdfg_name="a",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=1,
+                shape=("n",),
+                intent="in",
             ),
             FrozenArg(
-                fortran_name="b", sdfg_name="b", kind="array", dtype="float64", rank=1, shape=("n",), intent="inout"
+                fortran_name="b",
+                sdfg_name="b",
+                kind=FrozenArgKind.ARRAY,
+                dtype="float64",
+                rank=1,
+                shape=("n",),
+                intent="inout",
             ),
         ),
         free_symbols=("n",),

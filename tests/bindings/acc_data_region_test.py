@@ -20,14 +20,21 @@ from dace_fortran.bindings.acc_transfers import (
     render_host_data_open,
 )
 from dace_fortran.bindings.block_builders import splice_acc_staging
-from dace_fortran.bindings.frozen_signature import HOST_STORAGE, FrozenArg, FrozenSignature, refreeze
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature, HOST_STORAGE, refreeze
 
 _ENTRY = "compute"
 
 
 def _arg(name: str, intent: str, **kw) -> FrozenArg:
     return FrozenArg(
-        fortran_name=name, sdfg_name=name, kind="array", dtype="float64", rank=1, shape=("n",), intent=intent, **kw
+        fortran_name=name,
+        sdfg_name=name,
+        kind=FrozenArgKind.ARRAY,
+        dtype="float64",
+        rank=1,
+        shape=("n",),
+        intent=intent,
+        **kw,
     )
 
 
@@ -105,7 +112,7 @@ def test_every_relocated_arg_is_also_use_device():
 def test_scalars_never_reach_the_region():
     frozen = _signature(
         _arg("a", "inout", device_storage="GPU_Global"),
-        FrozenArg(fortran_name="alpha", sdfg_name="alpha", kind="scalar", dtype="float64", rank=0),
+        FrozenArg(fortran_name="alpha", sdfg_name="alpha", kind=FrozenArgKind.SCALAR, dtype="float64", rank=0),
     )
     plan = plan_frozen_transfers(frozen)
     assert plan.data_region == (("COPY", "a"),)

@@ -16,7 +16,9 @@ from _util import build_sdfg, have_flang
 
 from dace_fortran.external import (
     Arg,
+    ArgKind,
     ExternalCall,
+    Intent,
     apply_external_functions,
     clear_external_registry,
     keep_external,
@@ -215,7 +217,10 @@ def test_derived_node_matches_authored(tmp_path: Path, _m):
         clear_external_registry()
         keep_external(
             "bar",
-            args=[Arg(kind="array", dtype="float64", intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")],
+            args=[
+                Arg(kind=ArgKind.ARRAY, dtype="float64", intent=Intent.INOUT),
+                Arg(kind=ArgKind.SCALAR, dtype="int32", intent=Intent.IN),
+            ],
             libraries=[str(lib)],
         )
 

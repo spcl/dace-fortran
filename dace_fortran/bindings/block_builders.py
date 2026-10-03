@@ -19,7 +19,7 @@ from dace_fortran.bindings.flatten_plan import (
     strip_index_args,
 )
 from dace_fortran.bindings.fortran_interface import DerivedType, OriginalArg, OriginalInterface
-from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature, ModuleOrigin
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature, ModuleOrigin
 from dace_fortran.bindings.loop_copy import (
     fortran_scalar_type,
     render_alias_calls,
@@ -93,15 +93,15 @@ def build_c_interface(
         if a.rank > 0:
             # Array, or length-1 wrapper for a scalar OUTPUT -- either way DaCe passes a pointer.
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
-        elif a.kind == "symbol":
+        elif a.kind is FrozenArgKind.SYMBOL:
             # Free symbol, pass-by-value int of its own width -- must match the
             # wrapper-local decl build_wrapper_head emits for it.
             body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
-        elif a.kind == "mpi_comm":
+        elif a.kind is FrozenArgKind.MPI_COMM:
             # MPI_Comm is a pointer-sized handle (OpenMPI ompi_communicator_t*) --
             # binds as type(c_ptr), value; wrapper feeds it the MPI_Comm_f2c result.
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
-        elif a.kind == "scalar":
+        elif a.kind is FrozenArgKind.SCALAR:
             # Scalar input is a non-transient SDFG Scalar -- DaCe passes by value,
             # so the Fortran interface must bind by value too (not c_ptr).
             body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
@@ -116,7 +116,7 @@ def build_c_interface(
         init_args=", ".join(init_syms),
         init_arg_decls=init_arg_decls,
     )
-    if any(a.kind == "mpi_comm" for a in frozen.args) or frozen.user_comm_source:
+    if any(a.kind is FrozenArgKind.MPI_COMM for a in frozen.args) or frozen.user_comm_source:
         # Splice MPI_Comm_f2c into the interface block so the wrapper can convert
         # the Fortran integer handle to the C MPI_Comm the SDFG entry expects.
         rendered = rendered.replace("  end interface", _MPI_COMM_F2C_IFACE + _MPI_COMM_SIZE_IFACE + "  end interface")
@@ -142,7 +142,7 @@ def _init_symbol_decl(sym: str, frozen: FrozenSignature | None = None) -> str:
         return _INIT_SYMBOL_DECL_OVERRIDES[sym]
     if frozen is not None:
         for a in frozen.args:
-            if a.sdfg_name == sym and a.kind in ("symbol", "scalar"):
+            if a.sdfg_name == sym and a.kind in (FrozenArgKind.SYMBOL, FrozenArgKind.SCALAR):
                 return f"{_fortran_c_value_type(a.dtype)}, value"
     return "integer(c_int), value"
 
@@ -248,7 +248,7 @@ def _module_arg_aliasable(a: FrozenArg) -> bool:
     """True when an orphan module-global array can be zero-copy aliased via a
     ``pointer, contiguous`` local and ``X => X__mod`` instead of a deep copy.
 
-    Criteria: rank > 0, native layout (no complex-split/transpose), host storage
+    Criteria: rank > 0, host storage
     is deferred (allocatable/pointer) and already allocated by the caller, dtype
     needs no logical-kind bridge, and the kernel does not allocate the array.
     Read-only or inout intent is allowed; out-only still falls back to copy.
@@ -257,9 +257,7 @@ def _module_arg_aliasable(a: FrozenArg) -> bool:
 
     if not isinstance(a, FrozenArg):
         return False
-    if a.kind != "array" or a.rank <= 0:
-        return False
-    if a.layout != "same":
+    if a.kind is not FrozenArgKind.ARRAY or a.rank <= 0:
         return False
     if a.global_alloc_inside:
         return False
@@ -325,7 +323,7 @@ def _optional_local_name(sdfg_name: str) -> str:
 
 def _optional_array_dummy(fa: FrozenArg) -> bool:
     """Whether a forwarded optional dummy carries an array (rank > 0) actual."""
-    return fa.kind == "array" or fa.rank > 0
+    return fa.kind is FrozenArgKind.ARRAY or fa.rank > 0
 
 
 def _optional_outer_dummies(frozen: FrozenSignature, iface: OriginalInterface) -> list:
@@ -339,7 +337,7 @@ def _optional_outer_dummies(frozen: FrozenSignature, iface: OriginalInterface) -
     by_name = {a.name.lower(): a for a in iface.args}
     pairs = []
     for fa in frozen.args:
-        if fa.kind not in ("scalar", "array"):
+        if fa.kind not in (FrozenArgKind.SCALAR, FrozenArgKind.ARRAY):
             continue
         fn = (fa.fortran_name or "").lower()
         if fn in optional_names:
@@ -424,7 +422,7 @@ def build_wrapper_head(
 
     # A free symbol that's also a frozen arg must use that arg's C type (e.g.
     # int64 extents) -- a hardcoded integer(c_int) local mismatches the bind(c) dummy.
-    sym_dtype = {a.sdfg_name: a.dtype for a in frozen.args if a.kind in ("scalar", "symbol")}
+    sym_dtype = {a.sdfg_name: a.dtype for a in frozen.args if a.kind in (FrozenArgKind.SCALAR, FrozenArgKind.SYMBOL)}
     # A rank-0 struct member is BOTH a flat companion and a free symbol wanted by
     # value -- skip re-declaring it here (duplicate "already has basic type" error).
     # LIVE entries only: a dead entry declares no companion, so a same-named free
@@ -509,7 +507,7 @@ def build_wrapper_head(
     # One type(c_ptr) local per communicator arg, holding the MPI_Comm_f2c result
     # fed to the SDFG call (outer dummy stays the caller's Fortran integer handle).
     for a in frozen.args:
-        if a.kind == "mpi_comm":
+        if a.kind is FrozenArgKind.MPI_COMM:
             scratch_lines.append(f"    type(c_ptr) :: {_mpi_comm_local(a.sdfg_name)}")
     # Pgrid path (replaces the opaque-MPI_Comm scalar arg above): scratch for the
     # MPI_Comm_size return + the call's error code. __user_comm(_size) are declared
@@ -780,7 +778,7 @@ def build_wrapper_body(
                 body.append(f"      {local} = {_zero_literal(fa.dtype)}")
             body.append("    end if")
 
-    comm_args = [a for a in frozen.args if a.kind == "mpi_comm"]
+    comm_args = [a for a in frozen.args if a.kind is FrozenArgKind.MPI_COMM]
     if comm_args:
         body.append("")
         body.append("    ! ----- Fortran integer comm -> C MPI_Comm -----")
@@ -864,10 +862,10 @@ def build_wrapper_tail(
             # Free symbol: wrapper-local DaCe sees by value (declared+populated earlier).
             return a
         actual = name_override.get(a.sdfg_name, a.sdfg_name)
-        if a.kind == "mpi_comm":
+        if a.kind is FrozenArgKind.MPI_COMM:
             # The C ``MPI_Comm`` (f2c result), not the integer dummy.
             return _mpi_comm_local(a.sdfg_name)
-        if a.kind == "array" or a.rank > 0:
+        if a.kind is FrozenArgKind.ARRAY or a.rank > 0:
             return f"c_loc({actual})"
         return actual
 
@@ -1243,7 +1241,7 @@ def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Intrinsic
 
     def _expr(arr: str) -> Optional[str]:
         a = by_sdfg.get(arr)
-        if a is None or a.kind != "array":
+        if a is None or a.kind is not FrozenArgKind.ARRAY:
             return None
         return a.from_struct_member or a.fortran_name
 
@@ -1268,7 +1266,7 @@ def _sym_from_array_extent(
     so the symbol falls to a PRESENT array's real extent."""
     exclude = exclude or set()
     for a in frozen.args:
-        if a.kind != "array":
+        if a.kind is not FrozenArgKind.ARRAY:
             continue
         if a.sdfg_name in exclude:
             continue
@@ -1332,7 +1330,7 @@ def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan:
         n = a.sdfg_name
         if n in dummy or n in flat:
             continue
-        if _OFFSET_SYM_RE.match(n) or (a.kind == "symbol"):
+        if _OFFSET_SYM_RE.match(n) or (a.kind is FrozenArgKind.SYMBOL):
             continue
         if _EXTENT_SYM_RE.match(n) and n not in sources:
             continue
@@ -1363,7 +1361,7 @@ def _unsourced_array_args(frozen: FrozenSignature, iface: OriginalInterface, pla
     return [
         a
         for a in frozen.args
-        if a.kind == "array" and a.rank > 0 and a.sdfg_name not in declared and not a.aos_origin_struct
+        if a.kind is FrozenArgKind.ARRAY and a.rank > 0 and a.sdfg_name not in declared and not a.aos_origin_struct
     ]
 
 
@@ -1381,7 +1379,7 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
     declared = set(frozen.free_symbols) | outer | flat
     # Names already covered by a wrapper-local/dummy decl elsewhere: array args,
     # orphan/aos SCALAR locals, the comm pgrid params.
-    declared |= {a.sdfg_name for a in frozen.args if a.kind == "array"}
+    declared |= {a.sdfg_name for a in frozen.args if a.kind is FrozenArgKind.ARRAY}
     declared |= {a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan)}
     declared |= {a.sdfg_name for a in _aos_module_args(frozen)}
     declared |= {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
@@ -1397,7 +1395,7 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
     out: dict = {}
     # (a) unsourced scalar / symbol args
     for a in frozen.args:
-        if a.kind in ("scalar", "symbol") and a.sdfg_name not in declared:
+        if a.kind in (FrozenArgKind.SCALAR, FrozenArgKind.SYMBOL) and a.sdfg_name not in declared:
             out[a.sdfg_name] = (_fortran_c_value_type(a.dtype), _rhs(a.sdfg_name, a.dtype, False))
     # (b) bare-identifier shape symbols of any arg
     for a in frozen.args:
@@ -1770,7 +1768,7 @@ def _build_symbol_assigns(
     module_array_hosts: dict = {}
     for a in frozen.args:
         deferred = a.module_origin_allocatable or a.module_origin_pointer
-        if a.kind == "array" and deferred and not a.global_alloc_inside:
+        if a.kind is FrozenArgKind.ARRAY and deferred and not a.global_alloc_inside:
             alias = _module_value_expr(a.sdfg_name, _synth_members)
             module_array_hosts[a.sdfg_name] = (alias, _present(alias, a.module_origin_pointer))
     # Cap symbols of aos_alloc recipes are populated by pack-in code before the
@@ -1911,7 +1909,7 @@ def _build_symbol_assigns(
             # aliased array is c_f_pointer'd to a POINTER local, so associated(base)
             # is true exactly when the caller provided the member -- leaving the
             # flag unset drops the output nondeterministically.
-            if fa is not None and fa.kind == "array" and sym.endswith("_allocated"):
+            if fa is not None and fa.kind is FrozenArgKind.ARRAY and sym.endswith("_allocated"):
                 # A presence-GUARDED entry's flat is always bound (alias or
                 # degenerate scratch), so associated(<flat>) is always true --
                 # test the HOST member instead via its guard expression.

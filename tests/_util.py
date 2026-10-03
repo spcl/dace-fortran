@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from dace_fortran.llvm_toolchain import flang_names, intrinsic_modules_path
+from dace_fortran.preprocess import MergeEngine
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
@@ -237,7 +238,7 @@ def build_sdfg(
     pipeline=None,
     entry: str | None = None,
     defines=(),
-    merge_engine: str = "regex",
+    merge_engine: MergeEngine = MergeEngine.REGEX,
 ):
     """Test funnel over :func:`dace_fortran.build.make_builder`: adds the per-test xdist-safe SDFG naming / dump-dir wrapper on top of the real builder.  ``entry=None`` auto-resolves from the single procedure in ``source``."""
     from dace_fortran.build import make_builder
