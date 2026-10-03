@@ -6,6 +6,8 @@ A fixed ``NAMELIST`` read needs its group declared at compile time, so this
 node expands to a C++ tasklet calling the generic ``dace_nml_*`` wrappers
 instead: open ``(file, group)``, fetch each member by name, close.
 """
+
+from __future__ import annotations
 import dace.library
 import dace.properties
 from dace import dtypes
@@ -15,6 +17,9 @@ from dace.transformation.transformation import ExpandTransformation
 from .node import FortranIONode, fio_type
 from .write import _c_string
 from .. import environments
+from typing import Any, Sequence
+
+from dace import SDFG, SDFGState
 
 
 @dace.library.expansion
@@ -23,7 +28,7 @@ class ExpandNamelistReadFortranIO(ExpandTransformation):
     environments = [environments.FortranIO]
 
     @staticmethod
-    def expansion(node, parent_state, parent_sdfg):
+    def expansion(node: NamelistRead, parent_state: SDFGState, parent_sdfg: SDFG) -> nodes.Tasklet:
         items = node._ordered_items(parent_sdfg, parent_state, "_out_", edges_in=False)
         if len(node.members) != len(items):
             raise ValueError(f"NamelistRead '{node.name}': {len(node.members)} member names "
@@ -60,7 +65,12 @@ class NamelistRead(FortranIONode):
     group = dace.properties.Property(dtype=str, default="", desc="Namelist group name")
     members = dace.properties.ListProperty(element_type=str, default=[], desc="Member names, in output-connector order")
 
-    def __init__(self, name, filename: str = "", group: str = "", members=None, **kwargs):
+    def __init__(self,
+                 name: str,
+                 filename: str = "",
+                 group: str = "",
+                 members: Sequence[str] | None = None,
+                 **kwargs: Any) -> None:
         members = list(members or [])
         super().__init__(name, inputs=set(), outputs={f"_out_{i}" for i in range(len(members))}, **kwargs)
         self.filename = filename

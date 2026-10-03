@@ -7,6 +7,8 @@ Mirrors Quantum ESPRESSO's ``fft_interpolate`` generic
 truncate to the new grid size with the symmetric-split convention (keep
 low + high frequency bins, drop the middle), then IFFT back.
 """
+
+from __future__ import annotations
 import itertools
 
 import dace.library
@@ -14,6 +16,7 @@ import dace.properties
 import dace
 from dace import nodes, SDFG, SDFGState, dtypes, Memlet
 from dace import transformation as xf
+from typing import Any, ClassVar, Sequence
 
 
 @dace.library.node
@@ -28,24 +31,28 @@ class FFTInterpolate(nodes.LibraryNode):
     regions (2 for rank 1, 4 quadrants for rank 2, 8 octants for rank 3).
     """
 
-    implementations = {}
+    implementations: ClassVar[dict[str, type]] = {}
     default_implementation = 'pure'
 
     dtype_kind = dace.properties.Property(dtype=str, default='complex', desc="'real' or 'complex'")
 
-    def __init__(self, name, dtype_kind='complex', schedule=None, **kwargs):
+    def __init__(self,
+                 name: str,
+                 dtype_kind: str = 'complex',
+                 schedule: dtypes.ScheduleType | None = None,
+                 **kwargs: Any) -> None:
         super().__init__(name, inputs={'_inp'}, outputs={'_out'}, schedule=schedule, **kwargs)
         self.dtype_kind = dtype_kind
 
 
-def _get_input_and_output(state, node):
+def _get_input_and_output(state: SDFGState, node: nodes.Node) -> tuple[str, str]:
     """Resolve the lib node's IO connector data names."""
     in_edge = next(e for e in state.in_edges(node) if e.dst_conn)
     out_edge = next(e for e in state.out_edges(node) if e.src_conn)
     return in_edge.data.data, out_edge.data.data
 
 
-def _low_high_per_axis(indesc, outdesc):
+def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[tuple[Any, Any, Any, Any]]:
     """Return ``(low, high)`` cut-points per axis for the symmetric-split copy.
 
     For each axis ``d``: ``low_d + high_d = min(nin_d, nout_d)``.  Defined
@@ -62,7 +69,8 @@ def _low_high_per_axis(indesc, outdesc):
     return cuts
 
 
-def _region_index(part_per_axis, cuts, side, ivars):
+def _region_index(part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, Any, Any, Any]], side: str,
+                  ivars: Sequence[str]) -> str:
     """Build the per-element index string for the copy tasklet."""
     parts = []
     for part, (low_d, high_d, nin_d, nout_d), iv in zip(part_per_axis, cuts, ivars):
@@ -74,7 +82,8 @@ def _region_index(part_per_axis, cuts, side, ivars):
     return ', '.join(parts)
 
 
-def _emit_fftw3_tasklet(state, sdfg, in_array, out_array, shape, complex_dtype, direction, envs):
+def _emit_fftw3_tasklet(state: SDFGState, sdfg: SDFG, in_array: str, out_array: str, shape: Sequence[Any],
+                        complex_dtype: dtypes.typeclass, direction: str, envs: Sequence[Any]) -> None:
     """Drop a self-contained ``fftw_plan_dft_*d`` Tasklet into ``state``.
 
     Connector names are prefixed with ``_fftw_`` so they do not collide
@@ -112,7 +121,8 @@ def _emit_fftw3_tasklet(state, sdfg, in_array, out_array, shape, complex_dtype, 
                    Memlet.from_array(out_array, sdfg.arrays[out_array]))
 
 
-def _region_iter_ranges(part_per_axis, cuts, ivars):
+def _region_iter_ranges(part_per_axis: Sequence[str], cuts: Sequence[tuple[Any, Any, Any, Any]],
+                        ivars: Sequence[str]) -> dict[str, str]:
     """Per-axis map iteration ranges for the copy tasklet.
 
     Each ``low`` side iterates ``0:low_d``; each ``high`` side iterates
@@ -138,7 +148,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
     resampled signal matches the un-aliased continuum interpolant.
     """
 
-    environments = []
+    environments: ClassVar[list[type]] = []
 
     @staticmethod
     def expansion(node: 'FFTInterpolate', parent_state: SDFGState, parent_sdfg: SDFG) -> SDFG:

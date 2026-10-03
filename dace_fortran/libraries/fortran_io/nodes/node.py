@@ -3,7 +3,7 @@
 """Shared base and helpers for the Fortran I/O library nodes."""
 from typing import List, Tuple
 
-from dace import data, dtypes
+from dace import SDFG, SDFGState, data, dtypes
 from dace.sdfg import nodes
 
 #: DaCe base type -> (``dace_fio_*`` entry suffix, C scalar type) for the
@@ -18,7 +18,7 @@ _FIO_TYPES = {
 }
 
 
-def fio_type(dtype) -> Tuple[str, str]:
+def fio_type(dtype: dtypes.typeclass) -> Tuple[str, str]:
     """Resolve the ``dace_fio_*`` wrapper suffix and C cast type for ``dtype``."""
     base = dtype.base_type
     if base not in _FIO_TYPES:
@@ -34,10 +34,11 @@ class FortranIONode(nodes.LibraryNode):
     dead code even when, like ``WRITE``, they have no output connectors.
     """
 
-    def has_side_effects(self, sdfg) -> bool:
+    def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 
-    def _ordered_items(self, sdfg, state, prefix: str, edges_in: bool) -> List[Tuple[str, object, str, bool]]:
+    def _ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str,
+                       edges_in: bool) -> List[Tuple[str, data.Data, str, bool]]:
         """Resolve the connected I/O items in connector order, as ``(connector,
         descriptor, count, is_value)``.  ``is_value`` marks a scalar/single-element
         connector (emitted by value, so the call site takes its address)."""
