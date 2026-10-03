@@ -306,7 +306,14 @@ std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(mlir::Value emb
   auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(def);
   if (!embox) return {{}, {}};
 
-  mlir::Value const src = embox.getMemref();
+  // The embox operand is typically ``fir.convert`` of the slice designate (the static
+  // ``ref<array<2x3x2xf64>>`` slice is cast to the pointer's ``ref<array<?x?x?xf64>>``).
+  mlir::Value src = embox.getMemref();
+  for (int hops = 0; hops < limits::kConvertChainDepth && src; ++hops) {
+    auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(src.getDefiningOp());
+    if (!cv) break;
+    src = cv.getValue();
+  }
   auto* srcDef = src.getDefiningOp();
   if (!srcDef) return {{}, {}};
 

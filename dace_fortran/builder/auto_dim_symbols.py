@@ -4,7 +4,7 @@
 
 Bindings-emitted callers always pass correct values; direct ``sdfg(...)``
 calls (test suite) need ``<arr>_d<i>``/``offset_<arr>_d<i>`` filled in -- from
-the passed array's shape when available, else a don't-care default.  SDFG
+the passed array's shape; an extent no argument supplies raises (never defaulted).  SDFG
 signature itself is unchanged.
 """
 
@@ -32,8 +32,8 @@ _DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
 
 class AutoDimSDFG(dace.SDFG):
     """``SDFG`` that fills missing synthetic Fortran extent symbols from
-    the passed array arguments (or a don't-care default) before the
-    real call."""
+    the passed array arguments before the real call; an extent no
+    argument supplies raises instead of defaulting."""
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         for sym in (str(s) for s in self.free_symbols):
@@ -56,7 +56,8 @@ class AutoDimSDFG(dace.SDFG):
                 # off-by-one read of every such array.
                 kwargs[sym] = 1
             else:
-                kwargs[sym] = 1  # unused extent: don't care
+                raise ValueError(f"extent symbol {sym!r} is unbound: no argument {m.group('arr')!r} supplies its extent "
+                                 f"(pass {sym}=<extent> explicitly); refusing to default it")
         return super().__call__(*args, **kwargs)
 
     def to_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
