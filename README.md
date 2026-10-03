@@ -279,15 +279,19 @@ The per-lane commands, runnable locally:
 
 ```bash
 # fast -- everything outside the lanes below:
-pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" tests/
+pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
+    --ignore=tests/cloudsc/full --ignore=tests/cloudsc/variants --ignore=tests/qe/h_psi tests/
 
 # e2e -- multi-rank MPI tests, integration tests, then QE vexx + ICON velocity_tendencies through the pipeline:
 mpirun --oversubscribe -n 4 python -m pytest -m mpi tests/
 python -m pytest -m "integration and not mpi" tests/
 python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py tests/
+python -m pytest -m "not mpi and not long and not integration and not e2e" tests/qe/h_psi
 
-# e2e-cloudsc -- CloudSC alone (two builds of a 25k-line translation unit):
+# e2e-cloudsc -- CloudSC through the pipeline, then the CloudSC numerical tests one at a time (each -O3 build
+# peaks at several GB):
 python -m pytest -m e2e tests/e2e/test_cloudsc.py
+python -m pytest -m "not mpi and not long and not integration and not e2e" tests/cloudsc/full tests/cloudsc/variants
 
 # heavy-icon -- needs ICON built from source: tests/icon/dycore/setup_icon_dycore.sh and the icon_build fixture
 # (ICON_BUILD names its tree; CI caches both builds per icon-model commit):

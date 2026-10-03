@@ -35,8 +35,9 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     # Lanes, each sized to stay under ~45 minutes with warm caches:
     #   fast        every test outside the lanes below (uploads coverage)
-    #   e2e         the e2e pipeline tests except CloudSC, the multi-rank mpi tests, the integration tests
-    #   e2e-cloudsc CloudSC through the pipeline: two builds of a 25k-line translation unit
+    #   e2e         the e2e pipeline tests except CloudSC, the multi-rank mpi tests, the integration tests, QE h_psi
+    #   e2e-cloudsc CloudSC through the pipeline, then the CloudSC numerical tests (each a multi-GB -O3 build, so
+    #               one at a time: four at once exhaust the runner's memory)
     #   heavy-icon  tests that need ICON configured and built from source (both builds cached)
     #   heavy-src   the remaining long tests, which read the ICON sources only
     strategy:
@@ -98,6 +99,7 @@ jobs:
         ulimit -s 65536
         pytest -n auto --dist loadgroup --max-worker-restart=0 $PYTEST_OPTS \
           -m "not mpi and not long and not integration and not e2e" \
+          --ignore=tests/cloudsc/full --ignore=tests/cloudsc/variants --ignore=tests/qe/h_psi \
           --timeout=300 --timeout-method=thread -o faulthandler_timeout=420 \
           --cov-report=xml --cov=dace_fortran tests/
         curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov && ./codecov || true
@@ -115,9 +117,20 @@ jobs:
       # Sequential: each -O3 build of a production kernel peaks at several GB.
       run: python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py $PYTEST_OPTS tests/
 
+    - name: e2e -- QE h_psi
+      if: ${{ matrix.lane == 'e2e' }}
+      run: python -m pytest -m "not mpi and not long and not integration and not e2e" $PYTEST_OPTS tests/qe/h_psi
+
     - name: e2e-cloudsc
       if: ${{ matrix.lane == 'e2e-cloudsc' }}
       run: python -m pytest -m e2e $PYTEST_OPTS tests/e2e/test_cloudsc.py
+
+    - name: e2e-cloudsc -- CloudSC numerical tests
+      if: ${{ matrix.lane == 'e2e-cloudsc' }}
+      run: |
+        ulimit -s 65536
+        python -m pytest -m "not mpi and not long and not integration and not e2e" $PYTEST_OPTS \
+          --timeout=1800 --timeout-method=thread tests/cloudsc/full tests/cloudsc/variants
 
     - name: heavy-icon
       if: ${{ matrix.lane == 'heavy-icon' }}
