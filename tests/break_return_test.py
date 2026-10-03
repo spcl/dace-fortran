@@ -45,7 +45,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     builder.arrays = {}
     builder.symbols = {}
     builder.scalars = {}
-    builder._id_counter = 0
+    builder.init_emit_state()
     sdfg = SDFG("early_ret")
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
@@ -78,7 +78,7 @@ def test_break_block_inside_loop_region(tmp_path):
     builder.arrays = {}
     builder.symbols = {}
     builder.scalars = {}
-    builder._id_counter = 0
+    builder.init_emit_state()
 
     sdfg = SDFG("early_break")
     sdfg.add_symbol("i", dace.int64)

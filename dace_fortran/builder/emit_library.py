@@ -12,6 +12,7 @@ import re
 import dace.symbolic
 from dace import dtypes, InterstateEdge, Memlet
 
+from dace_fortran.builder.records import SyntheticNode
 from dace_fortran.builder.access import acc, iter_view_dim_map
 
 
@@ -147,7 +148,7 @@ def emit_memset(builder, ctx, n, region):
     # Section-alias dummies route memset through the source array, writing the slab
     # view_dim_map carves out.
     v_tgt = builder.arrays.get(tgt_name)
-    if v_tgt is not None and getattr(v_tgt, 'role', '') == 'section_alias':
+    if v_tgt is not None and v_tgt.role == 'section_alias':
         src_name = v_tgt.view_source
         src_desc = ctx.sdfg.arrays[src_name]
         slab_parts = []
@@ -201,20 +202,19 @@ def emit_libcall(builder, ctx, n, region):
     # folds into the BLAS call, no A^T transient. transB is the symmetric case; the node
     # supports it but the bridge only emits A-side today (Flang's op covers only that shape).
     if n.callee == "matmul_transpose":
-        from types import SimpleNamespace
         if len(n.call_args) != 2:
             raise RuntimeError(f"matmul_transpose: expected 2 operands, got {len(n.call_args)}")
-        opts = dict(getattr(n, 'options', None) or {})
+        opts = dict(n.options or {})
         opts["transA"] = True
-        m_node = SimpleNamespace(
+        m_node = SyntheticNode(
             kind="libcall",
             callee="matmul",
             target=n.target,
             target_is_array=n.target_is_array,
             call_args=list(n.call_args),
-            call_arg_subsets=list(getattr(n, 'call_arg_subsets', None) or ['', '']),
+            call_arg_subsets=list(n.call_arg_subsets or ['', '']),
             accesses=list(n.accesses),
-            reduce_axes=list(getattr(n, 'reduce_axes', None) or []),
+            reduce_axes=list(n.reduce_axes or []),
             options=opts,
         )
         emit_libcall(builder, ctx, m_node, region)
@@ -243,7 +243,7 @@ def emit_libcall(builder, ctx, n, region):
         # dim 0-based in reduce_axes (mirrors the Reduce path); back in options; mask=
         # signalled by an extra call_args entry past the first _x source.
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
-        back = bool((getattr(n, 'options', None) or {}).get('back', False))
+        back = bool((n.options or {}).get('back', False))
         has_mask = len(n.call_args) > 1
         node = cls(
             f"{spec.name}_{n.target}_{builder.nid()}",
@@ -256,7 +256,7 @@ def emit_libcall(builder, ctx, n, region):
         # shift/boundary exprs in options['shift']/['boundary'] (Python-compatible strings);
         # axis 0-based in reduce_axes. Free symbols in shift get promoted to SDFG symbols
         # after node creation.
-        opts = getattr(n, 'options', None) or {}
+        opts = n.options or {}
         shift_expr = opts.get('shift', None)
         boundary_expr = opts.get('boundary', None)
         shift = dace.symbolic.pystr_to_symbolic(shift_expr) if shift_expr else None  # noqa: F405
@@ -300,12 +300,12 @@ def emit_libcall(builder, ctx, n, region):
         # Gemm(transA=True).
         # Must set transA/transB as Properties AFTER construction, not __init__ kwargs --
         # DaCe's MatMul ABI varies across builds and some reject transA= as a kwarg.
-        opts = getattr(n, 'options', None) or {}
+        opts = n.options or {}
         tA = bool(opts.get('transA', False))
         tB = bool(opts.get('transB', False))
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
         if tA or tB:
-            if not (hasattr(type(node), 'transA') and hasattr(type(node), 'transB')):
+            if not {'transA', 'transB'} <= type(node).__properties__.keys():
                 raise RuntimeError("MATMUL(TRANSPOSE(...)) needs a DaCe MatMul exposing "
                                    "transA/transB Properties (the transpose folds into the "
                                    f"GEMM/GEMV call); the installed {type(node).__module__}."
@@ -322,7 +322,7 @@ def emit_libcall(builder, ctx, n, region):
 
     # call_arg_subsets parallels call_args: empty = whole array, else a DaCe-0-based subset
     # (e.g. "0:3"). Older bridge builds may leave it unpopulated.
-    arg_subsets = list(getattr(n, 'call_arg_subsets', None) or [])
+    arg_subsets = list(n.call_arg_subsets or [])
     arg_subsets += [''] * (len(n.call_args) - len(arg_subsets))
     # ArgMin/ArgMax mask=True adds a _mask input connector not listed in _LIBCALL_CONNECTORS
     # (optional); append it here.
@@ -1605,7 +1605,7 @@ def emit_call(builder, ctx, n, region):
             # still needs a syntactically valid placeholder.  ``nel == 0``
             # signals "skip pack/unpack" -- handled by the body lines
             # below.
-            shape = getattr(desc, "shape", None)
+            shape = desc.shape
             if shape:
                 try:
                     nel = int(prod(shape))
@@ -1655,7 +1655,7 @@ def emit_call(builder, ctx, n, region):
                 out_conns.append(cout)
                 ptr_of[cout] = dt
                 edges.append((name, cout, 'w'))
-            arr_shape = tuple(getattr(ctx.sdfg.arrays[name], "shape", ()) or ())
+            arr_shape = tuple(ctx.sdfg.arrays[name].shape)
             if sig.dynamic_extents_abi and _shape_is_symbolic(arr_shape):
                 array_shape_at_term[len(logical_terms)] = arr_shape
             logical_terms.append(('lit', cout if writes else cin))

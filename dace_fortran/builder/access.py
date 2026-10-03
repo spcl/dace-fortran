@@ -9,7 +9,8 @@ in a state connect through one graph. ``build_memlet_index`` converts a bridge
 """
 
 import re
-from types import SimpleNamespace
+
+from dace_fortran.builder.records import ComplexAliasSpec, SyntheticAccess, SyntheticVar
 
 # Process-level (not per-SDFG) counter for unique '<arr>_at<gid>' names; avoids collisions across multi-file runs.
 _INDIRECTION_GID_COUNTER = 0
@@ -54,7 +55,7 @@ def resolve_object_member(builder, name: str):
     """
     if name in builder.arrays or name in builder.scalars or name in builder.symbols:
         return None
-    aliases = vars(builder).get("object_aliases") or {}
+    aliases = builder.object_aliases
     if not aliases:
         return None
     for base in sorted(aliases, key=len, reverse=True):
@@ -69,7 +70,7 @@ def resolve_object_member(builder, name: str):
         cand = f"{src}_{member}"
         if cand in builder.arrays or cand in builder.scalars or cand in builder.symbols:
             return cand
-        hit = (vars(builder).get("object_alias_flat_members") or {}).get(member)
+        hit = builder.object_alias_flat_members.get(member)
         if hit is not None and (hit in builder.arrays or hit in builder.scalars or hit in builder.symbols):
             return hit
         return None
@@ -116,13 +117,13 @@ def resolve_section_alias(builder, array_name: str, access):
     if obj_real is not None:
         return obj_real, access
     v = builder.arrays.get(array_name)
-    if v is None or getattr(v, 'role', '') != 'section_alias':
+    if v is None or v.role != 'section_alias':
         return array_name, access
     src = v.view_source
     if access is None:
         return src, access
-    dummy_exprs = list(getattr(access, 'index_exprs', None) or [])
-    dummy_vars = list(getattr(access, 'index_vars', None) or [])
+    dummy_exprs = list(access.index_exprs or [])
+    dummy_vars = list(access.index_vars or [])
     new_exprs, new_vars = [], []
     for _src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map):
         if dummy_dim is not None:
@@ -131,10 +132,10 @@ def resolve_section_alias(builder, array_name: str, access):
         else:
             new_exprs.append(slot)
             new_vars.append('')
-    spliced = SimpleNamespace(
+    spliced = SyntheticAccess(
         array_name=src,
-        is_read=getattr(access, 'is_read', False),
-        is_write=getattr(access, 'is_write', False),
+        is_read=access.is_read,
+        is_write=access.is_write,
         index_exprs=new_exprs,
         index_vars=new_vars,
     )
@@ -182,13 +183,13 @@ def cc_alias_view_spec(builder, name: str):
             slab.append(f"({base[j]}):({base[j]}) + ({elem_ext[j]})")
         else:
             slab.append(base[j])
-    return SimpleNamespace(role='view_alias',
-                           view_source=v.view_source,
-                           view_subset=slab,
-                           fortran_name=name,
-                           shape=elem_ext,
-                           dtype=(src_v.dtype if src_v is not None else v.dtype),
-                           lower_bounds=list(v.lower_bounds)[1:])
+    return ComplexAliasSpec(role='view_alias',
+                            view_source=v.view_source,
+                            view_subset=slab,
+                            fortran_name=name,
+                            shape=elem_ext,
+                            dtype=(src_v.dtype if src_v is not None else v.dtype),
+                            lower_bounds=list(v.lower_bounds)[1:])
 
 
 def acc(builder, state, name: str):
@@ -209,7 +210,7 @@ def acc(builder, state, name: str):
     # with indices spliced via ``view_dim_map``.  Redirect the access-
     # node lookup to the source.
     v_alias = builder.arrays.get(name)
-    if v_alias is not None and getattr(v_alias, 'role', '') == 'section_alias':
+    if v_alias is not None and v_alias.role == 'section_alias':
         return acc(builder, state, v_alias.view_source)
     # Whole-object rebind member: route the access node onto the real flattened
     # descriptor of the aliased object (``params_oce_a_veloc_v`` has no
@@ -217,10 +218,10 @@ def acc(builder, state, name: str):
     obj_real = resolve_object_member(builder, name)
     if obj_real is not None:
         return acc(builder, state, obj_real)
-    cache = getattr(state, '_hlfir_access', None)
+    cache = builder.access_caches.get(state)
     if cache is None:
         cache = {}
-        state._hlfir_access = cache
+        builder.access_caches[state] = cache
     node = cache.get(name)
     if node is None:
         node = state.add_access(name)
@@ -230,14 +231,14 @@ def acc(builder, state, name: str):
         # float-of-complex ``view_alias`` as a SAME-dtype COMPLEX view of the
         # spanned source slab, then fall through to the shared view-link code
         # (mirrors the ``bounds_remap_view`` synthesis below).
-        if name in getattr(builder, 'complex_component_aliases', {}):
+        if name in builder.complex_component_aliases:
             v = cc_alias_view_spec(builder, name)
         # ``bounds_remap_view`` (multi-D POINTER remap of a 1D target,
         # e.g. ``p(1:M, 1:K) => arr1d``) needs the same source ->
         # view linking edge the rank-reinterpret ``view_alias`` path
         # uses.  Synthesise an equivalent VarInfo on the spot so the
         # shared code below handles both shapes uniformly.
-        if v is not None and getattr(v, 'bounds_remap_view', False) \
+        if v is not None and v.bounds_remap_view \
                 and v.bounds_remap_source \
                 and v.bounds_remap_source in state.parent.arrays:
             # Prefer the surfaced source-SECTION subset (carries the
@@ -248,11 +249,11 @@ def acc(builder, state, name: str):
             # the view's own strides encode the reshape and there is no
             # source section to carry.
             src_subset = list(v.bounds_remap_source_subset) or [""]
-            v = SimpleNamespace(role='view_alias',
-                                view_source=v.bounds_remap_source,
-                                view_subset=src_subset,
-                                fortran_name=v.fortran_name)
-        if v is not None and getattr(v, 'role', '') == 'view_alias' \
+            v = SyntheticVar(role='view_alias',
+                             view_source=v.bounds_remap_source,
+                             view_subset=src_subset,
+                             fortran_name=v.fortran_name)
+        if v is not None and v.role == 'view_alias' \
                 and v.view_source and v.view_source in state.parent.arrays:
             from dace import Memlet
             src = v.view_source
@@ -290,7 +291,7 @@ def acc(builder, state, name: str):
                 view_subset = ", ".join(f"0:{d}" for d in view_dims)
                 state.add_edge(src_node, None, node, 'views',
                                Memlet(data=src, subset=src_subset, other_subset=view_subset))
-        elif v is not None and getattr(v, 'role', '') == 'view_alias':
+        elif v is not None and v.role == 'view_alias':
             # A view with no resolvable source would be emitted as a bare
             # AccessNode and only fail much later, at SDFG validation, as an
             # opaque "Ambiguous or invalid edge to/from a View access node"
@@ -411,7 +412,7 @@ def sdfg_is_len1_array(sdfg, name: str) -> bool:
             return isinstance(d, dace.data.Array) and tuple(d.shape) == (1, )
         # A nested-SDFG code block can reference a parent-scope length-1 Array
         # (a module global like ``kunit`` lives on the top SDFG); walk up.
-        s = getattr(s, 'parent_sdfg', None)
+        s = s.parent_sdfg
     return False
 
 
@@ -543,7 +544,7 @@ def indirect_exprs(builder, a) -> list:
                 out.append((sub, arr))
 
     for ac in a.accesses:
-        for expr in getattr(ac, 'index_exprs', None) or []:
+        for expr in ac.index_exprs or []:
             _visit(expr)
 
     return out
@@ -602,7 +603,7 @@ def materialize_indirect_view_sources(builder, state, indirect_syms: dict) -> No
     for expr in indirect_syms:
         for _start, _end, arr, _parts in find_array_subscripts(expr, builder.arrays, resolver):
             v = builder.arrays.get(arr)
-            if v is not None and getattr(v, 'role', '') == 'view_alias':
+            if v is not None and v.role == 'view_alias':
                 acc(builder, state, arr)
 
 
@@ -761,9 +762,9 @@ def indirect_to_dace(builder, expr: str, iter_map: dict, indirect_syms: dict | N
             # source array + spliced dim_map (same gap as
             # ``array_read_to_dace_expr`` -- the alias has no offset symbols).
             v = builder.arrays.get(arr)
-            if v is not None and getattr(v, 'role', '') == 'section_alias':
+            if v is not None and v.role == 'section_alias':
                 _src, _sp = resolve_section_alias(builder, arr,
-                                                  SimpleNamespace(index_exprs=parts, index_vars=[''] * len(parts)))
+                                                  SyntheticAccess(index_exprs=parts, index_vars=[''] * len(parts)))
                 arr, parts = _src, list(_sp.index_exprs)
             return _format_offset_subset(arr, [_remap_token(p, iter_map) for p in parts])
     return expr

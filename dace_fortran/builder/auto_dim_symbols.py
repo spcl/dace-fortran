@@ -8,8 +8,19 @@ the passed array's shape when available, else a don't-care default.  SDFG
 signature itself is unchanged.
 """
 import re
+from typing import Protocol, runtime_checkable
 
 import dace
+
+
+@runtime_checkable
+class HasShape(Protocol):
+    """Any array-like call argument (numpy, cupy, torch, ...)."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        ...
+
 
 #: ``<arr>_d<i>`` / ``offset_<arr>_d<i>`` synthetic-extent symbol name; greedy
 #: ``.+`` matches the rightmost ``_d<i>`` since an array name may itself contain ``_d``.
@@ -30,7 +41,7 @@ class _AutoDimSDFG(dace.SDFG):
                 continue
             is_offset = m.group('off') is not None
             actual = kwargs.get(m.group('arr'))
-            shape = getattr(actual, 'shape', None)
+            shape = actual.shape if isinstance(actual, HasShape) else None
             idx = int(m.group('idx'))
             if not is_offset and shape is not None and idx < len(shape):
                 kwargs[sym] = int(shape[idx])  # always the correct extent

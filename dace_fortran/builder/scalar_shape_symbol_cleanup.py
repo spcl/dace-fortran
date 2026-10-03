@@ -41,9 +41,10 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
         # Symbols referenced by some array's shape/offset are kept even if the name pattern matches.
         referenced: set = set()
         for desc in sdfg.arrays.values():
-            for s in getattr(desc, 'shape', ()):
-                referenced.update(str(x) for x in dace.symbolic.symlist(s).values())
-            for s in getattr(desc, 'offset', ()):
+            extents = list(desc.shape)
+            if isinstance(desc, dace.data.Array):
+                extents += list(desc.offset)
+            for s in extents:
                 referenced.update(str(x) for x in dace.symbolic.symlist(s).values())
 
         removed: set = set()

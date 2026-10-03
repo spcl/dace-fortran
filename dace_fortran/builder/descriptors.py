@@ -10,11 +10,11 @@ classification.
 """
 
 import re
-from types import SimpleNamespace
 
 import dace
 from dace import SDFG
 
+from dace_fortran.builder.records import SyntheticVar
 from dace_fortran.builder.access import resolve_object_member_expr
 
 #: A pointer-ASSOCIATION right-hand side: a bare identifier or a flattened
@@ -106,15 +106,15 @@ def _infer_component_aliases(builder) -> tuple[dict[str, str], dict[str, set[str
 
     def walk(nodes):
         for c in nodes:
-            for ac in getattr(c, 'accesses', None) or []:
-                for expr in getattr(ac, 'index_exprs', None) or []:
+            for ac in c.accesses or []:
+                for expr in ac.index_exprs or []:
                     if isinstance(expr, str):
                         for m in re.finditer(r'([A-Za-z_]\w*)\[', expr):
                             n = m.group(1)
                             if n not in known and '_' in n:
                                 unresolved.add(n)
             walk(c.children)
-            walk(getattr(c, 'else_children', []))
+            walk(c.else_children)
 
     walk(builder.ast)
     if not unresolved:
@@ -165,22 +165,17 @@ def _synth_view_alias(src, fortran_name: str):
     pointing at it.  Only the fields actually consulted by
     ``add_descriptors`` and ``access.py`` are populated.
     """
-    return SimpleNamespace(
+    return SyntheticVar(
         fortran_name=fortran_name,
         role='view_alias',
         view_source=src.fortran_name,
         view_subset=[''],
-        view_dim_map=[],
         dtype=src.dtype,
         rank=src.rank,
         shape_symbols=list(src.shape_symbols),
         lower_bounds=list(src.lower_bounds),
         intent=src.intent,
         is_dynamic=src.is_dynamic,
-        bounds_remap_view=False,
-        bounds_remap_source='',
-        bounds_remap_source_subset=[],
-        bounds_remap_total_extent='',
     )
 
 
@@ -368,7 +363,7 @@ def scan_object_aliases(builder) -> None:
     # and materialise phantom pointer-component names as mirrors of the real
     # flattened storage.  This must happen before ``add_descriptors`` registers the
     # SDFG symbols/arrays because the synthetic views need their own offset symbols.
-    source_aliases = _pointer_aliases_from_source(builder, getattr(builder, '_fortran_source', None) or '')
+    source_aliases = _pointer_aliases_from_source(builder, builder.fortran_source)
     inferred_aliases, inferred_suffixes = _infer_component_aliases(builder)
     all_aliases: dict[str, str] = {**inferred_aliases, **source_aliases}
     for prefix, real_prefix in all_aliases.items():
@@ -391,23 +386,20 @@ def scan_object_aliases(builder) -> None:
         for c in nodes:
             # Scan every string attribute of the AST node (loop bounds,
             # conditions, expressions, ...) plus nested AccessInfo strings.
-            for attr in dir(c):
-                if attr.startswith('_') or attr in ('children', 'else_children', 'accesses'):
-                    continue
-                val = getattr(c, attr, None)
-                if isinstance(val, str):
-                    used_tokens.update(_ident_re.findall(val))
-            for ac in getattr(c, 'accesses', None) or []:
-                for expr in getattr(ac, 'index_exprs', None) or []:
+            for val in (c.kind, c.loop_iter, c.loop_bound, c.loop_lower_expr, c.loop_step_expr, c.target, c.expr,
+                        c.condition, c.callee, c.reduce_src, c.reduce_wcr, c.reduce_identity):
+                used_tokens.update(_ident_re.findall(val))
+            for ac in c.accesses or []:
+                for expr in ac.index_exprs or []:
                     if isinstance(expr, str):
                         used_tokens.update(_ident_re.findall(expr))
-                for iv in getattr(ac, 'index_vars', None) or []:
+                for iv in ac.index_vars or []:
                     if isinstance(iv, str):
                         used_tokens.update(_ident_re.findall(iv))
-            for arg in getattr(c, 'call_args', None) or []:
+            for arg in c.call_args or []:
                 used_tokens.update(_ident_re.findall(str(arg)))
             _collect_tokens(c.children)
-            _collect_tokens(getattr(c, 'else_children', []))
+            _collect_tokens(c.else_children)
 
     _collect_tokens(builder.ast)
 
@@ -520,7 +512,7 @@ def sdfg_name(builder) -> str:
     so a registered external callee can be linked against it by
     function-keyed library name.
     """
-    entry = getattr(builder, "entry", None)
+    entry = builder.entry
     if entry:
         proc = entry.rsplit("P", 1)[-1] if "P" in entry else entry
         if proc:
@@ -745,7 +737,7 @@ def add_descriptors(builder, sdfg: SDFG):
     for v in builder.arrays.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
             continue
-        if v.fortran_name in getattr(builder, 'complex_component_aliases', {}):
+        if v.fortran_name in builder.complex_component_aliases:
             # Complex-as-2-reals component alias (``REAL(2,N)`` dummy bound to a
             # ``COMPLEX`` element, QE ``qvan2``'s ``qg(2, ngy)`` <- ``qgm(1,
             # ijh)``).  Register it as a SAME-dtype COMPLEX View of the source
@@ -923,7 +915,7 @@ def add_descriptors(builder, sdfg: SDFG):
             # read-only transient (full-view SoA, no copy-back) instead of
             # leaking it onto the SDFG signature as a required argument.  Its
             # reads are dead on every path that doesn't allocate the global.
-            if getattr(v, 'unbindable_section', False):
+            if v.unbindable_section:
                 transient = True
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
@@ -970,7 +962,7 @@ def add_descriptors(builder, sdfg: SDFG):
     # length-1 Array survives the later scalar-folding cleanup.
     scalar_view_sources = {
         a.view_source
-        for a in builder.arrays.values() if getattr(a, 'role', '') == 'view_alias' and a.view_source in builder.scalars
+        for a in builder.arrays.values() if a.role == 'view_alias' and a.view_source in builder.scalars
     }
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
@@ -1086,12 +1078,10 @@ def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
         ctx.sdfg.add_array(name, shape=dims, dtype=dt(dtype), transient=True, strides=strides)
     # Mirror the entry into ``builder.arrays`` so subsequent emit_assign
     # / emit_libcall calls find it via the existing arrays-dict lookups.
-    builder.arrays[name] = SimpleNamespace(
+    builder.arrays[name] = SyntheticVar(
         fortran_name=name,
-        intent='',
         dtype=dtype,
         rank=len(shape),
-        is_dynamic=False,
         role='array',
         shape_symbols=[str(s) for s in shape],
         lower_bounds=['1'] * len(shape),
@@ -1153,8 +1143,7 @@ def auto_declare_synth(builder, name: str, ctx):
     if not _is_synth_scalar(name):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
-    # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
-    # ``.intent`` and ``.dtype``.
+    # A ``SyntheticVar`` is enough  --  scalar dispatch only reads ``.intent`` and ``.dtype``.
     # ``__al_<N>`` is the lift-cf-to-scf scratch counter that drives the
     # ``do istep = 1, niter`` shape (NPB LU's ssor istep loop): each
     # iteration DECREMENTS it on an interstate edge (``__al = __al - 1``)
@@ -1170,14 +1159,7 @@ def auto_declare_synth(builder, name: str, ctx):
     # that a scalar reads correctly on a ConditionalBlock branch /
     # interstate edge in d-face 2.0.0a3 -- no length-1 array needed; the
     # earlier "scalar = free-symbol 0 on the edge" belief was wrong).
-    v = SimpleNamespace(fortran_name=name,
-                        intent='',
-                        dtype='int32',
-                        rank=0,
-                        is_dynamic=False,
-                        role='symbol' if is_sym else 'scalar',
-                        shape_symbols=[],
-                        lower_bounds=[])
+    v = SyntheticVar(fortran_name=name, dtype='int32', role='symbol' if is_sym else 'scalar')
     if is_sym:
         builder.symbols[name] = v
         if name not in ctx.sdfg.symbols:

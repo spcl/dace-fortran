@@ -6,13 +6,26 @@ Tracks the "current" SDFG state, pending scalar assignments that need
 flushing as tasklets, and the active DO-loop iterator renames.
 """
 
+from typing import Any
+
 from dace import InterstateEdge, SDFG
 
 
 class _Ctx:
     """Tracks the current state and pending scalar assignments."""
 
-    def __init__(self, sdfg: SDFG, builder):
+    __slots__ = ('sdfg', 'builder', 'cur', 'pending', 'iter_map', 'mpi_req_posts', 'cond_cache')
+
+    sdfg: SDFG
+    builder: Any
+    #: Current writable state, or the last non-state control-flow block; ``None`` before the first ``ensure``.
+    cur: Any
+    pending: list[tuple[str, str]]
+    iter_map: dict[str, str]
+    mpi_req_posts: dict[str, int]
+    cond_cache: dict[str, str]
+
+    def __init__(self, sdfg: SDFG, builder: Any) -> None:
         self.sdfg = sdfg
         self.builder = builder
         self.cur = None

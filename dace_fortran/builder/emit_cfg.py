@@ -14,6 +14,7 @@ import dace
 from dace import InterstateEdge
 from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
 
+from dace_fortran.builder.records import SyntheticNode, SyntheticVar
 from dace_fortran.builder.access import (
     acc,
     array_read_to_dace_expr,
@@ -87,7 +88,7 @@ def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):
     """
     if not isinstance(expr, str):
         return pre
-    view_aliases = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'view_alias'}
+    view_aliases = {nm for nm, v in builder.arrays.items() if v.role == 'view_alias'}
     if not view_aliases:
         return pre
     referenced = [nm for nm in view_aliases if re.search(rf'\b{re.escape(nm)}\b', expr)]
@@ -123,7 +124,7 @@ def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
     expr = resolve_object_member_expr(builder, expr)
     if '[' not in expr:
         return expr
-    section_dummies = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'section_alias'}
+    section_dummies = {nm for nm, v in builder.arrays.items() if v.role == 'section_alias'}
     if not section_dummies:
         return expr
     resolver = lambda n: resolve_object_member(builder, n)
@@ -211,7 +212,7 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         # the first ``used_symbols`` walk of any post-gen pass.  See
         # :func:`is_character_data`.
         return
-    if n.target in getattr(builder, 'complex_component_aliases', {}):
+    if n.target in builder.complex_component_aliases:
         # Complex-as-2-reals component alias write (``qg(c, i) = ...``): a
         # staged read-modify-write on the complex source's element, setting
         # component ``c`` (re/im).  No descriptor / no View -- handled wholly
@@ -331,7 +332,7 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     # the real flattened SDFG symbol/array; read the symbol-init value from
     # there so the interstate edge doesn't carry an unregistered name.
     arr = resolve_object_member(builder, n.expr) or n.expr
-    idxs = list(getattr(n, "pos_indices", None) or [])
+    idxs = list(n.pos_indices or [])
     if not idxs:  # back-compat: scalar mirror on loop_lower
         idxs = [int(n.loop_lower)]
     if sym not in ctx.sdfg.symbols:
@@ -662,7 +663,7 @@ def _scalar_reassign_in_state(state, a, builder) -> bool:
     into one-state-per-assign).  Mirror of ``emit_assign``'s realised-graph
     guard for the ``has_structured`` / IF-body path; keep the two in sync.
     """
-    tgt = getattr(a, 'target', None)
+    tgt = a.target
     if tgt is None or tgt not in builder.scalars:
         return False
     from dace.sdfg.nodes import Tasklet, AccessNode
@@ -729,8 +730,8 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     # passes them through as ``loop_lower`` and ``loop_bound`` without
     # reordering, so emit_loop is responsible for picking the right
     # one as init.
-    step = getattr(n, 'loop_step', 1)
-    step_expr = getattr(n, 'loop_step_expr', '') or ''
+    step = n.loop_step
+    step_expr = n.loop_step_expr or ''
 
     if step_expr:
         # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
@@ -858,7 +859,7 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
         def _emit_one(st, a, i):
             # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
             # staged re/im RMW on the complex source, not a normal tasklet.
-            if a.target in getattr(builder, 'complex_component_aliases', {}):
+            if a.target in builder.complex_component_aliases:
                 emit_complex_component_assign(builder, st, a, i, iter_map, indirect_syms)
             else:
                 emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
@@ -1005,24 +1006,14 @@ def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):
     array reads still wire through per-occurrence ``_in_<arr>_<n>``
     connectors + memlets.
     """
-    from types import SimpleNamespace
     if sym not in ctx.sdfg.arrays:
         ctx.sdfg.add_scalar(sym, dace.int64, transient=True, find_new_name=False)
-    builder.scalars.setdefault(
-        sym,
-        SimpleNamespace(fortran_name=sym,
-                        intent='',
-                        dtype='int64',
-                        rank=0,
-                        is_dynamic=False,
-                        role='scalar',
-                        shape_symbols=[],
-                        lower_bounds=[]))
+    builder.scalars.setdefault(sym, SyntheticVar(fortran_name=sym, dtype='int64', role='scalar'))
     pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
     nxt = region.add_state(f"pre_{sym}")
     region.add_edge(pre, nxt, InterstateEdge())
     ctx.cur = nxt
-    synth = SimpleNamespace(kind='assign', target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
+    synth = SyntheticNode(kind='assign', target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
     emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
     return nxt, sym
 
@@ -1110,10 +1101,10 @@ def _prepare_cond_expr(builder, ctx: '_Ctx', region, pre, n):
     section-alias rewriting, scalar-output subscripting, tasklet-lifting for
     array-reading conditions, and caching of never-written conditions.
     """
-    cond = n.condition if getattr(n, 'condition', None) and n.condition != "?" else "True"
+    cond = n.condition if n.condition and n.condition != "?" else "True"
     cond = _rewrite_section_aliases_in_expr(builder, cond)
 
-    accesses = getattr(n, 'accesses', None)
+    accesses = n.accesses
     will_lift = bool(accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in accesses)
     if not will_lift:
         for nm, v in builder.scalars.items():
@@ -1185,8 +1176,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
         pre, cond = _prepare_cond_expr(builder, ctx, region, pre, cur)
         branches.append((cond, list(cur.children)))
         else_children = list(cur.else_children)
-        if (len(else_children) == 1 and getattr(else_children[0], 'kind', None) == 'conditional'
-                and getattr(else_children[0], 'condition', None)):
+        if (len(else_children) == 1 and else_children[0].kind == 'conditional' and else_children[0].condition):
             cur = else_children[0]
             continue
         tail_children = else_children
