@@ -97,6 +97,23 @@ _RELEASE_FLAGS = ("-O3", "-ffast-math")
 _MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
 
+def compiled_init_symbols(sdfg_so: Path, sdfg_name: str) -> tuple[str, ...] | None:
+    """Parameter names of the compiled SDFG's ``__dace_init_<name>``, in declaration order.
+
+    Read from the header DaCe generates next to the library (``<build>/include/<name>.h``), which is the only
+    authoritative record: the init routine takes the symbols the generated code uses, not every free symbol of the
+    SDFG.  ``None`` when the header is absent (callers then assume every free symbol).
+    """
+    header = sdfg_so.parent.parent / "include" / f"{sdfg_name}.h"
+    if not header.is_file():
+        return None
+    match = re.search(rf"__dace_init_{re.escape(sdfg_name)}\(([^)]*)\)", header.read_text())
+    if match is None:
+        return None
+    params = [p.strip() for p in match.group(1).split(",") if p.strip()]
+    return tuple(re.split(r"[\s*&]+", p)[-1] for p in params)
+
+
 @dataclass(slots=True)
 class FortranLibrary:
     """A built Fortran-callable shared library: linked ``.so``, its SDFG
@@ -195,9 +212,10 @@ def build_fortran_library(
     # CompiledSDFG._sig (codegen output, transform-dependent -- NOT
     # snapshotted in FrozenSignature).  Empty -> falls back to frozen.args.
     dace_arglist = tuple(compiled._sig or ())
+    init_symbols = compiled_init_symbols(sdfg_so, sdfg.name)
 
     bindings_f90 = out_dir_path / f"{name}_bindings.f90"
-    emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist)
+    emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist, init_symbols=init_symbols)
 
     # Threaded between the binding (which the shim USEs) and extra_sources
     # -- gfortran compiles strictly left-to-right by module dependency.

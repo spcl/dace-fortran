@@ -34,6 +34,7 @@ def emit_bindings(
     dace_arglist: tuple[str, ...] = (),
     enum_maps: dict | None = None,
     acc_residency: AccTransferPlan | None = None,
+    init_symbols: tuple[str, ...] | None = None,
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
@@ -44,6 +45,9 @@ def emit_bindings(
     :func:`rewrite_string_enum_to_integer`) makes the binding accept a
     ``CHARACTER`` dummy and ``SELECT CASE``-translate it to the integer
     the SDFG expects; the SDFG itself only ever sees the integer.
+
+    ``init_symbols`` (optional) is the parameter list the compiled ``__dace_init`` declares, from
+    :func:`dace_fortran.bindings.build_fortran_library.compiled_init_symbols`; ``None`` assumes every free symbol.
 
     ``acc_residency`` (optional) is an
     :class:`dace_fortran.bindings.acc_transfers.AccTransferPlan` -- the sidecar
@@ -66,12 +70,18 @@ def emit_bindings(
         acc_residency = plan_frozen_transfers(frozen)
 
     blocks = {
-        'c_interface': build_c_interface(frozen, iface, dace_arglist),
-        'handle_state': build_handle_state(iface),
-        'wrapper_head': build_wrapper_head(frozen, iface, plan, enum_maps=enum_maps),
-        'wrapper_body': build_wrapper_body(frozen, iface, plan, enum_maps=enum_maps),
-        'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps),
-        'finalize': build_finalize(iface),
+        'c_interface':
+        build_c_interface(frozen, iface, dace_arglist, init_symbols),
+        'handle_state':
+        build_handle_state(iface),
+        'wrapper_head':
+        build_wrapper_head(frozen, iface, plan, enum_maps=enum_maps),
+        'wrapper_body':
+        build_wrapper_body(frozen, iface, plan, enum_maps=enum_maps),
+        'wrapper_tail':
+        build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps, init_symbols=init_symbols),
+        'finalize':
+        build_finalize(iface),
     }
     blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
     out_file.write_text(assemble_module(iface, frozen, blocks, plan))

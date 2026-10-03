@@ -70,7 +70,10 @@ def _load(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_arglist: tuple = ()) -> str:
+def build_c_interface(frozen: FrozenSignature,
+                      iface: OriginalInterface,
+                      dace_arglist: tuple = (),
+                      init_symbols: Sequence[str] | None = None) -> str:
     """Render the ``interface ... end interface`` block declaring the three C
     entry points the compiled SDFG exports (template: ``templates/c_interface.f90.in``)."""
     tpl = _load("c_interface.f90.in")
@@ -101,7 +104,7 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
             body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
-    init_syms = _init_sym_names(frozen)
+    init_syms = _init_sym_names(frozen, init_symbols)
     init_arg_decls = "".join(f"      {_init_symbol_decl(s, frozen)} :: {s}\n" for s in init_syms)
     rendered = tpl.format(entry=iface.entry,
                           c_arg_decls=",  &\n".join(header_lines),
@@ -174,9 +177,16 @@ def _free_sym_names(frozen: FrozenSignature) -> list:
     return sorted(s for s in frozen.free_symbols if s not in argnames and not s.startswith('__dace'))
 
 
-def _init_sym_names(frozen: FrozenSignature) -> list:
-    """Symbol list for __dace_init_<entry> -- DaCe's init routine takes every SDFG
-    free symbol (alphabetically), even ones that are also a kernel arg."""
+def _init_sym_names(frozen: FrozenSignature, init_symbols: Sequence[str] | None = None) -> list:
+    """Symbol list for __dace_init_<entry>.
+
+    ``init_symbols`` is the parameter list the compiled library's ``__dace_init`` really declares (read from its
+    generated header): DaCe's init routine takes only the symbols its generated code uses, which can be fewer than
+    the SDFG's free symbols (a symbol only in the shape of an array no state touches is free but unused), and a
+    positional call with the wrong list misbinds every later argument.  Without it, fall back to every free symbol
+    (alphabetically), even ones that are also a kernel arg."""
+    if init_symbols is not None:
+        return list(init_symbols)
     return sorted(s for s in frozen.free_symbols if not s.startswith('__dace'))
 
 
@@ -799,7 +809,8 @@ def build_wrapper_tail(frozen: FrozenSignature,
                        iface: OriginalInterface,
                        plan: FlattenPlan,
                        dace_arglist: tuple = (),
-                       enum_maps: dict | None = None) -> str:
+                       enum_maps: dict | None = None,
+                       init_symbols: Sequence[str] | None = None) -> str:
     """Render the wrapper tail: init-count bump + call dace_program_<entry> +
     copy-back for every non-aliased writeable entry, then deallocate + close.
     Template templates/wrapper_call.f90.in supplies the skeleton; we splice the
@@ -845,7 +856,7 @@ def build_wrapper_tail(frozen: FrozenSignature,
     call_args = ",  &\n".join(f"      {_call_actual(a)}" for a in _dace_call_order(frozen, dace_arglist))
     call_block = tpl.format(entry=iface.entry,
                             call_arg_list=call_args,
-                            init_call_args=", ".join(_init_sym_names(frozen)))
+                            init_call_args=", ".join(_init_sym_names(frozen, init_symbols)))
 
     copy_out_lines: List[str] = []
     for entry in live_entries(frozen, plan):
