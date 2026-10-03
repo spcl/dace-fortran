@@ -153,7 +153,7 @@ Declare once with `apply_external_functions(EXTERNAL, IGNORE)`: `EXTERNAL` = lis
 
 - **LLVM/Flang 21 or 22** — auto-detected: `dace_fortran/llvm_toolchain.py` (`SUPPORTED_LLVM_VERSIONS`) probes `flang-new-<major>` / `flang-<major>` and then unversioned `flang-new` / `flang` (which must self-identify via `--version`), taking the first installed major; `LLVM_VERSION` pins one, `LLVM_DIR` overrides discovery outright. Validated on LLVM 21.1.8 and 22.1.5. Debian/Ubuntu: `llvm-N-dev libmlir-N-dev mlir-N-tools libflang-N-dev flang-N clang-N` from apt.llvm.org (N = 21 or 22). `libflang-N-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes. The C++ side keeps both majors' spellings behind `LLVM_VERSION_MAJOR` in `dace_fortran/llvm_compat.h`.
 - **Python** 3.10–3.14 (CI runs 3.12).
-- **DaCe** — pinned `dace @ git+https://github.com/spcl/dace.git@FaCe` (FaCe branch carries DaCe-core pieces the frontend needs; see `pyproject.toml`). Plus `fparser > 0.2`, `networkx`, `numpy`.
+- **DaCe** — pinned to a commit of the FaCe branch (`pyproject.toml`), which carries the DaCe-core pieces the frontend needs. Plus `fparser > 0.2`, `networkx`, `numpy`.
 - **nanobind** — bridge is a nanobind extension (in the `testing` dependency group).
 - **CMake ≥ 3.18**, C++17 compiler (the detected LLVM's own `clang++`/`clang++-<major>` auto-selected if present), **gfortran** (binding tests + numerical references compile with gfortran; Ubuntu's `flang-new-21` ships without `libflang_rt` → flang is emit-HLFIR-only).
 
