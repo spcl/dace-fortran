@@ -1,12 +1,16 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 import contextlib
 import math
 import operator
 import sys
 from copy import copy
-from typing import Iterator, Optional, Tuple, List, Dict, Union, Set
+from typing import Iterable, Iterator, Optional, Tuple, List, Dict, Union, Set
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
@@ -406,7 +410,7 @@ def find_real_ident_spec_tolerant(ident: str,
     return spec
 
 
-def _find_type_decl_node(node: f03.Entity_Decl):
+def _find_type_decl_node(node: f03.Entity_Decl) -> Optional[Base]:
     anc = node.parent
     while anc and not ast_utils.atmost_one(
             ast_utils.children_of_type(anc, (f03.Intrinsic_Type_Spec, f03.Declaration_Type_Spec))):
@@ -443,7 +447,7 @@ def _eval_selected_real_kind(p: int, r: int) -> int:
     return 2
 
 
-def _cdiv(x, y):
+def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
     """Performs integer or real division based on operand types."""
     return operator.floordiv(x, y) \
         if (isinstance(x, types.NUMPY_INTS) and isinstance(y, types.NUMPY_INTS)) \
@@ -764,7 +768,7 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
 
 
 def _dataref_root(dref: Union[f03.Name, f03.Data_Ref, f03.Data_Pointer_Object], scope_spec: types.SPEC,
-                  alias_map: types.SPEC_TABLE):
+                  alias_map: types.SPEC_TABLE) -> Tuple[Base, types.TYPE_SPEC, List[Base]]:
     """
     Helper function to deconstruct a data reference (e.g., `a % b % c`) into its root variable
     and the list of subsequent component accesses.
@@ -842,7 +846,7 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
     _, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
     cur_type = root_type
 
-    def _subscripted_type(t: types.TYPE_SPEC, pref: f03.Part_Ref):
+    def _subscripted_type(t: types.TYPE_SPEC, pref: f03.Part_Ref) -> types.TYPE_SPEC:
         pname, subs = pref.children
         if not t.shape:
             # A match-anything type (external / ``CLASS(*)`` under tolerance) has
@@ -970,7 +974,7 @@ def interface_specs(ast: f03.Program, alias_map: types.SPEC_TABLE) -> Dict[types
     return iface_map
 
 
-def _compute_argument_signature(args, scope_spec: types.SPEC,
+def _compute_argument_signature(args: Optional[Base], scope_spec: types.SPEC,
                                 alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
     if not args:
         return tuple()
@@ -978,7 +982,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
     args_sig = []
     for c in args.children:
 
-        def _deduct_type(x) -> types.TYPE_SPEC:
+        def _deduct_type(x: Base) -> types.TYPE_SPEC:
             if isinstance(x, (f03.Real_Literal_Constant, f03.Signed_Real_Literal_Constant)):
                 return types.TYPE_SPEC('REAL')
             elif isinstance(x, (f03.Int_Literal_Constant, f03.Signed_Int_Literal_Constant)):
@@ -1065,7 +1069,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
     return tuple(args_sig)
 
 
-def _compute_candidate_argument_signature(args, cand_spec: types.SPEC,
+def _compute_candidate_argument_signature(args: Iterable[f03.Name], cand_spec: types.SPEC,
                                           alias_map: types.SPEC_TABLE) -> Tuple[types.TYPE_SPEC, ...]:
     cand_args_sig: List[types.TYPE_SPEC] = []
     for ca in args:
@@ -1149,7 +1153,7 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
     return _subsumes(c.spec, g.spec)
 
 
-def _does_type_signature_match(got_sig: Tuple[types.TYPE_SPEC, ...], cand_sig: Tuple[types.TYPE_SPEC, ...]):
+def _does_type_signature_match(got_sig: Tuple[types.TYPE_SPEC, ...], cand_sig: Tuple[types.TYPE_SPEC, ...]) -> bool:
     # Assumptions (Fortran rules):
     # 1. `got_sig` will not have any positional argument after keyworded arguments start.
     # 2. `got_sig` may have keyworded arguments that are actually required arguments, and in different orders.
@@ -1221,7 +1225,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
     plus: Dict[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]], types.LITERAL_TYPES] = copy(plus) if plus else {}
     minus: Set[Union[types.SPEC, Tuple[types.SPEC, types.SPEC]]] = copy(minus) if minus else set()
 
-    def _root_comp(dref: (f03.Data_Ref, f03.Data_Pointer_Object)):
+    def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> Optional[Tuple[types.SPEC, types.SPEC]]:
         scope_spec = search_scope_spec(dref)
         assert scope_spec
         if walk(dref, f03.Part_Ref):
@@ -1242,7 +1246,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
         return root_spec, comp_spec
 
-    def _integrate_subresults(tp: Dict[types.SPEC, types.LITERAL_TYPES], tm: Set[types.SPEC]):
+    def _integrate_subresults(tp: Dict[types.SPEC, types.LITERAL_TYPES], tm: Set[types.SPEC]) -> None:
         assert not (tm & tp.keys())
         for k in tm:
             if k in plus:
@@ -1253,7 +1257,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
                 minus.remove(k)
             plus[k] = v
 
-    def _subst_and_renorm(target: Base, value: Base):
+    def _subst_and_renorm(target: Base, value: Base) -> None:
         """Replace ``target`` with a copy of ``value`` and renormalize the
         enclosing data/part-ref by reparsing its text.
 
@@ -1276,7 +1280,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
                 return
             utils.replace_node(par, normalized)
 
-    def _inject_knowns(x: Base, value: bool = True, pointer: bool = True):
+    def _inject_knowns(x: Base, value: bool = True, pointer: bool = True) -> None:
         if isinstance(x, (*types.LITERAL_CLASSES, f03.Char_Literal_Constant, f03.Write_Stmt, f03.Close_Stmt,
                           f03.Goto_Stmt, f03.Cycle_Stmt)):
             pass

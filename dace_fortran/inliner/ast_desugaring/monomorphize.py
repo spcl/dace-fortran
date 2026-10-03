@@ -11,6 +11,8 @@ Locked accepted class: single-level inheritance only (no chains/diamonds --
 Fortran has no multiple inheritance); no ``CLASS(*)`` (no closed subtype set);
 every ``DEFERRED`` binding overridden by every concrete arm.
 """
+
+from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
@@ -30,7 +32,7 @@ class UnsupportedProgram(Exception):
 
     ``reason`` is a human-readable explanation of which restriction was violated."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
 

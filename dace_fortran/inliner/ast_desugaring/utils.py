@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from copy import deepcopy
 from typing import Union, Tuple, Optional, List, Iterable
@@ -98,14 +102,14 @@ def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
     return lin + (des, )
 
 
-def _reparent_children(node: Base):
+def _reparent_children(node: Base) -> None:
     """Fixes up `parent` pointers on all children to point back to `node`."""
     for c in node.children:
         if isinstance(c, Base):
             c.parent = node
 
 
-def set_children(par: Base, children: Iterable[Union[Base, str]]):
+def set_children(par: Base, children: Iterable[Union[Base, str]]) -> None:
     """Replaces `par`'s children, handling both `.items`- and `.content`-based nodes."""
     if isinstance(par, BlockBase):
         if not children:
@@ -118,7 +122,7 @@ def set_children(par: Base, children: Iterable[Union[Base, str]]):
         _reparent_children(par)
 
 
-def remove_self(nodes: Union[Base, List[Base]]):
+def remove_self(nodes: Union[Base, List[Base]]) -> None:
     """Removes one or more nodes from their parent's children."""
     if isinstance(nodes, Base):
         nodes = [nodes]
@@ -126,7 +130,7 @@ def remove_self(nodes: Union[Base, List[Base]]):
         remove_children(n.parent, n)
 
 
-def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
+def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     """Replaces `node` with `subst` (None deletes it; can be a single node or iterable)."""
     # Ensure substituted nodes aren't the same object reused at multiple sites.
     par = node.parent
@@ -149,21 +153,21 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
     set_children(par, repls)
 
 
-def append_children(par: Base, children: Union[Base, List[Base]]):
+def append_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Appends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, list(par.children) + children)
 
 
-def prepend_children(par: Base, children: Union[Base, List[Base]]):
+def prepend_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Prepends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, children + list(par.children))
 
 
-def remove_children(par: Base, children: Union[Base, List[Base]]):
+def remove_children(par: Base, children: Union[Base, List[Base]]) -> None:
     """Removes specific children (a single node or a list) from `par`."""
     if isinstance(children, Base):
         children = [children]

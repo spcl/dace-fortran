@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict, Optional, List, Any, Type
@@ -98,7 +102,7 @@ class TYPE_SPEC:
                     part_start = i + 1
         return tuple(p.strip().lower() for p in parts)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         attrs = []
         if self.pointer:
             attrs.append("*")

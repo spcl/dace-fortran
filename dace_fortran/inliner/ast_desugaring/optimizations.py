@@ -434,7 +434,7 @@ def const_eval_nodes(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def _val_2_np_lit(val, type_spec: types.SPEC) -> types.NUMPY_TYPES:
+def _val_2_np_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.NUMPY_TYPES:
     """
     Converts a string value to a NumPy scalar of a specific Fortran type.
     :param val: The string representation of the value (e.g., "123", "true").
@@ -463,7 +463,7 @@ def _val_2_np_lit(val, type_spec: types.SPEC) -> types.NUMPY_TYPES:
     return val
 
 
-def _val_2_lit(val, type_spec: types.SPEC) -> types.LITERAL_TYPES:
+def _val_2_lit(val: Union[str, bool, int, float], type_spec: types.SPEC) -> types.LITERAL_TYPES:
     """
     Converts a string value to a Fortran literal node of a specific type.
     :param val: The string representation of the value (e.g., "123", "true").

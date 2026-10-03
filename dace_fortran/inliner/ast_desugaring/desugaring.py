@@ -6,6 +6,8 @@ constructs into simpler, equivalent ones an SDFG can be built from --
 substitution, `DATA`->assignments, statement functions->internal functions,
 `GOTO`->structured control flow.
 """
+
+from __future__ import annotations
 import sys
 from typing import Tuple, Dict, List, Set, Union
 from io import StringIO
@@ -522,7 +524,7 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
         if args:
             args = args.children
 
-        def _get_typ(var: f03.Name):
+        def _get_typ(var: f03.Name) -> Base:
             _spec = scope_spec + (var.string, )
             _decl = alias_map[_spec]
             assert isinstance(_decl, f03.Entity_Decl)
@@ -691,8 +693,9 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram],
-                                        goto: f03.Goto_Stmt, target: f03.Continue_Stmt):
+def deconstruct_forward_goto_statements(
+        ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram], goto: f03.Goto_Stmt,
+        target: f03.Continue_Stmt) -> Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]:
     """
     Replaces forward-facing `GOTO` statements (i.e. forward jumps) with structured control flow by
     introducing boolean flag variables.
@@ -766,8 +769,9 @@ def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_
     return ancestor_subroutine
 
 
-def deconstruct_backward_goto_statements(ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram],
-                                         goto: f03.Goto_Stmt, target: f03.Continue_Stmt):
+def deconstruct_backward_goto_statements(
+        ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram], goto: f03.Goto_Stmt,
+        target: f03.Continue_Stmt) -> Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]:
     """
     Replaces backward-facing `GOTO` statements (i.e. forward jumps) with `DO WHILE` loop and structured
     control flow with an introduced boolean flag variables.
@@ -866,7 +870,8 @@ def deconstruct_backward_goto_statements(ancestor_subroutine: Union[f03.Function
     return ancestor_subroutine
 
 
-def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base, List[Base]]):
+def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base,
+                                                                                              List[Base]]) -> None:
     """
     Adds a condition to the execution of given nodes. Nodes are executed only if condition is evaluated
     as `.true.`.

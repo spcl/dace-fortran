@@ -1,5 +1,9 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from typing import Optional, List, Iterable, Set, Tuple, Dict
 
@@ -365,7 +369,7 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe:
     keeper_nodes = [alias_map[k] for k in keepers]
     assert all(isinstance(k, PRUNABLE_OBJECT_CLASSES) for k in keeper_nodes)
 
-    def _keep_from(node: Base):
+    def _keep_from(node: Base) -> None:
         for nm in walk(node, f03.Name):
             loc = analysis.search_real_local_alias_spec(nm, alias_map)
             scope_spec = analysis.search_scope_spec(nm.parent)
@@ -524,7 +528,7 @@ def prune_branches(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = Non
     return ast
 
 
-def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE):
+def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE) -> None:
     """Helper to prune an `If_Construct` (a multi-line IF block)."""
     ifthen = ib.children[0]
     assert isinstance(ifthen, f03.If_Then_Stmt)
@@ -558,7 +562,7 @@ def _prune_branches_in_ifblock(ib: f03.If_Construct, alias_map: types.SPEC_TABLE
     _prune_branches_in_ifblock(ib, alias_map)
 
 
-def _prune_branches_in_ifstmt(ib: f03.If_Stmt, alias_map: types.SPEC_TABLE):
+def _prune_branches_in_ifstmt(ib: f03.If_Stmt, alias_map: types.SPEC_TABLE) -> None:
     """Helper to prune an `If_Stmt` (a single-line IF statement)."""
     cond, actions = ib.children
     cval = analysis._const_eval_basic_type(cond, alias_map)

@@ -35,6 +35,8 @@ entry point: emit ONE combined ``.f90`` and return its path.  It also
 exposes the combined fparser AST via ``inline_to_ast(...)`` for callers
 that want to inspect / further-transform the tree before serialisation.
 """
+
+from __future__ import annotations
 import argparse
 import logging
 import re
@@ -42,7 +44,7 @@ import subprocess
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -352,7 +354,7 @@ class ParseConfig:
         #: leaves both alone to stay byte-identical to its committed TU.
         self.f2py_safe = f2py_safe
 
-    def set_all_possible_entry_points_from(self, ast: f03.Program):
+    def set_all_possible_entry_points_from(self, ast: f03.Program) -> None:
         """Treat every top-level subprogram / main program as an entry point
         (used when no explicit entry point was supplied)."""
         self.entry_points = [
@@ -361,13 +363,13 @@ class ParseConfig:
         ]
         self.do_not_prune = list({x for x in self.entry_points + self.do_not_prune})
 
-    def avoid_pruning_type_components(self, ast: f03.Program):
+    def avoid_pruning_type_components(self, ast: f03.Program) -> None:
         """Mark every derived-type component to be preserved during pruning."""
         ident_map = analysis.identifier_specs(ast)
         comp_specs = [k for k, v in ident_map.items() if isinstance(v, f03.Component_Decl)]
         self.do_not_prune = list({x for x in comp_specs + self.do_not_prune})
 
-    def keep_named_type_components(self, ast: f03.Program):
+    def keep_named_type_components(self, ast: f03.Program) -> None:
         """Mark the specific derived-type components named in
         :attr:`keep_type_components` to be preserved during pruning.
 
@@ -406,7 +408,8 @@ def top_level_objects_map(ast: f03.Program, path: str) -> Dict[str, Base]:
     return out
 
 
-def _get_toplevel_objects(path_f90: Tuple[str, str], parser, sources: Dict[str, str]) -> Dict[str, Base]:
+def _get_toplevel_objects(path_f90: Tuple[str, str], parser: Callable[..., f03.Program],
+                          sources: Dict[str, str]) -> Dict[str, Base]:
     """Parse one source file, resolve its ``INCLUDE`` statements by text
     substitution from ``sources``, and map its top-level objects."""
     path, f90 = path_f90
@@ -438,7 +441,7 @@ def _get_toplevel_objects(path_f90: Tuple[str, str], parser, sources: Dict[str, 
 
 
 def construct_full_ast(sources: Dict[str, str],
-                       parser,
+                       parser: Callable[..., f03.Program],
                        entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
     """Combine every source file into one fparser AST, resolving
     ``INCLUDE`` directives and pruning modules unreachable from
@@ -466,7 +469,7 @@ def _module_name_of_use(use: f03.Use_Stmt) -> Optional[str]:
     return nm.string.lower() if nm else None
 
 
-def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]):
+def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]) -> Tuple[Set[str], Set[str]]:
     """Names already bound in ``scope`` that must NOT be re-imported / shadowed,
     plus the set of modules ``scope`` imports *whole* (``USE x`` with no
     ``ONLY:``, which brings in every public name of ``x``).
@@ -501,7 +504,7 @@ def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part
     return visible, whole_use_mods
 
 
-def _prepend_use(scope: Base, clause: str):
+def _prepend_use(scope: Base, clause: str) -> None:
     """Add a ``USE`` statement to the front of ``scope``'s specification part,
     creating one (in the correct position, right after the opening statement)
     when the scope has none -- so the ``USE`` lands before ``IMPLICIT`` /
@@ -884,7 +887,7 @@ def create_fparser_ast(cfg: ParseConfig) -> f03.Program:
     return ast
 
 
-def _checkpoint_ast(cfg: ParseConfig, name: str, ast: f03.Program):
+def _checkpoint_ast(cfg: ParseConfig, name: str, ast: f03.Program) -> None:
     """Dump an intermediate AST as Fortran into the checkpoint dir, if set."""
     if cfg.ast_checkpoint_dir:
         cfg.ast_checkpoint_dir.mkdir(parents=True, exist_ok=True)
