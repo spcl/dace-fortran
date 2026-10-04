@@ -174,6 +174,8 @@ def test_lu_reference_runs(tmp_path):
     np.testing.assert_allclose(rsdnm, expected, rtol=1e-2, err_msg=f"rsdnm drifted: got {rsdnm}")
 
 
+# Builds and compiles the whole NPB LU: ~2-3 min here, longer under coverage, past the lanes' 300 s default.
+@pytest.mark.timeout(1200)
 def test_lu_numerical_correctness(tmp_path):
     """End-to-end gfortran-reference vs SDFG element-wise ``rsdnm`` match, tight tolerance.
 

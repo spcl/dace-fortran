@@ -29,6 +29,8 @@ pytestmark = [
 ]
 
 
+# Builds and compiles the whole NPB LU: ~2-3 min here, longer under coverage, past the lanes' 300 s default.
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("merge_engine", [MergeEngine.FPARSER, MergeEngine.REGEX])
 def test_lu_multi_file_builds(tmp_path, merge_engine: MergeEngine):
     """Ingesting [lu.F90, useapplu.F90] emits a valid SDFG rooted at useapplu::call_dolu, both merge engines."""

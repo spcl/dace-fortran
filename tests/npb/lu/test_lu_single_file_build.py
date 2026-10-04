@@ -26,6 +26,8 @@ pytestmark = [
 ]
 
 
+# Builds and compiles the whole NPB LU: ~2-3 min here, longer under coverage, past the lanes' 300 s default.
+@pytest.mark.timeout(1200)
 def test_lu_single_file_builds(tmp_path):
     """Ingesting just lu.F90 emits a valid SDFG rooted at lu::dolu."""
     sdfg = build_sdfg_from_files(
