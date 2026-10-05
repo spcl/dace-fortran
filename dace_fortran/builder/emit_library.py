@@ -7,11 +7,12 @@ state, add the node, attach edges -- too small individually to earn their own fi
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import math
 import re
 from enum import Enum
-from typing import Any, NamedTuple, Sequence, TYPE_CHECKING, TypeVar, cast
+from typing import Any, Callable, NamedTuple, Sequence, TYPE_CHECKING, TypeVar, cast
 
 import dace.symbolic
 from dace import dtypes, InterstateEdge, Memlet
@@ -212,9 +213,42 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     ctx.new_state(builder, region)
 
 
+def emit_symbol_target_via_transient(
+    builder: SDFGBuilder,
+    ctx: Ctx,
+    n: NodeLike,
+    region: ControlFlowRegion,
+    emit: Callable[[SDFGBuilder, Ctx, NodeLike, ControlFlowRegion], None],
+) -> bool:
+    """Emit ``n`` whose target is a SYMBOL (``nct = MAXVAL(index_map)`` / ``nst = COUNT(st > 0)`` where the result
+    later bounds a loop): a library node writes data, so ``emit`` fills a one-element transient and the symbol is
+    assigned from it on the next interstate edge.
+
+    :returns: ``False`` (nothing emitted) when the target is not a symbol.
+    """
+    if n.target not in builder.symbols:
+        return False
+    staged, _ = ctx.sdfg.add_array(
+        f"{n.target}_staged", [1], ctx.sdfg.symbols[n.target], transient=True, find_new_name=True
+    )
+    fields = {f.name: getattr(n, f.name) for f in dataclasses.fields(SyntheticNode)}
+    emit(builder, ctx, SyntheticNode(**{**fields, "target": staged, "target_is_array": False}), region)
+    ctx.flush(builder, region)
+    ctx.ensure(region)
+    dst = region.add_state(f"post_{n.target}_{builder.nid()}")
+    region.add_edge(ctx.cur, dst, InterstateEdge(assignments={n.target: f"{staged}[0]"}))
+    ctx.cur = dst
+    return True
+
+
 def emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``target = matmul(a, b)`` / ``transpose(a)`` / ``dot_product(x, y)`` -> matching DaCe
     library node. ``MatMul`` specializes to GEMM/GEMV/Dot by operand rank."""
+    if not emit_symbol_target_via_transient(builder, ctx, n, region, _emit_libcall):
+        _emit_libcall(builder, ctx, n, region)
+
+
+def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     from dace_fortran.intrinsics import libnode_spec
     import dace.dtypes as dtypes
 
@@ -2011,6 +2045,11 @@ def emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     in the same routine all write through the whole destination and
     the last one wins.
     """
+    if not emit_symbol_target_via_transient(builder, ctx, n, region, _emit_reduce):
+        _emit_reduce(builder, ctx, n, region)
+
+
+def _emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     from dace_fortran.builder.access import build_memlet_index
 
     state = ctx.flush_and_ensure(builder, region)

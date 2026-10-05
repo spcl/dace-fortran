@@ -86,6 +86,48 @@ def test_scalar_reductions_structure(tmp_path):
     assert "lambda a, b: max(a, b)" in wcrs
 
 
+_SYMBOL_TARGET_SRC = """
+subroutine number_sticks(n, st, index_map, total)
+  implicit none
+  integer, intent(in) :: n
+  integer, intent(in) :: st(n)
+  integer, intent(inout) :: index_map(n)
+  integer, intent(out) :: total
+  integer :: i, nct, nst
+  nct = maxval(index_map)
+  do i = 1, n
+    if (st(i) > 0) then
+      if (index_map(i) == 0) then
+        nct = nct + 1
+        index_map(i) = nct
+      end if
+    end if
+  end do
+  total = 0
+  do i = 1, nct
+    total = total + i
+  end do
+  nst = count(st > 0)
+  do i = 1, nst
+    total = total + 100
+  end do
+end subroutine
+"""
+
+
+def test_reductions_into_loop_bound_symbols(tmp_path):
+    """``nct = MAXVAL(index_map)`` / ``nst = COUNT(st > 0)`` where the result later bounds a loop, so it is a symbol
+    (QE ``sticks_map_index`` / ``sticks_map_set``): the library node writes a transient and the symbol is assigned
+    from it (``KeyError: 'nct'`` / ``'nst'`` before)."""
+    sdfg = build_sdfg(_SYMBOL_TARGET_SRC, tmp_path, name="number_sticks", entry="number_sticks").build()
+    st = np.array([1, 0, 1, 1], dtype=np.int32)
+    index_map = np.array([0, 0, 5, 0], dtype=np.int32)
+    total = np.zeros(1, dtype=np.int32)
+    sdfg(n=4, st=st, index_map=index_map, total=total)
+    np.testing.assert_array_equal(index_map, [6, 0, 5, 7])
+    assert total[0] == 28 + 3 * 100  # 1 + ... + 7, then one 100 per positive stick
+
+
 if __name__ == "__main__":
     import pytest
 
