@@ -22,6 +22,8 @@ from tests.cloudsc.full._harness import run_cloudsc
 from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
 from dace_fortran.pipelines import num_maps, optimize
 
+pytestmark = pytest.mark.e2e
+
 _SRC = Path(__file__).resolve().parents[1] / "cloudsc" / "full" / "cloudsc.F90"
 
 # Species counts CLOUDSC treats as compile-time constants. flang lowercases identifiers and some

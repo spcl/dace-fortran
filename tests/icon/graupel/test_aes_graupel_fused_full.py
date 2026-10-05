@@ -34,6 +34,8 @@ from ._graupel_harness import (
     ORIGINAL_SOURCE,
 )
 
+pytestmark = pytest.mark.long
+
 
 KE = 20
 DT = 30.0
