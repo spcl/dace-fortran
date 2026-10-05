@@ -188,9 +188,6 @@ def extract_single_tu(
     RAM-backed ``/tmp`` tmpfs)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    tests_root = str(_HERE.parent.parent)
-    prev_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = os.pathsep.join([tests_root, prev_pp]) if prev_pp else tests_root
     env["TMPDIR"] = str(out_dir)
     env.setdefault("UCX_VFS_ENABLE", "n")
     # Pin the hash seed for byte-reproducible regeneration -- the drift guard compares

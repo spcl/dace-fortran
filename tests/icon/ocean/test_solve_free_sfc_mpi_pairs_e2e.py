@@ -22,6 +22,7 @@ The exchange pairs the ranks {0, 1}, {2, 3}, ..., so this runs at any even rank 
 """
 
 import ctypes
+import re
 from pathlib import Path
 
 import numpy as np
@@ -157,11 +158,32 @@ def _fill_sync_stubs(src: str) -> str:
     return src
 
 
+#: Body of ``print_2dvalue_location``, which the DUT drops (``_DO_NOT_EMIT``) but the reference would run.
+_PRINT_LOCATION_BODY = re.compile(
+    r"(  SUBROUTINE print_2dvalue_location\(.*?CHARACTER\(LEN = \*\), PARAMETER :: method_name = [^\n]*\n)"
+    r".*?(  END SUBROUTINE print_2dvalue_location\n)",
+    re.DOTALL,
+)
+
+
+def _drop_location_report(src: str) -> str:
+    """Empty ``print_2dvalue_location`` on the reference side too.
+
+    A rank whose seeded surface height falls below ``min_top_height`` reports where, reading the cell centres
+    through ``in_subset % patch``, which the flat-ABI reconstruction leaves unassociated: the stock reference
+    segfaults there.  The report only writes to stderr, and the DUT drops the whole call.
+    """
+    out, n = _PRINT_LOCATION_BODY.subn(r"\1\2", src)
+    if n != 1:
+        raise RuntimeError(f"print_2dvalue_location body not unique (found {n})")
+    return out
+
+
 def _build_artifacts(tmp_path: Path) -> dict:
     """Build (rank 0 only) the DUT + REF against the sync-filled TU."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     tu = tmp_path / "solve_free_sfc_mpi_tu.f90"
-    tu.write_text(_fill_sync_stubs(_TU.read_text()))
+    tu.write_text(_drop_location_report(_fill_sync_stubs(_TU.read_text())))
     stub = tmp_path / "_mpi_stub.f90"
     stub.write_text(_MPI_STUB)
     noop = tmp_path / "_mpi_noop_impl.f90"
@@ -215,6 +237,7 @@ def test_solve_free_sfc_rank_pairs_bit_exact(tmp_path: Path):
     # Every rank builds against rank 0's tmp_path so the .so artefacts are shared.
     tmp_path = Path(world.bcast(str(tmp_path) if rank == 0 else None, root=0))
     art = build_on_root(world, lambda: _build_artifacts(tmp_path))
+    assert art is not None, "build_on_root broadcasts the artifacts to every rank"
     world.Barrier()
 
     dace_name = art["dace_name"]

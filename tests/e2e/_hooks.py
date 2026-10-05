@@ -4,8 +4,7 @@
 
 The harness forks a subprocess that re-execs ``_ocean_e2e.py``, so the pipeline can't be handed
 over as a callable -- it goes through ``OCEAN_E2E_SDFG_HOOK="module:func"``, which the child
-imports and runs on the DUT SDFG before compile. ``tests/`` is on the child's PYTHONPATH
-(``_ocean_e2e`` puts it there), so this module resolves as ``e2e._hooks``.
+imports and runs on the DUT SDFG before compile, so this module is named ``tests.e2e._hooks``.
 """
 
 from dace_fortran.bindings.frozen_signature import refreeze

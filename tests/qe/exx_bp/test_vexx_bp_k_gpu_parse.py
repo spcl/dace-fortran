@@ -28,6 +28,7 @@ folds to a no-op and this test keeps passing.
 import re
 from pathlib import Path
 
+import pytest
 
 import dace_fortran
 from tests._util import flang_binary, flang_intrinsic_modules_path
@@ -289,6 +290,8 @@ def test_vexx_bp_k_gpu_reference_runs(tmp_path):
     np.testing.assert_array_equal(hpsi_out, hpsi_in)
 
 
+# Builds, compiles and binds the whole vexx_bp_k_gpu SDFG: ~4 min on a CI runner, past the lanes' 300 s default.
+@pytest.mark.timeout(1200)
 def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
     """End-to-end numerical correctness for vexx_bp_k_gpu THROUGH the
     generated Fortran binding.
@@ -360,6 +363,4 @@ def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
 
 
 if __name__ == "__main__":
-    import pytest
-
     raise SystemExit(pytest.main([__file__]))

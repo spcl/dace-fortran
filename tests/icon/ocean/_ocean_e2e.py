@@ -896,8 +896,6 @@ def run_kernel_e2e(
     if mesh_buffers:
         np.savez(out / "mesh_buffers.npz", **mesh_buffers)
     env = dict(os.environ)
-    # tests/ (for icon.ocean) + repo root (for dace_fortran) on the child path.
-    env["PYTHONPATH"] = os.pathsep.join([str(_HERE.parents[1]), str(_HERE.parents[2]), env.get("PYTHONPATH", "")])
     env["TMPDIR"] = str(out)
     env.setdefault("UCX_VFS_ENABLE", "n")
     proc = subprocess.run(

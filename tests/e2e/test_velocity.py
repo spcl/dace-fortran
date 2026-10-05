@@ -73,7 +73,7 @@ def test_velocity_tendencies_pipeline_numerical_e2e(monkeypatch, tu_name, loop_e
 
     # The harness forks a child that re-execs _ocean_e2e.py; the child inherits os.environ and
     # resolves the hook against tests/ on its PYTHONPATH.
-    monkeypatch.setenv("OCEAN_E2E_SDFG_HOOK", "e2e._hooks:velocity_optimize")
+    monkeypatch.setenv("OCEAN_E2E_SDFG_HOOK", "tests.e2e._hooks:velocity_optimize")
     opt = run_variant(seed, tu_name)
 
     assert opt["passed"], f"velocity_tendencies: optimized build/lower/run failed:\n{opt['output'][-3500:]}"

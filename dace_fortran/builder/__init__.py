@@ -926,7 +926,7 @@ class SDFGBuilder:
         # ``object_alias_defs``: rebind-store targets dropped at emit (no data);
         # ``object_alias_flat_members``: {member_suffix: real_flat_name} unique.
 
-    def build(self) -> SDFG:
+    def build(self) -> AutoDimSDFG:
         """Construct the SDFG, run the unconditional offset-symbol
         specialisation pass, and attach a frozen-signature snapshot.
 
