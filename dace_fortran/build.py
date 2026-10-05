@@ -33,16 +33,23 @@ are declared through :mod:`dace_fortran.external`
 (``register_external``); they are re-exported here for convenience.
 """
 
+import contextlib
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
-from dace_fortran.entry_names import QualifiedEntry, require_fortran_name, split_qualified_entry
+from dace_fortran.entry_names import (
+    procedure_definitions,
+    require_fortran_name,
+    resolve_entry_name,
+    split_qualified_entry,
+)
 from dace_fortran.preprocess import MergeEngine
 from dace_fortran.external import (
     Arg,
@@ -108,78 +115,14 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
     return None
 
 
-_PROC_RE = re.compile(
-    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*"
-    r"(?:[\w*()]+\s+)*?(subroutine|function)\s+(\w+)",
-    re.IGNORECASE,
-)
-_MOD_RE = re.compile(r"^\s*module\s+(\w+)\s*$", re.IGNORECASE)
-_END_RE = re.compile(r"^\s*end\s*(module|interface|subroutine|function)?\b", re.IGNORECASE)
-_IFACE_RE = re.compile(r"^\s*(?:abstract\s+)?interface\b", re.IGNORECASE)
-
-
-def resolve_entry_name(source: str, entry: Optional[str]) -> QualifiedEntry:
-    """The procedure ``entry`` names in ``source``, with its module, from a scan of ``source`` for procedure
-    *definitions* (``interface`` blocks and ``end`` lines are skipped).
-
-    ``entry`` is a Fortran name (``solve_nh`` or ``mod::proc``), or ``None`` to take the single procedure ``source``
-    defines (an SDFG targets one specific procedure -- no "first of many" guessing).
-
-    :raises ValueError: if the named procedure is not found or is ambiguous, or (``None`` case) the source has no or
-        more than one procedure.
-    """
-    cur_mod: Optional[str] = None
-    iface_depth = 0
-    procs = []  # (module|None, name)
-    for raw in source.splitlines():
-        line = raw.strip()
-        if _IFACE_RE.match(line):
-            iface_depth += 1
-            continue
-        m_end = _END_RE.match(line)
-        if m_end:
-            kind = (m_end.group(1) or "").lower()
-            if kind == "interface" and iface_depth:
-                iface_depth -= 1
-            elif kind == "module":
-                cur_mod = None
-            continue
-        m_mod = _MOD_RE.match(line)
-        if m_mod and m_mod.group(1).lower() != "procedure":
-            cur_mod = m_mod.group(1)
-            continue
-        if iface_depth:
-            continue
-        m_p = _PROC_RE.match(line)
-        if m_p:
-            procs.append((cur_mod, m_p.group(2)))
-
-    def _qualified(mod: str | None, name: str) -> QualifiedEntry:
-        return QualifiedEntry(mod.lower() if mod else None, name.lower())
-
-    if entry:
-        want_mod, want_proc = split_qualified_entry(entry)
-        matches = {
-            (m, n) for (m, n) in procs if n.lower() == want_proc and (want_mod is None or (m or "").lower() == want_mod)
-        }
-        if not matches:
-            raise ValueError(f"build: no procedure {entry!r} defined in the source")
-        if len(matches) > 1:
-            cands = ", ".join(f"{(m or '<free>')}::{n}" for m, n in sorted(matches))
-            raise ValueError(f"build: entry {entry!r} is ambiguous ({cands}); qualify it as module::proc")
-        return _qualified(*matches.pop())
-
-    # entry=None: derive from the single procedure definition.
-    if not procs:
-        raise ValueError(
-            "build: no SUBROUTINE/FUNCTION definition found to use as the SDFG entry; pass entry= explicitly"
-        )
-    if len(procs) > 1:
-        shown = ", ".join(n for _, n in procs)
-        raise ValueError(
-            f"build: source defines multiple procedures ({shown}); pass entry= (the Fortran name of the target one)"
-        )
-    return _qualified(*procs[0])
+@contextlib.contextmanager
+def _scratch_dir(out_dir: Optional[Union[str, Path]], prefix: str) -> Iterator[Path]:
+    """``out_dir`` when given, else a temporary directory removed on exit."""
+    if out_dir is not None:
+        yield Path(out_dir)
+        return
+    with tempfile.TemporaryDirectory(prefix=prefix) as td:
+        yield Path(td)
 
 
 def _merge_external_names(external_names: Sequence[str] = ()) -> List[str]:
@@ -313,13 +256,13 @@ def make_builder(
     # source must not call ``set_entry_symbol`` (it would perturb the
     # single-proc lowering).  A given entry is forwarded qualified so
     # multi-proc / multi-file builds privatise the non-entry procedures.
-    resolved = resolve_entry_name(source, entry)
+    resolved = resolve_entry_name([source], entry)
     fwd = None if entry is None else str(resolved)
     pipeline = pipeline or DEFAULT_PIPELINE
-    if out_dir is not None:
+    with _scratch_dir(out_dir, f"hlfir_{name}_") as d:
         hlfir = _emit_hlfir(
             source,
-            Path(out_dir),
+            d,
             name,
             merge=True,
             preprocess=preprocess,
@@ -330,24 +273,8 @@ def make_builder(
             kind_passthrough=kind_passthrough,
         )
         builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder.fortran_source = source
-        return builder
-    with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        hlfir = _emit_hlfir(
-            source,
-            Path(td),
-            name,
-            merge=True,
-            preprocess=preprocess,
-            merge_entry=None,
-            merge_engine=merge_engine,
-            defines=defines,
-            kind_map=kind_map,
-            kind_passthrough=kind_passthrough,
-        )
-        builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder.fortran_source = source
-        return builder
+    builder.fortran_source = source
+    return builder
 
 
 def build_sdfg(
@@ -556,7 +483,7 @@ def build_sdfg_from_project(
     """
     from dace_fortran.emit_hlfir import emit
 
-    def _do(d: Path) -> SDFG:
+    with _scratch_dir(out_dir, "hlfir_project_") as d:
         # ``entry`` restricts a whole-project compile_commands.json to the
         # entry's USE-closure (a codebase like ICON lists ~900 TUs; we only
         # need the entry's plus what it transitively USEs).
@@ -568,11 +495,6 @@ def build_sdfg_from_project(
             flang=flang,
         )
         return build_sdfg_from_hlfir(d, entry=entry, pipeline=pipeline)
-
-    if out_dir is not None:
-        return _do(Path(out_dir))
-    with tempfile.TemporaryDirectory(prefix="hlfir_project_") as td:
-        return _do(Path(td))
 
 
 def build_sdfg_from_files(
@@ -615,15 +537,16 @@ def build_sdfg_from_files(
     if not entry:
         raise ValueError("build_sdfg_from_files requires entry= (it selects the root file)")
     paths = [Path(f) for f in files]
-    proc = split_qualified_entry(entry).proc
-    _def = re.compile(
-        rf"^\s*(?:[\w()*]+\s+)*?(?:subroutine|function)\s+{re.escape(proc)}\b", re.IGNORECASE | re.MULTILINE
-    )
-    roots = [p for p in paths if _def.search(p.read_text())]
+    want = split_qualified_entry(entry)
+    roots = [
+        p
+        for p in paths
+        if any(d.proc == want.proc and want.module in (None, d.module) for d in procedure_definitions(p.read_text()))
+    ]
     if not roots:
-        raise ValueError(f"no input file defines procedure {proc!r} (entry {entry!r}); given {[p.name for p in paths]}")
+        raise ValueError(f"no input file defines procedure {entry!r}; given {[p.name for p in paths]}")
 
-    def _do(d: Path) -> SDFG:
+    with _scratch_dir(out_dir, f"hlfir_{name}_") as d:
         d.mkdir(parents=True, exist_ok=True)
         for p in paths:
             (d / p.name).write_text(p.read_text())
@@ -636,8 +559,3 @@ def build_sdfg_from_files(
             preprocess=preprocess,
             merge_engine=merge_engine,
         )
-
-    if out_dir is not None:
-        return _do(Path(out_dir))
-    with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        return _do(Path(td))

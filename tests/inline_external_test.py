@@ -161,7 +161,7 @@ end module caller_mod
 """
     callee_ext_name = "_QMaos_modPadd_vec"
     clear_external_registry()
-    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_vec", entry=callee_ext_name).build()
+    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_vec", entry="aos_mod::add_vec").build()
     clear_external_registry()
     # Stage aos_mod source in the caller's scratch dir so merge_used_modules
     # resolves USE aos_mod -- needed even though keep_external keeps add_vec

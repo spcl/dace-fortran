@@ -33,9 +33,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
-from dace_fortran.entry_names import split_qualified_entry
+from dace_fortran.entry_names import resolve_entry_name
 from dace_fortran.llvm_toolchain import require_flang
 
 #: (source_path, include_dirs, cpp_defines) of one Fortran translation unit.
@@ -145,115 +145,6 @@ def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
             i += 1
         out.append((src, includes, defines))
     return out
-
-
-_MOD_OPEN_RE = re.compile(r"^\s*module\s+([a-z_]\w*)\s*$", re.IGNORECASE)
-_MOD_END_RE = re.compile(r"^\s*end\s+module\b", re.IGNORECASE)
-_INTERFACE_RE = re.compile(r"^\s*(abstract\s+)?interface\b", re.IGNORECASE)
-_END_INTERFACE_RE = re.compile(r"^\s*end\s+interface\b", re.IGNORECASE)
-_SUBR_DEF_RE = re.compile(
-    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)", re.IGNORECASE
-)
-
-
-class ResolvedEntry(NamedTuple):
-    proc: str
-    module: Optional[str]
-
-
-def _scan_subroutine_defs(text: str) -> List[ResolvedEntry]:
-    """``[(subroutine_lower, enclosing_module_lower_or_None), ...]`` for the
-    subroutine *definitions* in ``text``.  Tracks ``MODULE`` / ``END MODULE``
-    for the qualifier and skips ``INTERFACE`` blocks (those are declarations,
-    not definitions)."""
-    defs: List[ResolvedEntry] = []
-    mod = None
-    in_iface = False
-    for raw in text.splitlines():
-        line = raw.split("!", 1)[0]
-        if _INTERFACE_RE.match(line):
-            in_iface = True
-            continue
-        if _END_INTERFACE_RE.match(line):
-            in_iface = False
-            continue
-        if in_iface:
-            continue
-        mo = _MOD_OPEN_RE.match(line)
-        if mo and not re.match(r"^\s*module\s+procedure\b", line, re.IGNORECASE):
-            mod = mo.group(1).lower()
-            continue
-        if _MOD_END_RE.match(line):
-            mod = None
-            continue
-        sm = _SUBR_DEF_RE.match(line)
-        if sm:
-            defs.append(ResolvedEntry(sm.group(1).lower(), mod))
-    return defs
-
-
-def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> ResolvedEntry:
-    """``(proc, module_or_None)`` for a Fortran entry, scanning ``sources``
-    for the subroutine definition.
-
-    The returned ``proc`` is ALWAYS a plain Fortran name (never the flang
-    ``_QM...`` mangling) -- the bridge's ``set_entry_symbol`` does the final
-    plain -> flang-symbol resolution against the emitted HLFIR.  The
-    companion ``module`` is kept so the caller can prune a whole-project
-    ``compile_commands`` to the entry's USE-closure (the module is context,
-    not part of the user-facing name).
-
-    Accepts ``module::proc`` to disambiguate; a bare ``proc`` resolves
-    uniquely or raises.
-
-    :raises ValueError: ``name`` is not found, or is ambiguous across
-        modules (the message lists the candidates so the caller can
-        qualify it ``module::proc``).
-    """
-    want_mod, want_proc = split_qualified_entry(name)
-
-    matches: set[ResolvedEntry] = set()
-    for src in sources:
-        # Each source is a file path (read it) or already-inline source text
-        # (tier-1 passes the kernel string straight through).
-        try:
-            text = Path(src).read_text(errors="ignore") if Path(src).is_file() else str(src)
-        except (OSError, ValueError):
-            text = str(src)
-        for proc, mod in _scan_subroutine_defs(text):
-            if proc == want_proc and (want_mod is None or mod == want_mod):
-                matches.add(ResolvedEntry(proc, mod))
-    if not matches:
-        raise ValueError(f"resolve_entry: no subroutine {name!r} found in the sources")
-    if len(matches) > 1:
-        cands = ", ".join(f"{m or '<free>'}::{p}" for p, m in sorted(matches))
-        raise ValueError(f"resolve_entry: {name!r} is ambiguous ({cands}); qualify it as module::proc")
-    return matches.pop()
-
-
-def resolve_entry(name: str, sources: Iterable[str | Path]) -> str:
-    """Validate a Fortran procedure name against ``sources`` and return its
-    PLAIN Fortran name (never the flang ``_QM...`` mangling).
-
-    Entries are always plain Fortran names per the pipeline design; the
-    bridge resolves the plain name to the mangled flang symbol against the
-    emitted HLFIR.  ``module::proc`` is accepted to disambiguate and is
-    reduced to its plain ``proc`` (the module is context, not the name).
-    With no sources (``[]``) the name passes through unchanged.
-
-    Currently resolves SUBROUTINES (the usual SDFG entry, incl. the ICON
-    dycore ``solve_nh``); pass a function's name the same way.
-
-    :raises ValueError: ``name`` is not found, or is ambiguous across
-        modules (the message lists the candidates so the caller can
-        qualify it ``module::proc``).
-    """
-    if not sources:
-        # Nothing to resolve against -- reduce ``module::proc`` to its plain
-        # ``proc`` but otherwise pass the name straight through.
-        return name.rpartition("::")[2]
-    proc, _ = _resolve_entry_with_module(name, sources)
-    return proc
 
 
 def _select_use_closure(parsed: List[CompileEntry], root_module: str) -> List[CompileEntry]:
@@ -377,12 +268,10 @@ def emit(
     if compile_commands is not None:
         parsed = parse_compile_commands(Path(compile_commands))
         if entry is not None:
-            # Keep ``entry`` plain and use its enclosing module
-            # (context, scanned from the sources) to keep only the entry's
-            # USE-closure.
-            entry, mod = _resolve_entry_with_module(entry, [t[0] for t in parsed])
-            if mod is not None:
-                parsed = _select_use_closure(parsed, mod)
+            # The entry's enclosing module (scanned from the sources) keeps only its USE-closure.
+            module = resolve_entry_name((src.read_text(errors="ignore") for src, _, _ in parsed), entry).module
+            if module is not None:
+                parsed = _select_use_closure(parsed, module)
         for src, incs, defs in parsed:
             _flang_emit(flang, src, out_dir, incs, list(defs) + extra_defs)
             emitted.append(out_dir / f"{src.stem}.hlfir")

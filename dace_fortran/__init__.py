@@ -24,7 +24,7 @@ if TYPE_CHECKING:
         clear_external_registry,
     )
     from dace_fortran.external_functions import ExternalFunction
-    from dace_fortran.builder import SDFGBuilder, generate_sdfg, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
+    from dace_fortran.builder import SDFGBuilder, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
     from dace_fortran.preprocess import (
         MergeEngine,
         preprocess_fortran_source,
@@ -68,7 +68,6 @@ _LAZY = {
     "ExternalFunction": "dace_fortran.external_functions",
     # Lower-level / advanced.
     "SDFGBuilder": "dace_fortran.builder",
-    "generate_sdfg": "dace_fortran.builder",
     "DEFAULT_PIPELINE": "dace_fortran.builder",
     "MULTI_FILE_PIPELINE": "dace_fortran.builder",
     "MergeEngine": "dace_fortran.preprocess",
@@ -113,7 +112,6 @@ __all__ = [
     "clear_external_registry",
     "ExternalFunction",
     "SDFGBuilder",
-    "generate_sdfg",
     "DEFAULT_PIPELINE",
     "MULTI_FILE_PIPELINE",
     "MergeEngine",

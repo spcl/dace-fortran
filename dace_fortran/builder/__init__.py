@@ -4,7 +4,7 @@
 
 Pipeline:
     flang-20 -fc1 -emit-hlfir code.f90 -o code.hlfir
-    sdfg = generate_sdfg("code.hlfir")   # -> dace.SDFG, validated
+    sdfg = SDFGBuilder("code.hlfir").build()   # -> dace.SDFG, validated
 
 Architecture:
     The builder parses the HLFIR via the C++ bridge (``hlfir_bridge.so``),
@@ -2032,36 +2032,3 @@ class SDFGBuilder:
         """Emit ``target = value`` as a scalar assignment in ``state``
         (method form so ``Ctx.flush`` can call it on the builder)."""
         emit_scalar_assign(self, state, target, value)
-
-
-def generate_sdfg(
-    path: str | None = None,
-    *,
-    pipeline: str | None = None,
-    entry: str | None = None,
-    hlfir_files: Sequence[str] | None = None,
-) -> SDFG:
-    """Build an SDFG from one or several HLFIR files.
-
-    Single-file form (back-compat):
-        ``generate_sdfg("code.hlfir")``  --  parses + DEFAULT_PIPELINE.
-
-    Multi-file form (ICON-style linked entry):
-        ``generate_sdfg(entry="kernel", hlfir_files=[...])``  --  parses
-        every file, merges them, drops non-entry siblings, errors on
-        unresolved calls, then runs the HLFIR rewrite chain.
-    """
-    if hlfir_files is not None:
-        if entry is None:
-            raise ValueError("entry= is required when hlfir_files= is supplied")
-        return SDFGBuilder.from_files(
-            hlfir_files,
-            entry=entry,
-            pipeline=(pipeline if pipeline is not None else MULTI_FILE_PIPELINE),
-        ).build()
-    if path is None:
-        raise TypeError("generate_sdfg: pass a path or hlfir_files=[...]")
-    return SDFGBuilder(
-        path,
-        pipeline=(pipeline if pipeline is not None else DEFAULT_PIPELINE),
-    ).build()

@@ -49,6 +49,7 @@ import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
 
 from dace_fortran.llvm_toolchain import require_flang
+from dace_fortran.entry_names import resolve_entry_name
 from fparser.two.C99Preprocessor import CPP_CLASS_NAMES
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, FortranSyntaxError, walk
@@ -1233,9 +1234,7 @@ def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
     point)."""
     if entry is None:
         return None
-    from dace_fortran.build import resolve_entry_name
-
-    module, proc = resolve_entry_name(source, entry)
+    module, proc = resolve_entry_name([source], entry)
     return (module, proc) if module else (proc,)
 
 
