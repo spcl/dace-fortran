@@ -2130,6 +2130,20 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // buffer per instance (cls 0): a component array is allocated once per instance; a conditional/sequential
       // re-alloc of the same instance-field rebinds the same symbolic-shape buffer, which is correct. Per-instance
       // versioning (the declare path's groupAllocSites) is deferred -- no current frontend needs it.
+      // ``ALLOCATE(a(i) % w(n_i))`` sizes ONE element's member: the flattened companion ``a_w`` has one extent per
+      // member dimension for all elements, so binding it here would resize every element to this one's extents.
+      if (auto elem = mlir::dyn_cast_or_null<hlfir::DesignateOp>(dg.getMemref().getDefiningOp());
+          elem && !elem.getComponentAttr() && !elem.getIndices().empty()) {
+        std::string loc;
+        llvm::raw_string_ostream os(loc);
+        store.getLoc().print(os);
+        throw UnsupportedConstruct("ALLOCATE of the component '" + dg.getComponentAttr().getValue().str() +
+                                   "' of an array element (``" + traceToDecl(elem.getMemref()) + "(i) % " +
+                                   dg.getComponentAttr().getValue().str() + "``) at " + loc +
+                                   " is not supported: allocate it before the kernel, or keep the enclosing procedure "
+                                   "external with dace_fortran.external.keep_external(<name>, c_name=<bind(c) shim>, "
+                                   "libraries=(...,))");
+      }
       raw = traceToDecl(store.getMemref());
       if (raw.empty()) return {};
       bufName = raw;
