@@ -195,6 +195,27 @@ Override LLVM discovery with the `LLVM_VERSION` / `LLVM_DIR` env vars if auto-de
 
 ## Quick start
 
+Read the ICON AES graupel microphysics (`tests/icon/graupel/aes_graupel_fused/graupel.f90` and the three modules it `USE`s) into one SDFG, naming the entry as in Fortran, then validate and compile it.  Run from the repository root; `tests/readme_quickstart_test.py` executes exactly this block.
+
+<!-- quickstart:begin -->
+```python
+from pathlib import Path
+
+import dace_fortran
+
+graupel = Path("tests/icon/graupel")
+sources = [graupel / "aes_graupel" / f for f in ("mo_kind.f90", "mo_physical_constants.f90", "mo_aes_thermo.f90")]
+sources.append(graupel / "aes_graupel_fused" / "graupel.f90")
+
+# ``entry`` is the Fortran name of the subroutine: ``module::procedure``.
+sdfg = dace_fortran.build_sdfg_from_files(sources, entry="mo_aes_graupel::graupel_run", name="graupel")
+sdfg.validate()
+graupel_run = sdfg.compile()  # callable with the Fortran dummy arguments as keywords
+```
+<!-- quickstart:end -->
+
+The same for one self-contained source, plus a Fortran-callable library:
+
 ```python
 import dace_fortran
 from dace_fortran.bindings import build_fortran_library
