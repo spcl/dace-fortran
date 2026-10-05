@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from tests._util import build_sdfg, f2py_compile
 
@@ -43,7 +44,31 @@ end subroutine nested_idx
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=1e-12, atol=1e-12)
 
 
-if __name__ == "__main__":
-    import pytest
+def test_indirect_read_in_a_condition(tmp_path):
+    """``IF (ngc(idx(mc)) > 0)`` (QE ``sticks_dist_new``): the staged condition mints a symbol for the inner index
+    read instead of nesting ``idx[mc]`` inside the ``ngc`` memlet subset."""
+    src = """
+subroutine count_positive(n, idx, ngc, total)
+  implicit none
+  integer, intent(in) :: n
+  integer, intent(in) :: idx(n), ngc(n)
+  integer, intent(out) :: total
+  integer :: mc
+  total = 0
+  do mc = 1, n
+    if (ngc(idx(mc)) > 0) then
+      total = total + mc
+    end if
+  end do
+end subroutine count_positive
+"""
+    sdfg = build_sdfg(src, tmp_path, name="count_positive", entry="count_positive").build()
+    idx = np.array([4, 3, 2, 1], dtype=np.int32)
+    ngc = np.array([1, 0, 0, 5], dtype=np.int32)
+    total = np.zeros(1, dtype=np.int32)
+    sdfg(n=4, idx=idx, ngc=ngc, total=total)
+    assert total[0] == 1 + 4  # mc = 1 reads ngc(4) = 5, mc = 4 reads ngc(1) = 1
 
+
+if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

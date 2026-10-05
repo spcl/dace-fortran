@@ -303,30 +303,8 @@ def emit_assign(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFl
 
         # Inline indirect accesses: ``vn(iqidx(je,jb,1), jk, iqblk(je,jb,1))``
         # inside an IF body skips ``emit_loop``'s batch path, so the
-        # indirect symbols would otherwise never get minted and the
-        # memlet subset would carry the bare array name (which DaCe
-        # codegen renders as a pointer-vs-int multiply).  Mint them
-        # here, chained one-symbol-per-state so inner indirects are
-        # available to outer ones.
-        indirect_syms = collect_indirect(builder, [n])
-        if indirect_syms:
-            # See ``materialize_indirect_view_sources``: ``ctx.cur`` precedes the
-            # ``sym_*`` states minted below, so the view_alias link lands first.
-            materialize_indirect_view_sources(builder, ctx.cur, indirect_syms)
-            for expr, sym in indirect_syms.items():
-                # Scalar-index promotion: ``expr`` is the bare scalar name (no
-                # ``[``), read straight into the symbol; the array-indirect case
-                # goes through indirect_to_dace.
-                rhs = (
-                    expr
-                    if "[" not in expr
-                    else _strip_dace_casts(indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
-                )
-                if sym not in ctx.sdfg.symbols:
-                    ctx.sdfg.add_symbol(sym, dace.int64)
-                nxt = region.add_state(f"sym_{sym}_{builder.nid()}")
-                region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: rhs}))
-                ctx.cur = nxt
+        # indirect symbols would otherwise never get minted.
+        indirect_syms = mint_indirect_syms(builder, ctx, region, n)
         emit_tasklet(builder, ctx.cur, n, builder.nid(), ctx.iter_map, indirect_syms or None)
         return
     ctx.pending.append((n.target, n.expr))
@@ -1022,6 +1000,36 @@ def emit_loop(
                 _emit_one(prev, a, idx)
 
 
+def mint_indirect_syms(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, n: NodeLike) -> dict[str, str]:
+    """Mint one symbol per inline indirect index of ``n`` on interstate edges after ``ctx.cur``.
+
+    Without them the memlet subset would carry the bare index array (``ngc[smap_idx[mc] - 1]``, which
+    is no valid subset, or a pointer-vs-int multiply in codegen).  Chained one symbol per state so inner
+    indirects are available to outer ones.
+
+    :returns: the Fortran-style expression -> symbol map for :func:`emit_tasklet`.
+    """
+    indirect_syms = collect_indirect(builder, [n])
+    if not indirect_syms:
+        return indirect_syms
+    # See ``materialize_indirect_view_sources``: ``ctx.cur`` precedes the
+    # ``sym_*`` states minted below, so the view_alias link lands first.
+    materialize_indirect_view_sources(builder, ctx.cur, indirect_syms)
+    for expr, sym in indirect_syms.items():
+        # Scalar-index promotion: ``expr`` is the bare scalar name (no
+        # ``[``), read straight into the symbol; the array-indirect case
+        # goes through indirect_to_dace.
+        rhs = (
+            expr if "[" not in expr else _strip_dace_casts(indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
+        )
+        if sym not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(sym, dace.int64)
+        nxt = region.add_state(f"sym_{sym}_{builder.nid()}")
+        region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: rhs}))
+        ctx.cur = nxt
+    return indirect_syms
+
+
 class StagedCondition(NamedTuple):
     state: SDFGState
     expr: str
@@ -1051,11 +1059,13 @@ def _stage_cond_scalar(
         ctx.sdfg.add_scalar(sym, dace.int64, transient=True, find_new_name=False)
     builder.scalars.setdefault(sym, SyntheticVar(fortran_name=sym, dtype="int64", role="scalar"))
     pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-    nxt = region.add_state(f"pre_{sym}")
-    region.add_edge(pre, nxt, InterstateEdge())
-    ctx.cur = nxt
     synth = SyntheticNode(kind="assign", target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
-    emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+    ctx.cur = pre
+    indirect_syms = mint_indirect_syms(builder, ctx, region, synth)
+    nxt = region.add_state(f"pre_{sym}")
+    region.add_edge(ctx.cur, nxt, InterstateEdge())
+    ctx.cur = nxt
+    emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map, indirect_syms or None)
     return StagedCondition(nxt, sym)
 
 
