@@ -3,6 +3,7 @@ any order) + entry -> one SDFG.  ``build_sdfg_from_files`` stages the files and
 ``merge_used_modules`` inlines every ``USE``-d module into the root's TU (the file
 defining the entry's procedure) so flang sees one self-contained TU."""
 
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,8 @@ import pytest
 from _util import have_flang
 
 from dace_fortran import build_sdfg, build_sdfg_from_files
+from dace_fortran.build import _entry_proc_name
+from dace_fortran.preprocess import MergeEngine
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -67,55 +70,49 @@ end subroutine run_chain
 """
 
 
-def _write(tmp: Path, **named) -> list:
+def _write(tmp: Path, **named: str) -> list[Path]:
     """Write ``name=source`` pairs to ``<tmp>/<name>.f90``; return paths."""
     tmp.mkdir(parents=True, exist_ok=True)
-    out = []
-    for nm, src in named.items():
-        p = tmp / f"{nm}.f90"
-        p.write_text(src)
-        out.append(p)
-    return out
+    paths = [tmp / f"{nm}.f90" for nm in named]
+    for path, src in zip(paths, named.values()):
+        path.write_text(src)
+    return paths
 
 
-@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
-def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
+def _check_scaled_sum(sdfg, n: int, seed: int, scale: float = 1.0) -> None:
+    """Run ``z = scale * (x + y)`` on random inputs and compare."""
+    rng = np.random.default_rng(seed)
+    x = np.asfortranarray(rng.random(n))
+    y = np.asfortranarray(rng.random(n))
+    z = np.zeros(n, order="F")
+    sdfg(x=x, y=y, z=z, n=n)
+    np.testing.assert_allclose(z, scale * (x + y), rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("merge_engine", list(MergeEngine))
+def test_two_files_driver_plus_module(tmp_path: Path, merge_engine: MergeEngine):
     """Driver + one ``USE``-d module, files given out of order (both engines)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
     sdfg = build_sdfg_from_files(
         list(reversed(files)), entry="run", name="run", out_dir=tmp_path / "b", merge_engine=merge_engine
     )
-    n = 16
-    rng = np.random.default_rng(0)
-    x = np.asfortranarray(rng.random(n))
-    y = np.asfortranarray(rng.random(n))
-    z = np.zeros(n, order="F")
-    sdfg(x=x, y=y, z=z, n=n)
-    np.testing.assert_allclose(z, x + y, rtol=1e-12, atol=1e-12)
+    _check_scaled_sum(sdfg, n=16, seed=0)
 
 
-@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
-def test_three_files_transitive_use(tmp_path: Path, merge_engine):
+@pytest.mark.parametrize("merge_engine", list(MergeEngine))
+def test_three_files_transitive_use(tmp_path: Path, merge_engine: MergeEngine):
     """Driver USEs mod_scale which USEs mod_add -> transitive inline (both engines)."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE, driver=_DRIVER_CHAIN)
     sdfg = build_sdfg_from_files(
         files, entry="run_chain", name="run_chain", out_dir=tmp_path / "b", merge_engine=merge_engine
     )
-    n = 8
-    rng = np.random.default_rng(1)
-    x = np.asfortranarray(rng.random(n))
-    y = np.asfortranarray(rng.random(n))
-    z = np.zeros(n, order="F")
-    sdfg(x=x, y=y, z=z, n=n)
-    np.testing.assert_allclose(z, 2.0 * (x + y), rtol=1e-12, atol=1e-12)
+    _check_scaled_sum(sdfg, n=8, seed=1, scale=2.0)
 
 
 def test_entry_proc_name_accepts_all_three_spellings():
     """Root-file selection reduces every accepted entry spelling (``module::proc``,
     mangled Flang symbol, plain name) to the bare procedure name.  Regression:
     ``module::proc`` used to fall through unstripped and match nothing."""
-    from dace_fortran.build import _entry_proc_name
-
     assert _entry_proc_name("mo_solve_nonhydro::solve_nh") == "solve_nh"
     assert _entry_proc_name("m_array_return::kern") == "kern"
     assert _entry_proc_name("_QMmymodPbar") == "bar"
@@ -124,8 +121,8 @@ def test_entry_proc_name_accepts_all_three_spellings():
     assert _entry_proc_name(None) is None
 
 
-@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
-def test_module_qualified_entry_selects_root(tmp_path: Path, merge_engine):
+@pytest.mark.parametrize("merge_engine", list(MergeEngine))
+def test_module_qualified_entry_selects_root(tmp_path: Path, merge_engine: MergeEngine):
     """``module::proc`` entry resolves the root file and builds (both engines).
     Mirrors ``test_two_files_driver_plus_module`` with the driver wrapped in a module,
     addressed as ``drv::run``."""
@@ -147,13 +144,7 @@ end module drv
 """
     files = _write(tmp_path / "src", driver=driver, mod_add=_MOD_ADD)
     sdfg = build_sdfg_from_files(files, entry="drv::run", name="run", out_dir=tmp_path / "b", merge_engine=merge_engine)
-    n = 12
-    rng = np.random.default_rng(2)
-    x = np.asfortranarray(rng.random(n))
-    y = np.asfortranarray(rng.random(n))
-    z = np.zeros(n, order="F")
-    sdfg(x=x, y=y, z=z, n=n)
-    np.testing.assert_allclose(z, x + y, rtol=1e-12, atol=1e-12)
+    _check_scaled_sum(sdfg, n=12, seed=2)
 
 
 def test_entry_not_found_is_rejected(tmp_path: Path):
@@ -177,3 +168,18 @@ def test_entry_resolution_contract(tmp_path: Path):
 
     with pytest.raises(ValueError, match="(?i)no SUBROUTINE/FUNCTION"):
         build_sdfg("module m\n  integer :: x\nend module m\n", name="np", out_dir=tmp_path / "b3")
+
+
+if __name__ == "__main__":
+    test_entry_proc_name_accepts_all_three_spellings()
+    for engine in MergeEngine:
+        with tempfile.TemporaryDirectory() as d:
+            test_two_files_driver_plus_module(Path(d), engine)
+        with tempfile.TemporaryDirectory() as d:
+            test_three_files_transitive_use(Path(d), engine)
+        with tempfile.TemporaryDirectory() as d:
+            test_module_qualified_entry_selects_root(Path(d), engine)
+    with tempfile.TemporaryDirectory() as d:
+        test_entry_not_found_is_rejected(Path(d))
+    with tempfile.TemporaryDirectory() as d:
+        test_entry_resolution_contract(Path(d))

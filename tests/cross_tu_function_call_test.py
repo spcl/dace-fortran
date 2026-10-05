@@ -9,6 +9,7 @@ Merging (build_sdfg_from_files / merge_used_modules + hlfir-inline-all)
 splices the body in so the call becomes `min` and lowers.
 """
 
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ import pytest
 
 from _util import have_flang
 from dace_fortran import build_sdfg_from_files
+from dace_fortran.preprocess import MergeEngine
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -54,11 +56,11 @@ end module mo_apply_clamp
 """
 
 
-@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
-def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
+@pytest.mark.parametrize("merge_engine", list(MergeEngine))
+def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine: MergeEngine):
     """nb = clamp_to(nproma, 4) with clamp_to in another module: callee inlines
     (to min) when TUs are merged, SDFG builds, result matches reference for
-    nproma above and below the clamp. Runs with both USE-merge engines (fparser, regex)."""
+    nproma above and below the clamp, with both USE-merge engines."""
     caller = tmp_path / "apply_clamp.f90"
     caller.write_text(_CALLER)
     helper = tmp_path / "mo_clamp.f90"
@@ -79,3 +81,9 @@ def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
         nb = min(nproma, 4)
         ref = np.where(np.arange(1, 9) <= nb, x * 2.0, 0.0)
         np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    for engine in MergeEngine:
+        with tempfile.TemporaryDirectory() as d:
+            test_cross_tu_function_result_inlines(Path(d), engine)
