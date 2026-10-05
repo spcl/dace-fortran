@@ -83,6 +83,26 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
 // Forward decl for walkSCFBeforeRegion's fir.do_loop dispatch (defined further down).
 // traceLB/traceConstInt/buildIndexExpr come from ast_helpers.h.
 static std::string traceLoopIter(fir::DoLoopOp loop);
+
+/// Rejects ``a(i) % p => target``: a POINTER component of an array ELEMENT rebound to new storage (e.g. QE buiol's
+/// ``new(i) % data => old(i) % data``, a linked list of regrowable pointer records).  The flattened companion array has
+/// no per-element descriptor to retarget, so lowering the store as a value assign would silently miscompile.
+static void rejectElementPointerComponentRebind(fir::StoreOp st) {
+  if (!mlir::isa<fir::BaseBoxType>(st.getValue().getType())) return;
+  auto comp = mlir::dyn_cast_or_null<hlfir::DesignateOp>(st.getMemref().getDefiningOp());
+  if (!comp || !comp.getComponentAttr()) return;
+  auto elem = mlir::dyn_cast_or_null<hlfir::DesignateOp>(comp.getMemref().getDefiningOp());
+  if (!elem || elem.getComponentAttr() || elem.getIndices().empty()) return;
+  std::string loc;
+  llvm::raw_string_ostream os(loc);
+  st.getLoc().print(os);
+  throw UnsupportedConstruct("pointer assignment to the component '" + comp.getComponentAttr().getValue().str() +
+                             "' of an array element (``" + traceToDecl(elem.getMemref()) + "(i) % " +
+                             comp.getComponentAttr().getValue().str() + " => ...``) at " + loc +
+                             " is not supported: keep the enclosing procedure external with "
+                             "dace_fortran.external.keep_external(<name>, c_name=<bind(c) shim>, libraries=(...,))");
+}
+
 // Materialises SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into Reduce lib-nodes before the branch;
 // forward-declared for use above its definition.
 static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>& nodes);
@@ -275,6 +295,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
       // IV/counter bump stores Flang emits inside the lifted scf.while body; handled uniformly for declared vars and
       // bare-alloca scratch counters.
+      rejectElementPointerComponentRebind(st);
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())
@@ -3047,6 +3068,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // Top-level fir.store is Flang's lowering for lifted DO/DO-WHILE init and internal scratch counters; emitted as a
       // plain scalar assign. Regular fir.do_loop IV stores never reach here (handled by the do-loop handler via
       // init_expr/update_expr).
+      rejectElementPointerComponentRebind(st);
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())

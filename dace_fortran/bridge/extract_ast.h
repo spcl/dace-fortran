@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,11 @@ struct ASTNode {
 /// Builds the AST for the first func.func in the module. `entry_symbol` (same as passed to extractVariables) anchors
 /// on-demand scope qualification in trace_utils.cpp; empty disables it. Keeps the two extraction paths in lockstep for
 /// inlined-callee dummy naming.
+/// A Fortran construct the bridge cannot lower; surfaces in Python as a ``NotImplementedError`` subclass.
+struct UnsupportedConstruct : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
 std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_symbol = "");
 
 }  // namespace hlfir_bridge

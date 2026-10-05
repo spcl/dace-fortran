@@ -465,6 +465,8 @@ NB_MODULE(hlfir_bridge, m) {
   // repeatedly.
   registerAllBridgePasses();
 
+  nb::exception<UnsupportedConstruct>(m, "UnsupportedConstruct", PyExc_NotImplementedError);
+
   nb::class_<VarInfo>(m, "VarInfo")
       .def_ro("fortran_name", &VarInfo::fortran_name)
       .def_ro("mangled_name", &VarInfo::mangled_name)

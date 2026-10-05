@@ -264,5 +264,44 @@ end subroutine main
     np.testing.assert_array_equal(d, [13.0, 13.0])
 
 
+def test_array_element_pointer_component_rebind_raises(tmp_path: Path):
+    """``new(i) % data => old(i) % data`` (QE buiol's regrowable linked list of pointer records) rebinds a
+    per-element descriptor the flattened companion array does not have: the build names the construct and points to
+    ``keep_external`` instead of lowering the store as a value copy."""
+    src = """
+module buf
+  implicit none
+  type rec
+    complex(kind=8), pointer :: data(:)
+  end type
+  type(rec), pointer :: index(:)
+  integer :: nrec = 0
+contains
+  subroutine grow(nrec_new)
+    integer, intent(in) :: nrec_new
+    integer :: i
+    type(rec), pointer :: new(:), old(:)
+    allocate(new(nrec_new))
+    old => index
+    do i = 1, nrec
+      new(i) % data => old(i) % data
+    end do
+    index => new
+    nrec = nrec_new
+  end subroutine
+end module
+
+subroutine main(n, out)
+  use buf
+  integer, intent(in) :: n
+  integer, intent(out) :: out
+  if (n > 100) call grow(n)
+  out = nrec
+end subroutine
+"""
+    with pytest.raises(NotImplementedError, match=r"component 'data' of an array element.*keep_external"):
+        build_sdfg(src, tmp_path, name="main", entry="main").build()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
