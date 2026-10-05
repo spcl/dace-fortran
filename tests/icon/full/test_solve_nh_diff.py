@@ -11,7 +11,7 @@ The ICON binding-swap integration runs stock ``solve_nh`` and SDFG
     doesn't default-reset it (the regression this pins).
   * ``compare_*`` is bit-exact and counts perturbations exactly.
 
-``free_*_clone`` full release is checked under valgrind when available. Uses
+``free_*_clone`` full release is checked under valgrind. Uses
 minimal stand-in types (:file:`_solve_nh_min_types.py`), so needs only gfortran.
 """
 
@@ -234,7 +234,6 @@ def test_solve_nh_diff_deepcopy_and_compare(diff_exe: Path):
     )
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not on PATH")
 def test_solve_nh_diff_frees_cleanly(diff_exe: Path):
     """free_state_clone/free_prepadv_clone leak-free under valgrind (definite leaks only -- gfortran's I/O buffers stay reachable)."""
     run = subprocess.run(

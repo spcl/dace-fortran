@@ -4,13 +4,12 @@ Covers the four defined crossings of
 :mod:`dace_fortran.bindings.acc_transfers` against
 :func:`scripts.build_icon_dace_libs.render_icon_wrapper`, the hard errors
 for every undefined one, and a compile proof of the rendered wrapper
-under gfortran with OpenACC OFF and nvfortran with ``-acc`` ON.
+under gfortran with OpenACC OFF and gfortran with ``-fopenacc`` ON.
 """
 
 import importlib.util
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -395,9 +394,9 @@ def test_staged_wrapper_compiles_without_openacc(tmp_path):
     _compile(tmp_path, "gfortran", ["-ffree-line-length-none", "-Werror"])
 
 
-@pytest.mark.skipif(shutil.which("nvfortran") is None, reason="nvfortran not on PATH")
 def test_staged_wrapper_compiles_with_openacc(tmp_path):
-    _compile(tmp_path, "nvfortran", ["-acc"])
+    # gfortran parses and checks every OpenACC directive under -fopenacc; nvfortran is a multi-GB CI dependency.
+    _compile(tmp_path, "gfortran", ["-ffree-line-length-none", "-Werror", "-fopenacc"])
 
 
 # ----- unified emit_bindings ACC staging ------------------------------------

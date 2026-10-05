@@ -15,10 +15,8 @@ from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_prog
 _HERE = Path(__file__).resolve().parent
 _COMM_DIR = _HERE / "full" / "icon-model" / "src" / "parallel_infrastructure"
 
-pytestmark = pytest.mark.skipif(
-    not (_COMM_DIR / "mo_communication_types.f90").is_file(),
-    reason="icon-model submodule not checked out; run `git submodule update --init --recursive`",
-)
+# Reads ICON source: runs in the lanes that check out the icon-model submodule.
+pytestmark = pytest.mark.long
 
 _CPP = re.compile(r"^\s*#")
 

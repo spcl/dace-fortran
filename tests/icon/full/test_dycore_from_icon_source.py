@@ -18,8 +18,6 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from tests._util import have_flang
-from dace_fortran.flang_codebase import find_openmpi_include
 
 from ._fc import (
     FLANG_RT_HINT,
@@ -123,19 +121,11 @@ _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache
 _SOLVE_NH_TARGET = "src/atm_dyn_iconam/mo_solve_nonhydro.o"
 _SOLVE_NH_ENTRY = "mo_solve_nonhydro::solve_nh"
 
-_HAVE_FLANG = have_flang()
-_HAVE_OPENMPI = find_openmpi_include() is not None
-
 
 def _real_source() -> Path:
     """Pristine ICON solve_nonhydro source; prefers the ``.bak`` so a developer-patched
     live file doesn't perturb the test."""
     return _SOLVE_NH_BAK if _SOLVE_NH_BAK.is_file() else _SOLVE_NH_SRC
-
-
-def _have_icon() -> bool:
-    """Submodule checked out (build dir is optional)."""
-    return _real_source().is_file()
 
 
 def _icon_search_dirs() -> list:
@@ -236,16 +226,9 @@ _ICON_EXTERNAL_STUBS = (
 
 # Reads ICON's real mo_solve_nonhydro through the icon-model submodule; only the
 # heavy CI lane checks it out -> `long`.
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI"),
-]
+pytestmark = pytest.mark.long
 
 
-@pytest.mark.skipif(
-    not _have_icon(),
-    reason="icon-model submodule not checked out; run `git submodule update --init --recursive` to pull it",
-)
 def test_emit_hlfir_for_icon_solve_nh(tmp_path: Path):
     """``emit_hlfir_from_codebase`` produces non-trivial HLFIR for ICON's real
     ``mo_solve_nonhydro.f90``."""
@@ -265,7 +248,6 @@ def test_emit_hlfir_for_icon_solve_nh(tmp_path: Path):
     assert out.stat().st_size > 100 * 1024 * 1024
 
 
-@pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
     """Build a DaCe SDFG from ICON's real ``mo_solve_nonhydro``: ``velocity_tendencies``
     kept as a per-member-SoA external, ``sync_patch_array``/``_mult`` as opaque stub
@@ -466,7 +448,6 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
         )
 
 
-@pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path, icon_build):
     """Build the wrapper into ``libicon_sync_iso_c.so`` against ICON's own ``.mod``
     files.  ``icon_build`` fixture configures + builds ICON on demand."""

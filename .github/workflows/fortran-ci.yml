@@ -84,8 +84,8 @@ jobs:
       if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}
       run: |
         SKIP_APT=1 bash tests/icon/dycore/setup_icon_dycore.sh
-        cd tests && python -c "from pathlib import Path; from icon.full._icon_build import ensure_icon_built; \
-          ensure_icon_built(Path('icon/full/icon-model'), Path('$ICON_BUILD'))"
+        python -c "from pathlib import Path; from tests.icon.full._icon_build import ensure_icon_built; \
+          ensure_icon_built(Path('tests/icon/full/icon-model'), Path('$ICON_BUILD'))"
 
     - name: Save the ICON builds
       if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}

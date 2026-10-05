@@ -1,4 +1,4 @@
-"""2-rank real-MPI differential for the ICON-O ocean dycore
+"""Multi-rank real-MPI differential for the ICON-O ocean dycore
 ``solve_free_sfc_ab_mimetic`` -- the multi-rank counterpart to
 ``test_solve_free_sfc_numerical_e2e.py``.
 
@@ -16,7 +16,7 @@ implicit-interface MPI calls that ``hlfir-fold-copy-in-out`` cannot model.
 
 Block 1 is owned, block 2 is halo, and the swap lands the neighbour's owned block in it --
 the same convention as ``test_ocean_veloc_mpi_sync_e2e.py`` and the dummy 2-rank dycore.
-The exchange pairs rank r with rank 1-r, so this runs at exactly 2 ranks.
+The exchange pairs the ranks {0, 1}, {2, 3}, ..., so this runs at any even rank count (CI: ``-n 4``).
 
 ``@pytest.mark.long``: builds the full dycore to an SDFG (minutes).
 """
@@ -124,7 +124,7 @@ def _sync_body(field: str, rank: int) -> str:
     sync_cnt = {count}
     ALLOCATE(sync_sbuf({buf_dims}))
     ALLOCATE(sync_rbuf({buf_dims}))
-    sync_neigh = 1 - sync_rank
+    sync_neigh = sync_rank + 1 - 2 * MOD(sync_rank, 2)
     sync_sbuf = {field}{owned}
     IF (MOD(sync_rank, 2) == 0) THEN
       CALL MPI_Send(sync_sbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, sync_ierr)
@@ -200,18 +200,17 @@ def _build_artifacts(tmp_path: Path) -> dict:
     strict=True,
     reason="The halo sync-buffer transpose is FIXED (bridge lowers <section> = <whole allocatable> element-wise, "
     "commit 24b39da) and FoldCopyInOut is exonerated -- the isolated pack/unpack repro is now bit-exact. But the "
-    "full 2-rank solve_free_sfc still diverges on prog_h: a residual defect elsewhere in the dycore path, not yet "
+    "full multi-rank solve_free_sfc still diverges on prog_h: a residual defect elsewhere in the dycore path, not yet "
     "isolated. Verify against the runtime divergence count (rerun without this marker) before removing it.",
 )
 @pytest.mark.xdist_group("ocean_fparser")
-def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
-    """solve_free_sfc on 2 ranks with a real MPI halo: SDFG vs stock gfortran, bit-exact per rank."""
+def test_solve_free_sfc_rank_pairs_bit_exact(tmp_path: Path):
+    """solve_free_sfc on rank pairs with a real MPI halo: SDFG vs stock gfortran, bit-exact per rank."""
     from mpi4py import MPI
 
     world = MPI.COMM_WORLD
     rank, size = world.Get_rank(), world.Get_size()
-    if size != 2:
-        pytest.skip("needs exactly 2 ranks (mpirun --oversubscribe -n 2 ...)")
+    assert size >= 2 and size % 2 == 0, "needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)"
 
     # Every rank builds against rank 0's tmp_path so the .so artefacts are shared.
     tmp_path = Path(world.bcast(str(tmp_path) if rank == 0 else None, root=0))
@@ -248,14 +247,14 @@ def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
 
     # The differential above passes just as well if the halo never fired, so prove the
     # exchange moved real data: re-run the DUT on COMM_SELF, where the sync takes its
-    # size<=1 no-op path.  A changed result is only possible if the 2-rank swap ran.
+    # size<=1 no-op path.  A changed result is only possible if the pair swap ran.
     self_bufs = {k: v.copy() for k, v in inputs.items()}
     ctypes.CDLL(art["dut_so"], mode=ctypes.RTLD_GLOBAL)
     _invoke(
         art["dut_so"], call_plan, self_bufs, f"{dace_name}_c", sdfg_so=art["sdfg_so"], module_seeds=art["seed_specs"]
     )
     assert any(not np.array_equal(dut[k], self_bufs[k]) for k in ptr_args), (
-        f"rank {rank}: the 2-rank run is identical to the single-rank one -- the halo exchange moved no neighbour data"
+        f"rank {rank}: the multi-rank run is identical to the single-rank one -- the halo exchange moved no neighbour data"
     )
 
 

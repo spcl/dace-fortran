@@ -46,11 +46,11 @@ def _missing_build_tools() -> list:
     return [t for t in need if shutil.which(t) is None]
 
 
-def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Optional[int] = None) -> Optional[Path]:
+def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Optional[int] = None) -> Path:
     """Configure + ``make`` ICON under ``build_dir`` (default ``<icon_src>/build/stock_cpu``).
-    Idempotent: no-ops if ``<build_dir>/mod`` already has .mod files. Returns None if
-    the ICON submodule isn't checked out; raises RuntimeError (not swallowed --
-    tests must FAIL loudly, not silently skip) if tools are missing or the build fails."""
+    Idempotent: no-ops if ``<build_dir>/mod`` already has .mod files. Raises RuntimeError (not swallowed --
+    tests must FAIL loudly, not silently skip) if the submodule is not checked out, tools are missing or the
+    build fails."""
     # absolute paths: configure/make run with cwd=build_dir, relative icon_src would break
     icon_src = Path(icon_src).resolve()
     if build_dir is None:
@@ -62,9 +62,11 @@ def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Op
     if key in _BUILT:
         return _BUILT[key]
 
-    # Submodule not checked out -> nothing we can build.
     if not (icon_src / "configure").is_file():
-        return None
+        raise RuntimeError(
+            f"icon-model submodule not checked out at {icon_src} "
+            "(run `git submodule update --init tests/icon/full/icon-model`)"
+        )
 
     # Already built (developer tree or restored CI cache).
     if _have_mods(build_dir):
