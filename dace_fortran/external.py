@@ -55,6 +55,9 @@ _C_TYPES = {
     "int32": "int",
     "int64": "long long",
     "bool": "bool",
+    # Layout-compatible with Fortran ``complex(c_double_complex)`` / ``complex(c_float_complex)``.
+    "complex128": "dace::complex128",
+    "complex64": "dace::complex64",
 }
 
 #: C type emitted for an ``Arg(kind=ArgKind.COMM)`` parameter.  Full
