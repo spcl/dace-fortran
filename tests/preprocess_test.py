@@ -661,3 +661,9 @@ def test_preprocess_fortran_source_threads_kind_options(tmp_path):
     assert "KIND=4" in _kind(out_fp32)
     # passthrough: untouched (OpenMP strip + integer-power rewrite are both no-ops here)
     assert "KIND=wp" in _kind(preprocess_fortran_source(src, search_dirs=[tmp_path], kind_passthrough=True))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -7,7 +7,7 @@ from fparser.two.utils import walk
 from dace_fortran import inline_to_single_tu
 from dace_fortran.inliner import ast_utils
 from dace_fortran.inliner.ast_desugaring import desugaring, cleanup
-from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 # ECMWF ``fcttre``/``fccld`` idiom: a type declaration that FOLLOWS a statement
 # function.  fparser opens a second ``Specification_Part`` at that boundary, and

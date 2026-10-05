@@ -9,7 +9,7 @@ struct (reusing gate #11's leadsToComponentDesignate), and the libcall operand-s
 the whole-member read as the element slice diag_pvd_x[(i-1), 0:3] instead of the whole multi-dim
 companion (which 1-D-only dot_product rejects)."""
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """\
@@ -93,3 +93,9 @@ def test_nested_cartesian_member_through_multilevel_inline_copyin(tmp_path):
     levels + a hlfir.copy_in contiguous temp."""
     sdfg = build_sdfg(_SRC_MULTI, entry="m2::outer", name="nested_cc_multi", out_dir=str(tmp_path))
     assert "diag_pvd_x" in sdfg.arrays, f"nested cartesian companion not registered: {sorted(sdfg.arrays)}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

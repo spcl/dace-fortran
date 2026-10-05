@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 # Mirrors the cloudsc trigger: explicit-shape local 3-D array, PARAMETER
@@ -77,3 +77,9 @@ def test_explicit_shape_offsets_not_poisoned(tmp_path: Path):
     sdfg(n=np.int32(n), m=np.int32(m), q=q_s, cl=cl_s, a=a_s)
 
     np.testing.assert_array_equal(a_s, a_r)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

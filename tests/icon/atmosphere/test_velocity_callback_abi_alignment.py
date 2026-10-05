@@ -83,3 +83,9 @@ def test_shared_struct_layouts_match_member_for_member():
         f"    only in velocity: {[m for m in v if m not in o]}"
         for t, (o, v) in desyncs.items()
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

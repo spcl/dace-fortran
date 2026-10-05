@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-from _util import flang_binary
+from tests._util import flang_binary
 from dace_fortran.build_bridge import hb
 from dace_fortran.bindings import FlattenPlan
 
@@ -211,3 +211,9 @@ end subroutine
     plain = plain_entries[0].recipe
     assert plain.flat_names == ("a_tag",)
     assert "tag" in plain.read_exprs[0]
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

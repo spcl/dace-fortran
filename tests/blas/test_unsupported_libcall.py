@@ -24,3 +24,7 @@ def test_drot_raises_clear_error(tmp_path):
     msg = str(exc.value)
     assert "drot" in msg.lower(), f"error should mention the routine name: {msg!r}"
     assert "blas" in msg.lower(), f"error should identify the library family: {msg!r}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

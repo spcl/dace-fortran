@@ -5,7 +5,7 @@ closed form (s%w(1,1,1)=5.5; lout(1)=p_area(1,1,1)+lon(1); rest 0)."""
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_pointer_test(tmp_path):
@@ -44,3 +44,9 @@ end subroutine main
     expected = np.zeros(10, dtype=np.float32)
     expected[0] = np.float32(5.5) + lon[0]
     np.testing.assert_array_equal(lout, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

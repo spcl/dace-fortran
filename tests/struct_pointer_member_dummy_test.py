@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -77,3 +77,9 @@ def test_pointer_array_member_dummy_arg_flattens(tmp_path: Path):
     )
 
     np.testing.assert_array_equal(out, data)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

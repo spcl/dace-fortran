@@ -6,7 +6,7 @@ See while_loop_counter_e2e_test.py for the plain do-while element-wise case.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # --------------------------------------------------------------------------
@@ -446,3 +446,9 @@ end module
     sdfg(a=A, out=out)
     # MAXVAL(a, dim=1) reduces the FIRST Fortran dim -> max over each column.
     np.testing.assert_allclose(out[0], np.sum(np.max(A, axis=0)))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

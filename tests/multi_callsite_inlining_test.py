@@ -6,8 +6,8 @@ rename) so each call site gets its own VarInfo."""
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 _BAR_DEF = """
@@ -104,3 +104,9 @@ END MODULE kernel_mod
     sdfg(a=a, b=b)
     np.testing.assert_allclose(a, a_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(b, b_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

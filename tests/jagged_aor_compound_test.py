@@ -10,7 +10,7 @@ double-buffer-accessed AoR struct. L_D compound: jagged + AoR + double-buffer (I
 prog struct shape).
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # -----------------------------------------------------------------
@@ -189,3 +189,9 @@ end module
     arrs = sdfg.arrays
     has_buffer_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
     assert has_buffer_split, f"expected nnow/nnew companions: {sorted(arrs.keys())}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

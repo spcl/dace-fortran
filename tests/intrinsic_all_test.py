@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from tests._util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -249,3 +249,7 @@ END SUBROUTINE intrinsic_all_test_function
 
     sdfg(first=first, second=second, res=res)
     assert list(res) == [0, 1]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -238,3 +238,9 @@ def test_synthesised_local_uses_dace_prefix_namespace(tmp_path):
     assert "dace_enum_flag" in src
     # The old ``__enum`` shape is gone.
     assert "flag__enum" not in src
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

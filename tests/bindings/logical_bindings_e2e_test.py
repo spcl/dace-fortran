@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -79,7 +79,7 @@ def _build_e2e_module(
 
 def _f2py_ref(tmp_path: Path, src: str, name: str):
     """Plain f2py reference module (no bridge) -- gfortran-built ground truth."""
-    from _helpers import f2py
+    from tests._helpers import f2py
 
     return f2py(src, tmp_path / "ref", name)
 
@@ -510,3 +510,7 @@ def test_e2e_scalar_logical(tmp_path: Path):
         out = mod.scalar_flag_driver.run(flag_value, n=n)
         np.testing.assert_array_equal(out, out_ref)
     mod.scalar_flag_dace_bindings.scalar_flag_dace_finalize()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

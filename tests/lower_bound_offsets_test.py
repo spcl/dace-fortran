@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_constant_nonone_lower_bound(tmp_path: Path):
@@ -69,3 +69,9 @@ end subroutine main
     sdfg(src=src, res=res)
     # Only res[1..3] should change; res[0] and res[4] stay at -1.0.
     np.testing.assert_array_equal(res, [-1.0, 40.0, 60.0, 80.0, -1.0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

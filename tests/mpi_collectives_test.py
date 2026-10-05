@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ``use mpi``-style runtime handles: non-``parameter`` module integers, so the
@@ -180,3 +180,7 @@ end subroutine areduce_p
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     with pytest.raises(NotImplementedError):
         build_sdfg(src, sdfg_dir, name="areduce_p", entry="areduce_p").build()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

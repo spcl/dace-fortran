@@ -14,7 +14,7 @@ Isolates the bug from LU's full 1041-state SDFG for fast iteration."""
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 import dace.data
 
@@ -75,3 +75,9 @@ def test_lu_two_call_convergence_repro_itmax_2(tmp_path):
     on top of ssor(1)'s 1 iteration)."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="m::dolu").build()
     assert _run(sdfg, 2) == 3.0, "itmax=2 should give u[0]=3, not 2 (one iter only)"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

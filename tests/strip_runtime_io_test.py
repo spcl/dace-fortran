@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
 def _emit_hlfir_and_strip(src: str) -> str:
@@ -174,3 +174,9 @@ END SUBROUTINE
     # CALL stop_clock(...) itself stays -- only IO calls are stripped, leaving
     # stop_clock an empty function (symbol-dce removes it later).
     assert "fir.call @_QPstop_clock" in ir
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

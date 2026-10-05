@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_optional(tmp_path):
@@ -106,3 +106,9 @@ def test_fortran_frontend_optional_complex(tmp_path):
     # none (UB throughout, res2 left unchecked per "let it crash" policy)
     assert res[0] == 5
     assert res[1] == 7
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

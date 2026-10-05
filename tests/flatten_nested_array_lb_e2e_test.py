@@ -12,7 +12,7 @@ reference is the closed-form result; offset constants are the correctness signal
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -47,3 +47,9 @@ def test_flatten_nested_array_nondefault_lb(tmp_path: Path):
     # Companion is (arr dim, v dim): arr lb 1, v lb 0.
     assert offs.get("offset_o_arr_v_d0") == 1, offs
     assert offs.get("offset_o_arr_v_d1") == 0, f"inner v(0:3) lower bound 0 lost in flattening; got {offs}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

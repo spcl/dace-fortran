@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_allocate_then_element_writes(tmp_path: Path):
@@ -72,3 +72,9 @@ end subroutine main
     out = np.zeros(n, order="F", dtype=np.float64)
     sdfg(n=n, src=src_arr, out=out)
     np.testing.assert_array_equal(out, src_arr)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

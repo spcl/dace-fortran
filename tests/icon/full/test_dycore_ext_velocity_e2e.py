@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     OriginalArg,
     OriginalInterface,
@@ -193,3 +193,9 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     expected = 0.5 * a * x + y_init
     np.testing.assert_allclose(y_ref, expected, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
 
@@ -774,3 +774,9 @@ def test_cloudsc_zaplusb_kernel_sdfg_matches_f2py(tmp_path: Path):
     np.testing.assert_allclose(
         zaplusb_sdfg, zaplusb_ref, atol=1e-14, rtol=1e-14, err_msg="ZAPLUSB compound expression diverges"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

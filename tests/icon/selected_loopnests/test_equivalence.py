@@ -26,3 +26,7 @@ def test_struct_flat_equivalence(src: Path, tmp_path: Path):
     assert result.returncode == 0, f"{src.name} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     # Keep the "OK max_err=..." line visible in -s mode for quick scanning.
     print(f"[{src.stem}] {result.stdout.strip()}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -368,3 +368,9 @@ def test_retype_sdfg_matches_fortran(tmp_path: Path):
         x = np.array([xv], dtype=np.float32)
         csdfg(x=x)
         assert abs(float(x[0]) - expected.value) < 1e-5, f"retype x0={xv}: SDFG {x[0]} != Fortran {expected.value}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -10,7 +10,7 @@ a negative shift in range).  These tests pin the numerics against
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_cshift_whole_array_positive(tmp_path):
@@ -72,3 +72,9 @@ end module
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res)
     np.testing.assert_allclose(res, 2.0 - np.roll(arr, -1))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

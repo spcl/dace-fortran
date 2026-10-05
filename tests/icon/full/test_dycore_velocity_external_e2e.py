@@ -24,8 +24,8 @@ from pathlib import Path
 import numpy as np
 
 import dace
-from _util import build_sdfg
-from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
+from tests._util import build_sdfg
+from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.bindings import (
@@ -632,3 +632,9 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
                 f"``assert_allclose`` above as the gate."
             ),
         )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

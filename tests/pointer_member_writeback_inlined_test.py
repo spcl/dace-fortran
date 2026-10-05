@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -188,3 +188,9 @@ def test_writeback_through_assumed_shape_forward_inlined(tmp_path: Path):
     expected = i + 100.0 * j
     for b in range(nb):
         np.testing.assert_array_equal(e[:, :, b], expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

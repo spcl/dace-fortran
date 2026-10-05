@@ -22,7 +22,7 @@ FUNCTION-RESULT section dummy.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_pointer_member_array_indexed_by_local(tmp_path):
@@ -137,3 +137,9 @@ END MODULE
     assert "tabxx_box" in sdfg.arrays
     # record dim + member dim
     assert len(sdfg.arrays["tabxx_box"].shape) == 2
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

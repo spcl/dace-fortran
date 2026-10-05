@@ -7,13 +7,9 @@ loops and loop conditions, with loop bodies touching only in-bounds memory so a 
 shows as a wrong result, not an OOB crash.
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _util import build_sdfg  # noqa: E402
+from tests._util import build_sdfg  # noqa: E402
 
 
 def _reduce_nodes(sdfg):
@@ -223,3 +219,9 @@ end module driver_mod
     iters = np.zeros(1, dtype=np.int32)
     sdfg(a=a, iters=iters, n=np.int32(n))
     assert int(iters[0]) == 3
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

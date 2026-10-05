@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str):
@@ -41,3 +41,9 @@ end subroutine nested_idx
     out_sdfg = np.zeros(n, dtype=np.float64)
     sdfg(idx=np.ascontiguousarray(idx), src=np.ascontiguousarray(src_data), out=out_sdfg, n=n)
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

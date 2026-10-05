@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -299,3 +299,9 @@ def test_multiscope_samename_cartesian_companions(tmp_path: Path):
     # rotk: acc += (i+j); divk: acc += z(i,j,1)%x(1) = (i+j+1)  ->  acc = 2(i+j)+1
     expected = np.fromfunction(lambda i, j: 2.0 * ((i + 1) + (j + 1)) + 1.0, (n, m), dtype=np.float64)
     np.testing.assert_allclose(acc, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

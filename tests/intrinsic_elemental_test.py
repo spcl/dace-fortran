@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_elemental_exp(tmp_path):
@@ -207,3 +207,9 @@ end subroutine main
     sdfg(ng_var_114=size, od_var_115=arg_in, trans_dir_dir_var_119=arg_out)
 
     assert np.allclose(arg_out, np.maximum(-np.maximum(arg_in * 1.0 / mu0, 0.0), -1000.0))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

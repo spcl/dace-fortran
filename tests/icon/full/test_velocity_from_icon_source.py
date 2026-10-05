@@ -195,3 +195,7 @@ def test_emit_hlfir_for_icon_velocity(tmp_path: Path):
     assert out.is_file()
     # Full closure lowering hits hundreds of MB; a small file means flang silently truncated.
     assert out.stat().st_size > 100 * 1024 * 1024
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

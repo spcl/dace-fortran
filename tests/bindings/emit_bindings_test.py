@@ -496,3 +496,9 @@ def test_logical_cbool_passes_through_no_bridge(tmp_path: Path):
     src = _logical_kernel_with_outer_type(tmp_path, "logical(c_bool)")
     assert "_cbool" not in src.replace("logical(c_bool)", "")
     assert "flag_cbool" not in src
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

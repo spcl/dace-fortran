@@ -9,7 +9,7 @@ index pass-through. NOT yet supported: bitwise IAND/IOR/IEOR/ISHFT in a subscrip
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_mod_in_array_index(tmp_path):
@@ -93,3 +93,9 @@ END MODULE mod_idx_2d_mod
     # j=1: a(mod(1,2)+1, 1)=a(2,1)=4 ; j=2: a(mod(2,2)+1,2)=a(1,2)=2
     # j=3: a(mod(3,2)+1,3)=a(2,3)=6
     np.testing.assert_array_equal(out, [4.0, 2.0, 6.0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

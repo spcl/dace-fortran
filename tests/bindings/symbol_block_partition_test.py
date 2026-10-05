@@ -88,3 +88,9 @@ def test_old_per_line_split_would_shear_the_block():
     # The block-aware partition does NOT.
     early, late = partition_symbol_blocks(sym_lines, buf)
     assert _balanced(early) and _balanced(late)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

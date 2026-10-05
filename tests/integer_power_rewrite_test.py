@@ -127,7 +127,7 @@ def test_eval_equivalent(expr: str):
 def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
     """``(t(i) - k)**2.0`` (parenthesised base in a quotient) plus ``s**3.0`` must stay
     numerically identical after the rewrite: bridge build vs gfortran reference."""
-    from _util import build_sdfg, f2py_compile
+    from tests._util import build_sdfg, f2py_compile
 
     src = """
 module pw_mod
@@ -165,3 +165,7 @@ end module pw_mod
     ref.pw_mod.pw(t, k, s, o_ref)  # n auto-derived from shape(t)
     sdfg(n=np.int32(16), t=t, k=k, s=s, out=o_sdfg)
     np.testing.assert_array_equal(o_sdfg, o_ref)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -82,3 +82,9 @@ def test_indirect_access_numerical(tmp_path):
     sdfg(z_kin=z_kin, e_bln=e_bln, edge_idx=edge_idx, z_ekinh=z_ekinh_sdfg, nc=nc, ne=ne, nk=nk)
 
     np.testing.assert_allclose(z_ekinh_sdfg, z_ekinh_fort, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

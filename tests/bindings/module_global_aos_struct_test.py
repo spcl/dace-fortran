@@ -102,7 +102,7 @@ def _compile_so(out_so, *sources, mod_dir, link_so=None):
 
 def _build_module(src, name, entry, tmp_path):
     """Build the SDFG, emit the Fortran binding, return ``(builder, sdfg, so_path, binding_path)``."""
-    from _util import build_sdfg
+    from tests._util import build_sdfg
     from dace_fortran.bindings import emit_bindings, FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
 
@@ -611,3 +611,9 @@ def test_associated_pointer_module_global_presence_e2e(tmp_path):
         r_sdfg = _run(sdfg_lib.run_assoc_present, present)
         assert r_ref == expect, f"reference wrong for present={present}: {r_ref}"
         assert r_sdfg == r_ref, f"SDFG-via-binding != reference for present={present}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

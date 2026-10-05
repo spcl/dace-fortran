@@ -1,6 +1,6 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 from dace_fortran.inliner.ast_desugaring import pruning, optimizations, desugaring
-from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 
 def test_branch_pruning():

@@ -7,7 +7,7 @@ PARAMETER and function-scope globals stay untouched (caller can't bind the latte
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_module_global_read_only_surfaces_as_kwarg(tmp_path):
@@ -240,3 +240,9 @@ end module m
     counter = np.array([10], dtype=np.int32, order="F")
     sdfg(counter=counter, n_calls=np.int32(3))
     assert counter[0] == 13
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

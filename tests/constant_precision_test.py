@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_module_parameter_keeps_f64_precision(tmp_path: Path):
@@ -165,3 +165,9 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     assert "float32(0.2)" in code, code
     assert "0.10000000149011612" not in code, f"f32 constant widened to f64 17-digit form: {code}"
     assert "0.20000000298023224" not in code, code
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

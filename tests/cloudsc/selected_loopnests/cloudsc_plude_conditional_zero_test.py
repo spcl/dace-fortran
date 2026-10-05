@@ -5,8 +5,8 @@ unconditionally zeroes.  E2e against an f2py-compiled reference."""
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_fortran_frontend_cloudsc_plude_conditional_zero(tmp_path):
@@ -97,3 +97,9 @@ END MODULE kernel_mod
         ncldtop=ncldtop,
     )
     np.testing.assert_allclose(plude, plude_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

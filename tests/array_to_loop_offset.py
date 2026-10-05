@@ -5,7 +5,7 @@ HLFIR handles offset normalisation uniformly via ``offset_<arr>_d<i>`` symbols (
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_arr2loop_without_offset(tmp_path):

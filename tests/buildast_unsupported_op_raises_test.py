@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # WHERE lowers to hlfir.where; no pipeline pass rewrites it, so it reaches buildAST and must trigger the compute-drop guard.
@@ -33,3 +33,7 @@ def test_where_masked_assign_raises(tmp_path: Path):
     msg = str(excinfo.value)
     assert "hlfir.where" in msg, f"diagnostic should name the unhandled op, got: {msg}"
     assert "unhandled compute statement" in msg, f"diagnostic should flag the compute drop, got: {msg}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

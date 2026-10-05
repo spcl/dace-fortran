@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 import dace.data
 
@@ -64,3 +64,9 @@ def test_if_then_return_in_loop_does_not_elide_if_body(tmp_path):
     by 1/iter from 0).  If the IF block is elided, rsdnm stays 0."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="m::dolu").build()
     assert _run(sdfg, 3) == 3.0, "IF body elided: rsdnm(1) should be u(1)=3.0 at istep==itmax"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

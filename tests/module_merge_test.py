@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.preprocess import merge_used_modules
 
 
@@ -156,3 +156,9 @@ def test_merge_leaves_intrinsic_use_untouched(tmp_path: Path):
     )
     d = _proj(tmp_path / "intr", k_f90=src)
     assert merge_used_modules(src, search_dirs=[d]) == src
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

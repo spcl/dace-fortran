@@ -593,3 +593,9 @@ end subroutine main
     assert "a(2, 1) = v" in got, got
     assert "a(i, 1) = v" in got, got
     assert _compiles(got)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

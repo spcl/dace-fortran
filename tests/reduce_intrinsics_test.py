@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -84,3 +84,9 @@ def test_scalar_reductions_structure(tmp_path):
     assert "lambda a, b: a * b" in wcrs
     assert "lambda a, b: min(a, b)" in wcrs
     assert "lambda a, b: max(a, b)" in wcrs
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

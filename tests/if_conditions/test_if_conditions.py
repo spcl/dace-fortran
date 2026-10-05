@@ -12,7 +12,7 @@ rejects with ``double* > scalar`` type errors.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_if_scalar_compare_basic(tmp_path):
@@ -237,3 +237,9 @@ END SUBROUTINE
     sdfg(n=np.int32(4), x=x, out=out)
     # x>0 on the first guard only: +1 each, never +10.
     np.testing.assert_array_equal(out, [1.0, 1.0, 1.0, 1.0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

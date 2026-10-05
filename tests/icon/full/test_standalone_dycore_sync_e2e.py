@@ -22,7 +22,7 @@ from pathlib import Path
 import dace
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
@@ -220,3 +220,9 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     # hard guarantee today: bit-exact.  Loosen to assert_allclose if a future flang
     # reorders the a*b + sqrt(c) chain and only 1 ULP can be sustained.
     np.testing.assert_array_equal(field_sdfg, field_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _tasklet_codes(sdfg) -> list[str]:
@@ -94,3 +94,9 @@ end subroutine
     r = np.zeros(1, dtype=np.float64)
     sdfg(x=3.0, y=4.0, r=r)
     np.testing.assert_allclose(r[0], 0.5 * (3.0**2 + 4.0**2), rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

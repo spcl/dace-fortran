@@ -30,3 +30,9 @@ def test_mpi_alltoall_recognised(tmp_path):
     assert set(alltoall[0].in_connectors) == {"_inbuffer", "_comm"}, (
         f"Alltoall must thread the user communicator, got {sorted(alltoall[0].in_connectors)!r}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

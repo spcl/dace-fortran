@@ -10,8 +10,8 @@ runs them and routine local sweeps skip the cost with ``-m "not long"``.
 
 import pytest
 
-from _util import build_sdfg
-from codegen_check import CRITICAL_WARNINGS, analyze
+from tests._util import build_sdfg
+from tests.codegen_check import CRITICAL_WARNINGS, analyze
 
 
 # An ALLOCATE whose extent comes from a runtime scalar, plus a loop nest over it -- the shape that produced the
@@ -92,3 +92,7 @@ def test_generated_cpp_passes_deep_analysis(tool, kernel, tmp_path):
     sdfg = built_sdfg(SOURCES[kernel], tmp_path, name=kernel)
     found = analyze(sdfg, tool)
     assert not found, f"{tool} reported on generated C++:\n" + "\n".join(found)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

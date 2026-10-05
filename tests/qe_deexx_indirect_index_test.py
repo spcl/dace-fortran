@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _module_wrap(src: str, free_sub_decl: str, mod_name: str) -> str:
@@ -251,3 +251,9 @@ def test_module_global_ofsbeta_indirect_matches_reference(tmp_path: Path):
 
     np.testing.assert_allclose(d_sdfg, d_ref, rtol=1e-12, atol=1e-12)
     assert not np.allclose(d_sdfg, deexx0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

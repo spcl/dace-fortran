@@ -10,8 +10,8 @@ E2e against an f2py-compiled reference.
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_fortran_frontend_cloudsc_implicit_solver(tmp_path):
@@ -263,3 +263,9 @@ END MODULE kernel_mod
     np.testing.assert_allclose(zpfplsx, zpfplsx_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zcovptot, zcovptot_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zqpretot, zqpretot_r, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

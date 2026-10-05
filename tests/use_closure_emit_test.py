@@ -68,3 +68,9 @@ def test_emit_only_closure_from_compile_commands(tmp_path):
     out = emit(compile_commands=cc, out_dir=tmp_path / "hlfir", entry="run")
     stems = {p.stem for p in out}
     assert stems == {"a", "b", "c"}  # d not emitted
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_merge_1d(tmp_path):
@@ -438,3 +438,9 @@ def test_fortran_frontend_merge_dataref(tmp_path):
 
     sdfg(input1=data1, input2=data2, res=res)
     assert res[0] == 40
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

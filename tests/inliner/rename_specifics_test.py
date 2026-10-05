@@ -75,3 +75,9 @@ def test_rename_skips_non_collision_and_external_names():
     # neither the external name nor the non-colliding specific (p_wait_1) is renamed
     assert "mpi_wait_x" not in low
     assert "p_wait_1_x" not in low
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

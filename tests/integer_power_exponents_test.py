@@ -16,7 +16,7 @@ import numpy as np
 
 import dace
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_pass_retypes_integer_valued_float_exponents():
@@ -112,3 +112,9 @@ def test_array_base_float_power_matches_gfortran(tmp_path: Path):
     sdfg(a=a.copy(order="F"), y=ys, **nkw)
 
     np.testing.assert_allclose(ys, yr, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

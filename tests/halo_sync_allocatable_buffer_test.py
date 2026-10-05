@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ``h`` is a POINTER member so the section is passed by copy-in/out and the dummy is assumed-shape;
@@ -65,3 +65,9 @@ def test_allocatable_buffer_column_unpack(tmp_path: Path):
     expected[:, 0] = np.arange(1, n1 + 1, dtype=np.float64) * 10.0
     expected[:, 1] = expected[:, 0]  # arr(:, 2) = arr(:, 1) via the buffer
     np.testing.assert_array_equal(h, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

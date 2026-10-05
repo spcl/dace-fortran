@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _build(src: str, tmp_path: Path, entry: str):
@@ -176,3 +176,9 @@ end subroutine indirect_neg
     out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(arr=arr_buf, idx_table=idx_table, n_idx=np.int32(3), out=out, arr_d0=np.int64(7), offset_arr_d0=np.int64(-3))
     np.testing.assert_array_equal(out, [-30, 0, 30])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

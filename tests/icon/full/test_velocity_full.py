@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
-from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
+from tests._util import build_sdfg
+from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 
 _HERE = Path(__file__).resolve().parent
@@ -233,3 +233,9 @@ def test_velocity_full_numerical(tmp_path: Path):
             d = np.abs(sd - rf)
             mismatches.append(f"{nm}: max_abs_diff={d.max():.3e} (n_diff={np.count_nonzero(d > 1e-10)})")
     assert not mismatches, "\n".join(mismatches)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

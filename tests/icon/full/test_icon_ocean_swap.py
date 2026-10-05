@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from icon.full._fc import (
+from tests.icon.full._fc import (
     FORTRAN_COMPILERS,
     cpp_flag,
     fortran_compiler_flags,
     syntax_check_argv,
 )
-from icon.full._icon_ocean_patch import (
+from tests.icon.full._icon_ocean_patch import (
     OCEAN_WRAPPER_NAME,
     apply_ocean_solve_patch,
     write_patched_ocean_solve,
@@ -955,3 +955,7 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
         ],
         cwd=str(tmp_path),
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

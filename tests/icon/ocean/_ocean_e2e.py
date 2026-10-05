@@ -519,7 +519,7 @@ def build_dut_and_ref(
     """
     import dace
 
-    from _util import BITEXACT_CPU_ARGS
+    from tests._util import BITEXACT_CPU_ARGS
     from dace_fortran.build import build_sdfg
     from dace_fortran.bindings import build_fortran_library
     from dace_fortran.external import apply_external_functions, clear_external_registry

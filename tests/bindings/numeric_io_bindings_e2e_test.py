@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -473,3 +473,7 @@ def test_e2e_minmax_intrinsic(tmp_path: Path):
     out_d = np.zeros(n, dtype=np.float64)
     sdfg(a=np.ascontiguousarray(a), lo=lo, hi=hi, out=out_d, n=n)
     np.testing.assert_allclose(out_d, out_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

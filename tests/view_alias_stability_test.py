@@ -6,7 +6,7 @@ Locks down the pipeline: asAssumedShapeAlias returns null on rank mismatch, extr
 view_alias VarInfo, descriptors.py synthesises column-major strides, access.py wires the source ->
 view edge -- none of these steps may crash on the patterns below."""
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _builds(tmp_path, src, name, entry):
@@ -201,3 +201,9 @@ contains
 end module m
 """
     _builds(tmp_path, src, name="outer", entry="m::outer")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

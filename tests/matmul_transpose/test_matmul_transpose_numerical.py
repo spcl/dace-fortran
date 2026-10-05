@@ -4,14 +4,12 @@ rtol=1e-12 for fp64 (well above ULP-level BLAS noise) since op order can differ.
 """
 
 from pathlib import Path
-import sys
 
 import numpy as np
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def test_matmul_transpose_numerical(tmp_path):
@@ -162,3 +160,9 @@ END MODULE matmul_tv_kernel_mod
 
     expected = A.T @ v
     np.testing.assert_allclose(y, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

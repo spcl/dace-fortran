@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
-from cloudsc.full._registries import (
+from tests._util import build_sdfg, f2py_compile
+from tests.cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     get_inputs_physical,
     get_outputs,
 )
-from cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
+from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 
 _HERE = Path(__file__).resolve().parent
 
@@ -113,3 +113,7 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
         atol=1e-14,
         err_msg="ZSOLQB diverges between SDFG and f2py top-half references",
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -12,8 +12,8 @@ import subprocess
 from pathlib import Path
 
 
-from icon.full._icon_solve_nh_patch import apply_solve_nh_patch
-from icon.full._solve_nh_min_types import MIN_GEOMETRY_TYPES_F90, MIN_STATE_TYPES_F90
+from tests.icon.full._icon_solve_nh_patch import apply_solve_nh_patch
+from tests.icon.full._solve_nh_min_types import MIN_GEOMETRY_TYPES_F90, MIN_STATE_TYPES_F90
 
 
 _HERE = Path(__file__).resolve().parent
@@ -87,3 +87,9 @@ def test_solve_nh_patch_structure_and_compiles(tmp_path: Path):
         text=True,
     )
     assert r.returncode == 0, f"patched solve_nh did not compile:\n{r.stderr}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

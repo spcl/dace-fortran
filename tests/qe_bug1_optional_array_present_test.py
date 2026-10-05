@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
@@ -171,3 +171,9 @@ def test_array_optional_present_call_matches_reference(tmp_path: Path):
     # Absent: y stays zero on both sides.
     np.testing.assert_allclose(call(lib.run_opt_addv, 0), np.zeros(4))
     np.testing.assert_allclose(call(ref.run_opt_addv_ref, 0), np.zeros(4))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

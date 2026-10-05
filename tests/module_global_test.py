@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _SRC = """
@@ -67,3 +67,9 @@ def test_module_global_array_passthrough(tmp_path: Path):
     sdfg(gtable=gtable_vals, idx=idx, out=out_sdfg, n=n)
 
     np.testing.assert_array_equal(out_sdfg, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

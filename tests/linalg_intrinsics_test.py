@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -140,3 +140,9 @@ def test_linalg_ops_structure(tmp_path):
     assert len(matmuls) == 2, f"expected 2 MatMul nodes, got {len(matmuls)}"
     assert len(transposes) == 1, f"expected 1 Transpose node, got {len(transposes)}"
     assert len(dots) == 1, f"expected 1 Dot node, got {len(dots)}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

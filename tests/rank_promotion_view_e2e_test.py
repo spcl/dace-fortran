@@ -12,7 +12,7 @@ element-by-element (NPB LU's ``scratch``/``buf`` pattern).
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """\
@@ -253,3 +253,9 @@ def test_rank_reinterpret_2d_source_to_3d_view(tmp_path):
     expected = expected_flat.reshape((ROWS, COLS), order="F")
 
     np.testing.assert_array_equal(arr_sdfg, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

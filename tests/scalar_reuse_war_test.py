@@ -21,8 +21,8 @@ Checked e2e against an f2py-compiled gfortran reference: bugged = diverges, fixe
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 _HEAD = "MODULE kernel_mod\nCONTAINS\n"
@@ -189,3 +189,9 @@ END SUBROUTINE driver
 """,
         "loop_carried_scalar",
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

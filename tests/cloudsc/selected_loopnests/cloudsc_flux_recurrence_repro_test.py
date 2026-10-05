@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -124,3 +124,9 @@ def test_cloudsc_flux_recurrence(tmp_path: Path):
 
     np.testing.assert_allclose(lf_sdfg, lf_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(rf_sdfg, rf_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -15,25 +15,17 @@ helpers; the only delta is the empty override map.
 """
 
 import ctypes
-import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
-
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.block_builders import effective_module_sources
+from tests._util import build_sdfg
 
-# reuse sibling e2e test's struct/driver/allocation helpers (one source of
-# truth); bindings test dir isn't on sys.path (conftest only adds tests/hlfir), so load by file path.
-_VF_PATH = Path(__file__).resolve().parent / "test_velocity_full_bindings_e2e.py"
-_spec = importlib.util.spec_from_file_location("test_velocity_full_bindings_e2e", _VF_PATH)
-vf = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(vf)
-
-pytestmark = vf.pytestmark
+# reuse sibling e2e test's struct/driver/allocation helpers (one source of truth)
+from tests.icon.full import test_velocity_full_bindings_e2e as vf
 
 # same caller flat-array order + the nine module globals the hand-authored
 # map used to supply; assert the bridge recovers exactly these, then run e2e with the override empty.
@@ -145,3 +137,9 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
             mismatches.append(f"{nm}: max_abs_diff={d.max():.3e} (n_diff={np.count_nonzero(d > 1e-10)})")
     assert mutated, "reference left every output untouched -- kernel did not run"
     assert not mismatches, "\n".join(mismatches)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

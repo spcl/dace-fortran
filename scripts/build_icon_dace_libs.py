@@ -28,8 +28,7 @@ import dace
 # Re-use the iface + module-symbol-forward constants already pinned by
 # the velocity e2e test so the standalone build produces *exactly* the
 # artifacts the e2e is known to drive bit-exact.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
-from icon.full.test_dycore_velocity_external_e2e import (
+from tests.icon.full.test_dycore_velocity_external_e2e import (
     _VELOCITY_MODULE_FORWARD,
     _O0_FFLAGS,
     _O0_CXX_FLAGS,
@@ -43,7 +42,7 @@ from icon.full.test_dycore_velocity_external_e2e import (
 
 import dace_fortran
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import build_fortran_library, FlattenPlan
 from dace_fortran.bindings.acc_transfers import (
     AccResidency,

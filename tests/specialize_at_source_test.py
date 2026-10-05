@@ -9,7 +9,7 @@ from dace_fortran.inliner.ast_desugaring import optimizations, pruning
 from dace_fortran.inliner.ast_desugaring.specialize_at_source import inline_named_functions, inline_named_subprograms
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 _LADDER_SRC = """
 module mo_comm
@@ -428,3 +428,9 @@ def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
     sdfg(field=field, nlev=n)
     # start_level defaulted to 1 -> all n elements incremented, none left at 0.
     np.testing.assert_allclose(field, np.ones(n), rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -11,7 +11,7 @@ Build-only, no gfortran link/run."""
 import re
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, ExternalCall, Intent, clear_external_registry, keep_external
@@ -318,3 +318,9 @@ def test_neg_lbound_member_lb_slot_marshalled_with_folded_literal(tmp_path):
         f"neg-lbound _lb slot desync: inner shim {len(inner_slots)} slots vs "
         f"outer marshal {len(outer_args)} args\n  inner={inner_slots}\n  outer={outer_args}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

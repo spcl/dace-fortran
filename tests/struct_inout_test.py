@@ -18,7 +18,7 @@ descriptor is a true ``Scalar`` and the bare name is correct).
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_struct_with_inout_scalar_dummies(tmp_path):
@@ -71,3 +71,9 @@ end subroutine fun
     assert res[0] == 0
     assert all(res[1:5] == 42)
     assert res[5] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

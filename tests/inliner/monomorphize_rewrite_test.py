@@ -17,7 +17,7 @@ import pytest
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
-from _util import _FLANG
+from tests._util import _FLANG
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program, UnsupportedProgram
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
     AxisSpec,
@@ -1075,3 +1075,7 @@ def test_discover_skips_base_without_concrete_arm():
     prog = parse_program(_NO_ARM_SRC)
     assert discover_axes(prog) == []
     assert monomorphize_auto(prog) == MonomorphizationStats()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

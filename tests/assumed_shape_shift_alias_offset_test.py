@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _src(lb: int) -> str:
@@ -39,3 +39,7 @@ def test_assumed_shape_shift_alias_offset(tmp_path: Path, lb: int):
     sdfg(a=a, out=out)
     # b(1) aliases a's first element (a(lb)); b(2) -> a's second element = 20.0.
     assert out[0] == 20.0, f"lb={lb}: b(2) should read the 2nd element (20.0); got {out[0]}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

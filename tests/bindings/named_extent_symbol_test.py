@@ -45,3 +45,9 @@ def test_scalar_arg_shape_is_not_matched():
     scal = FrozenArg(fortran_name="n_zlev", sdfg_name="n_zlev", kind=FrozenArgKind.SCALAR, dtype="int32", rank=0)
     sig = FrozenSignature(entry="k", mangled="_QPk", args=(scal,), free_symbols=("n_zlev",))
     assert _sym_from_array_extent("n_zlev", sig) is None
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

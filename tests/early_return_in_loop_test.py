@@ -9,7 +9,7 @@ of magnitude divergence). Reproducer: four ``d(M1,M2,i,j)`` assigns guarded
 by an early return in one outer loop.
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """\
@@ -72,3 +72,9 @@ def test_early_return_preserves_loop_body_assigns(tmp_path):
         f"``fir.do_loop`` op inside the lifted ``scf.while`` before "
         f"region (see ``bridge/ast/dispatch.cpp``)."
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

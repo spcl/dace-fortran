@@ -8,7 +8,7 @@ INT_MIN at -O0 regardless of intent. Fix: ``dispatch.cpp::identityForType`` now 
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_minval_int32_whole_array(tmp_path):
@@ -138,3 +138,9 @@ END SUBROUTINE f
     res = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, res=res)
     assert res[0] == 15, f"SUM should be 15, got {res[0]}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

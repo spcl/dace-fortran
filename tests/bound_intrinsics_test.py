@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_size_lbound_ubound_explicit_shape(tmp_path: Path):
@@ -61,3 +61,9 @@ end subroutine
     assert int(lb[0]) == -2
     assert int(ub[0]) == 2
     assert int(sz[0]) == 5
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

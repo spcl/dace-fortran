@@ -3,13 +3,11 @@ carries a :class:`CopyLibraryNode` (the flat copy an ``hlfir.reshape`` with pres
 element count produces)."""
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _build(probe_name: str, entry: str, tmp_path):
@@ -35,3 +33,9 @@ def test_reshape_1d_to_2d_recognised(tmp_path):
     sdfg = _build("reshape_1d_to_2d_probe.f90", "reshape_1d_to_2d", tmp_path)
     classes = _node_class_names(sdfg)
     assert "CopyLibraryNode" in classes
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

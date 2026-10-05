@@ -9,7 +9,7 @@ through buildElementalAnyAllReduce, not just hlfir.any/hlfir.all."""
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_sum_of_pow(tmp_path):
@@ -107,3 +107,9 @@ end module
     out = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(arr=arr, out=out)
     np.testing.assert_array_equal(out[0], np.min(arr - 2))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -10,7 +10,7 @@ exercised separately by
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -50,3 +50,9 @@ def test_fp64_and_int_scalar_constants_keep_their_types(tmp_path):
     on every platform we target)."""
     assert _arg_dtype(tmp_path, "dscale") == np.float64
     assert _arg_dtype(tmp_path, "icount") == np.int32
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

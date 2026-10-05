@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_pointer_to_scalar_local(tmp_path: Path):
@@ -262,3 +262,7 @@ end subroutine main
     sdfg(d=d)
     np.testing.assert_array_equal(d, d_ref)
     np.testing.assert_array_equal(d, [13.0, 13.0])
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

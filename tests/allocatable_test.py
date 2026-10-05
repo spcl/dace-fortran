@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_alloc_then_whole_array_copy(tmp_path: Path):
@@ -74,3 +74,9 @@ end subroutine main
     out = np.zeros((n, m), order="F", dtype=np.float64)
     sdfg(n=n, m=m, src=src_arr, out=out)
     np.testing.assert_array_equal(out, src_arr)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

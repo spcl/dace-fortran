@@ -4,7 +4,7 @@ against silent SDFG-shape regressions."""
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_elementwise_loop(tmp_path):
@@ -79,3 +79,9 @@ end subroutine chained
     expected = a * 2.0 + 1.0
     sdfg(a=a, out=out, n=n)
     np.testing.assert_allclose(out, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

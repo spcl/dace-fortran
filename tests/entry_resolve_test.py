@@ -77,3 +77,7 @@ def test_resolve_ambiguous_needs_qualifier(tmp_path):
         resolve_entry("run", [s1, s2])
     # module::proc disambiguates.
     assert resolve_entry("mo_b::run", [s1, s2]) == "run"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

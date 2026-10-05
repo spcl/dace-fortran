@@ -9,7 +9,7 @@ config explicitly; the source's #ifdef branch selection proves cpp ran before HL
 import json
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.emit_hlfir import parse_compile_commands
 
 
@@ -93,3 +93,9 @@ def test_defines_select_cpp_branch_without_build_system(tmp_path):
 
     sdfg_flt = build_sdfg(_GATED_SRC, tmp_path / "flt", name="kern", entry="kern_mod::kern").build()
     assert str(sdfg_flt.arrays["x"].dtype) == "float"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

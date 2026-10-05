@@ -13,7 +13,7 @@ Pinned: build + validate + numerics.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -49,3 +49,9 @@ def test_gemv_in_branch_numerical(tmp_path):
     y_ref = alpha[0] * (A @ x)
     sdfg(a=A, x=x, y=y, alpha=alpha, n=n, flag=1)  # Fortran descriptors register lowercase
     np.testing.assert_allclose(y, y_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

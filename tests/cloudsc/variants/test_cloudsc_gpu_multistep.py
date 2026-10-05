@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import f2py_compile
-from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
-from cloudsc.variants._harness import extract_variant_tu, mismatch_report, run_cloudsc_gpu
+from tests._util import f2py_compile
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
+from tests.cloudsc.variants._harness import extract_variant_tu, mismatch_report, run_cloudsc_gpu
 
 HERE = Path(__file__).resolve().parent
 WRAPPER = HERE / "cloudsc_outer_multistep.F90"
@@ -50,3 +50,7 @@ def test_cloudsc_gpu_multistep_numerical(tmp_path, variant_tu, f2py_ref, _strict
     assert not report, "cloudsc_gpu_multistep numerical mismatch:\n" + "\n".join(report)
     # Guard against a degenerate no-op integration.
     assert np.any(np.abs(np.asarray(outputs_sdfg["pt"])) > 0.0), "PT is all-zero -- the integration did not run"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

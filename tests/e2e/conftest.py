@@ -8,7 +8,7 @@ import pytest
 
 import dace
 
-from _util import BITEXACT_CPU_ARGS
+from tests._util import BITEXACT_CPU_ARGS
 
 # ONE translation unit at a time. These kernels are single, very large TUs (CloudSC ~25k lines),
 # and each concurrent compile carries its own multi-GB peak -- together they exhaust this box and

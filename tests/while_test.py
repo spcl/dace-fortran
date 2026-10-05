@@ -6,7 +6,7 @@ port targets ``while_test_function`` directly."""
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_while(tmp_path):
@@ -31,3 +31,9 @@ END SUBROUTINE while_test_function
     res = np.full([2], 42, order="F", dtype=np.float32)
     sdfg(d=inp, res=res, i=0)
     assert np.allclose(res, [94, 42])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

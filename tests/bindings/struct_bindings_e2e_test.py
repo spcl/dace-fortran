@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalInterface,
@@ -949,3 +949,9 @@ def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     np.testing.assert_allclose(p_sdfg, p_ref, rtol=1e-12, atol=1e-12)
     # Sanity: the live data really was scaled (not a no-op match).
     np.testing.assert_allclose(p_ref, p_init * 2.0, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

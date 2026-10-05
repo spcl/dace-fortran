@@ -33,7 +33,7 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.atmosphere._atmo_harness import atmo_config, SRC, atmo_search_dirs
+    from tests.icon.atmosphere._atmo_harness import atmo_config, SRC, atmo_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 

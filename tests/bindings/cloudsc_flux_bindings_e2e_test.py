@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
+from tests._util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -227,3 +227,9 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
 
     np.testing.assert_allclose(lf_sdfg, lf_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(rf_sdfg, rf_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

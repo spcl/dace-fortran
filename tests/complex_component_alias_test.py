@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import dace
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -215,3 +215,7 @@ def test_seq_assoc_zero_then_set_components(tmp_path):
     z = _build_run_fill(tmp_path, body, [1 + 2j, 9 - 1j, 5 + 6j, 0 + 0j])
     assert [zz.real for zz in z] == [3, 3, 3, 3]
     assert [zz.imag for zz in z] == [4, 4, 4, 4]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

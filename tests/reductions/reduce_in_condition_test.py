@@ -10,14 +10,12 @@ per-element subscripts and couldn't handle runtime extents.
 Tests anchor both the structure (Reduce + View, no inline reduction) and e2e correctness.
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
-from _util import build_sdfg  # noqa: E402
+from tests._util import build_sdfg  # noqa: E402
 
 
 def _build(src_text: str, tmp_path, name: str):
@@ -243,3 +241,9 @@ def test_runtime_extent_section_materialises(tmp_path):
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=np.int32(n), mm=np.int32(mm), arr=arr, out=out)
     assert out.tolist() == [1.0, 0.0, 1.0]
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

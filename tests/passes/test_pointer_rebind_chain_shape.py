@@ -95,3 +95,9 @@ def test_pointer_rebind_chain_through_pointer_member_builds(tmp_path):
         "rebased ``patch_edges_cell_idx`` is in the SDFG -- "
         f"got arrays {sorted(arrays)!r}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

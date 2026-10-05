@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
 def _emit_hlfir_and_strip(src: str, *, env_extra: dict = None) -> str:
@@ -252,3 +252,9 @@ END SUBROUTINE
     ir = _emit_hlfir_and_strip(src)
     # No call site to compare; the body must still be there.
     assert "func.func" in ir
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

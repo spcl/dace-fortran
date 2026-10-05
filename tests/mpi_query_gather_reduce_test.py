@@ -13,7 +13,7 @@ so the op name survives to the builder.
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _MPI_OP_MODULE = """
@@ -185,3 +185,9 @@ end subroutine ring
     for ss in dest_subsets:
         assert str(ss) != "0:4", f"dest collapsed onto whole neighbors array: {ss}"
     sdfg.validate()
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

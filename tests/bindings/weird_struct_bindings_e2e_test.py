@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     FlattenPlan,
     emit_bindings,
@@ -154,3 +154,9 @@ def test_e2e_mixed_rank_struct(tmp_path: Path):
     coef_d = np.array([coef], dtype=np.float64)
     sdfg(w_vol=vol_d, w_coef=coef_d)
     np.testing.assert_allclose(vol_d, vol_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

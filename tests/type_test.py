@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_basic_type(tmp_path):
@@ -837,3 +837,7 @@ end subroutine kernel
 
     np.testing.assert_allclose(out_v1_sdfg, out_v1_ref, rtol=0, atol=0)
     np.testing.assert_allclose(out_v2_sdfg, out_v2_ref, rtol=0, atol=0)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

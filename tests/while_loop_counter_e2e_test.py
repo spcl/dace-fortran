@@ -16,7 +16,7 @@ test was written suggests the counter doesn't iterate correctly.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_do_loop_with_early_return_counts_iterations(tmp_path):
@@ -142,3 +142,9 @@ end module m
     a = np.full((N,), 2.0, dtype=np.float64, order="F")
     sdfg(a=a, n=np.int32(N))
     np.testing.assert_array_equal(a, np.zeros(N, dtype=np.float64))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

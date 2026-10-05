@@ -18,7 +18,7 @@ from pathlib import Path
 import dace
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -168,3 +168,9 @@ def test_rebound_pointer_indirect_index_view_compiles(tmp_path: Path):
 
     # crash was at codegen, not build/validate -- compiling is what exercises get_view_edge.
     sdfg.compile()
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

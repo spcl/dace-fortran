@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -64,3 +64,9 @@ def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
     out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out, arr_d0=np.int64(5))
     assert out[0] == 100, f"arr(-5) (first element with lb=-5) should be 100; got {out[0]}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -182,3 +182,7 @@ def test_driver_collapses_real_icon_dispatch():
     upper = text.upper()
     assert "CLASS(T_TRANSFER)" not in upper
     assert "CLASS(T_LHS_AGEN)" not in upper
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

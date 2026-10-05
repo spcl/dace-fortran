@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_array_attribute_no_offset(tmp_path):
@@ -215,3 +215,9 @@ end module lib
     assert a[0, 1] == arrsize2
     assert a[0, 2] == arrsize3
     assert a[0, 3] == arrsize4
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

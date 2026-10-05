@@ -7,7 +7,7 @@ Each case builds an SDFG and an f2py reference from the same source, writes back
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _run(tmp_path, src, dims, *, entry="probe_mod::probe", shape_of=None):
@@ -410,3 +410,9 @@ end module probe_mod
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
     mod.probe_mod.probe(mat, np.int32(i), np.int32(j), out_r)
     np.testing.assert_array_equal(out_s, out_r)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

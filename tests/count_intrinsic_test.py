@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -145,3 +145,9 @@ end subroutine main
     res = np.zeros(1, dtype=np.int32)
     sdfg(a=a, n=n, lo=lo_val, hi=hi_val, res=res)
     assert int(res[0]) == int(((a > lo_val) & (a < hi_val)).sum())
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

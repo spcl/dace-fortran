@@ -9,7 +9,7 @@ contributing a procedure to main (inline-all collapses all into one HLFIR).
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_single_module_use(tmp_path):
@@ -155,3 +155,9 @@ end subroutine main
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 3.14159265358979323846 * 2.0, rtol=1e-10)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

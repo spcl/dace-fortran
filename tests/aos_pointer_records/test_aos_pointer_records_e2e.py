@@ -15,7 +15,6 @@ import numpy as np
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):

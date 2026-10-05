@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_if_cycle(tmp_path):
@@ -54,3 +54,9 @@ end subroutine main
     assert a[0, 0] == 42
     assert a[1, 0] == 6.5
     assert a[2, 0] == 42
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

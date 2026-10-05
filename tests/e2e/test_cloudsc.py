@@ -17,9 +17,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import f2py_compile
-from cloudsc.full._harness import run_cloudsc
-from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
+from tests._util import f2py_compile
+from tests.cloudsc.full._harness import run_cloudsc
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
 from dace_fortran.pipelines import num_maps, optimize
 
 _SRC = Path(__file__).resolve().parents[1] / "cloudsc" / "full" / "cloudsc.F90"
@@ -94,3 +94,7 @@ def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
                 f"{name}: {int(bad.sum())} cell(s) exceed rtol={rtol} (max |Δ|={np.abs(a - b)[bad].max():.3e})"
             )
     assert not report, "cloudsc pipeline numerical mismatch:\n" + "\n".join(report)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

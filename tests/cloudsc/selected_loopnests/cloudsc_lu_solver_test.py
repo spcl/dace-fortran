@@ -17,8 +17,8 @@ E2e against an f2py-compiled reference of the same source.
 import dace
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_fortran_frontend_cloudsc_lu_solver(tmp_path):
@@ -197,3 +197,9 @@ def test_python_frontend_cloudsc_lu_solver_one_indexed():
 
     np.testing.assert_allclose(zqxn[1:, 1:], zqxn_ref[1:, 1:], rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zqlhs[1:, 1:, 1:], zqlhs_ref[1:, 1:, 1:], rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

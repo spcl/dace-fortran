@@ -289,3 +289,7 @@ def test_build_path_sources_external_names_from_registry():
         assert names2.count("sync_patch_array") == 1
     finally:
         clear_external_registry()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

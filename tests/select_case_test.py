@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -67,3 +67,7 @@ def test_select_case_all_shapes(tmp_path, x, expected):
     out_sdfg = np.zeros(1, dtype=np.int32)
     sdfg(x=int(x), out=out_sdfg)
     assert out_sdfg[0] == expected, f"SDFG mismatch: x={x} -> {out_sdfg[0]}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

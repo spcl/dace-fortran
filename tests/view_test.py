@@ -5,7 +5,7 @@ Fortran array-slice arguments: caller passes aa(:, :, k) (2-D view into a 3-D pa
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_view_test(tmp_path):
@@ -164,3 +164,9 @@ END SUBROUTINE viewlens
     sdfg(aa=a, bb=b, n=10)
     assert b[0, 0, 0] == 1
     assert b[0, 0, 1] == 43
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

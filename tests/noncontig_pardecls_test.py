@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_noncontiguous_slices(tmp_path):
@@ -352,3 +352,9 @@ end subroutine main
     new_res = 1.0 - np.transpose(d_new)
 
     assert (new_res == res).all()
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

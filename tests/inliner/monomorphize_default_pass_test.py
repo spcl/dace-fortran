@@ -1675,3 +1675,9 @@ def test_dummy_dispatch_helper_devirtualized(tmp_path: Path):
     subprocess.check_call(
         ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "dummy_dispatch.f90"], cwd=str(tmp_path)
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

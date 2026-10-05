@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_two_calls_distinct_args(tmp_path: Path):
@@ -198,3 +198,9 @@ end module m
     y = np.zeros(n, order="F")
     sdfg(a=a, b=b, y=y, n=n)
     np.testing.assert_allclose(y, (a + 1.0) ** 2 * (b + 1.0) ** 2, atol=1e-13, rtol=0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -674,3 +674,9 @@ def test_dycore_struct_ext_logical_cbool_e2e(tmp_path: Path):
     _run_logical_kind_variant(
         tmp_path, suffix="cbool", logical_decl="logical(c_bool)", member_fortran_type="logical(c_bool)"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -58,3 +58,7 @@ def test_real_icon_comm_pattern_is_monomorphisable():
     assert arms == {"t_comm_pattern_orig", "t_comm_pattern_yaxt"}, f"unexpected arm set: {arms}"
     # the abstract carries the full exchange_data_* / setup / get_* binding set.
     assert len(plan.deferred) >= 15, f"expected the full deferred-binding set, got {len(plan.deferred)}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

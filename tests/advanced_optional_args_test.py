@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_optional_adv(tmp_path):
@@ -63,3 +63,9 @@ end subroutine main
 
     # Safe path only: call fun(res2) reads OPTIONAL a without a PRESENT check (UB); res2 left unchecked.
     assert res[0] == 5
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

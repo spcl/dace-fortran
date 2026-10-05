@@ -44,3 +44,9 @@ def test_fft_scatter_xy_recognised(tmp_path):
 
 def test_fft_scatter_yz_recognised(tmp_path):
     _build_and_assert("qe_pencil_probe::run_fft_scatter_yz", "Alltoall", tmp_path)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

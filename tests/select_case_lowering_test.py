@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_select_case_point_in_inlined_callee(tmp_path: Path):
@@ -85,3 +85,9 @@ end subroutine main
     assert a[3] == 6
     assert a[4] == 5
     assert a[5] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

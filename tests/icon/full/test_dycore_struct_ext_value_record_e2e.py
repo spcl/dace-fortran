@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 import dace
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
@@ -224,3 +224,9 @@ def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
     np.testing.assert_array_equal(out_sdfg, out_ref)
     np.testing.assert_array_equal(v1_sdfg, v1_ref)
     np.testing.assert_array_equal(v2_sdfg, v2_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

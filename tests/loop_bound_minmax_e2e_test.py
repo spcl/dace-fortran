@@ -12,7 +12,7 @@ against the original Fortran on random input (same harness as the ICON-O ocean k
 
 import pytest
 
-from icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 
 pytestmark = pytest.mark.long
 
@@ -42,3 +42,7 @@ def test_minmax_array_element_loop_bound_e2e(tmp_path):
     r = run_kernel_e2e(src, "lib::min_bound_loop", n=6, seed=3, scalar_overrides={"i": 2, "j": 3, "k": 4, "l": 5})
     assert r["passed"], f"build/run failed:\n{r['output'][-3000:]}"
     assert r["max_diff"] == 0.0, f"SDFG binding diverged from the Fortran reference, max|d|={r['max_diff']:.3e}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

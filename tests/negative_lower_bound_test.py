@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_explicit_negative_lower_bound(tmp_path: Path):
@@ -469,3 +469,9 @@ end module param_bound_mod
     out = np.zeros(3, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out)
     np.testing.assert_array_equal(out, [-800, 0, 500])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

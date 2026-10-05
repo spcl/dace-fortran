@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_count_full_array_comparison(tmp_path: Path):
@@ -72,3 +72,9 @@ END SUBROUTINE main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
     assert sdfg is not None
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

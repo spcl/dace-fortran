@@ -30,7 +30,7 @@ from pathlib import Path
 
 
 import dace_fortran
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "ast_v1_vexx_bp_k_gpu.f90"
@@ -307,7 +307,7 @@ def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
 
     import numpy as np
 
-    from _util import build_sdfg
+    from tests._util import build_sdfg
     from dace_fortran.bindings.build_fortran_library import build_fortran_library
     from dace_fortran.bindings.flatten_plan import FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
@@ -357,3 +357,9 @@ def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
     fn(lda, n, m, npol, max_ibands, psi_dace.ctypes.data, hpsi_dace.ctypes.data)
 
     np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -8,7 +8,7 @@ matches a gfortran/f2py reference numerically.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -226,3 +226,9 @@ end module caller_mod
     caller_sdfg(s_u=u_sdfg, s_v=v_sdfg)
     np.testing.assert_allclose(u_sdfg, expected, rtol=0, atol=0)
     np.testing.assert_allclose(v_sdfg, v, rtol=0, atol=0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

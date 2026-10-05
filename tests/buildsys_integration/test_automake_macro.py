@@ -139,3 +139,9 @@ def test_make_is_incremental_on_unchanged_source(tmp_path):
     subprocess.check_call(["make"], cwd=str(proj), stdout=subprocess.DEVNULL)
     mtime2 = out.stat().st_mtime
     assert mtime1 == mtime2, f"unchanged source was re-preprocessed; mtime1={mtime1} mtime2={mtime2}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

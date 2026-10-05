@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_vector_gather(tmp_path: Path):
@@ -121,3 +121,9 @@ END SUBROUTINE csr_spmv_kernel
     sdfg(values=values, col_idx=col_idx, row_ptr=row_ptr, x=x, y=y, n=3, nnz=5)
 
     np.testing.assert_array_equal(y, [1.0 * 1.0 + 2.0 * 3.0, 3.0 * 2.0, 4.0 * 3.0 + 5.0 * 4.0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

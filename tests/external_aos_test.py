@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -816,3 +816,7 @@ def test_marshal_scalar_symbol_member_forwarded_by_value(tmp_path):
         assert decl_args[0] == "int", f"first arg (symbol member n) should be scalar int, got {decl_args}"
     finally:
         clear_external_registry()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

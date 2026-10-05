@@ -128,3 +128,9 @@ def test_cmake_rebuilds_when_input_source_changes(tmp_path):
     subprocess.check_call(["cmake", "--build", str(proj / "build")], stdout=subprocess.DEVNULL)
     mtime2 = out.stat().st_mtime
     assert mtime2 > mtime1, f"expected rebuild after input change; mtime1={mtime1} mtime2={mtime2}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

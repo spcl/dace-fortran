@@ -40,7 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
+from tests._util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -939,3 +939,9 @@ def test_icon_loopnest6_f90_bindings_e2e(tmp_path: Path):
     lm_ref = _call(ref_lib, "run_ln6_ref")
     assert lm_ref.any(), "reference produced an all-false mask"
     np.testing.assert_array_equal(lm_sdfg.astype(bool), lm_ref.astype(bool))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

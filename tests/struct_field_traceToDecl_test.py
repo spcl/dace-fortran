@@ -14,7 +14,7 @@ resolution but hit a separate, clean "not registered as SDFG data" gap downstrea
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_dummy_arg_struct_field_used_as_matmul_input(tmp_path):
@@ -44,3 +44,9 @@ end module
     res = np.zeros(3, dtype=np.float64, order="F")
     sdfg(vcut_a=A, vcut_cutoff=np.zeros((1,), dtype=np.float64, order="F"), q=q, res=res)
     np.testing.assert_allclose(res, A.T @ q)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

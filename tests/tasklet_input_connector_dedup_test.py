@@ -9,7 +9,7 @@ import numpy as np
 
 from dace.sdfg import nodes as nd
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _tasklet_for(sdfg, code_fragment: str):
@@ -70,3 +70,9 @@ def test_no_dedup_when_index_differs(tmp_path):
     # a[i-1] + a[5-i-1+1-1=5-i-1] = a[i-1] + a[5-i]
     expected = np.array([a[i] + a[4 - i] for i in range(5)], dtype=np.float64)
     assert np.allclose(b, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

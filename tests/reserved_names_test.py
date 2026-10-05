@@ -11,7 +11,7 @@ from pathlib import Path
 from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _build(src: str, tmp: Path, name: str = "main", entry: str | None = None):
@@ -73,7 +73,7 @@ subroutine main(d)
   d(2) = test(2)
 end subroutine main
 """
-    from _util import build_sdfg as _bs
+    from tests._util import build_sdfg as _bs
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +97,7 @@ subroutine main(d, test)
   d(2) = test(2)
 end subroutine main
 """
-    from _util import build_sdfg as _bs
+    from tests._util import build_sdfg as _bs
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -166,3 +166,9 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
     # Wrapper exposes the original ``test`` to the caller; renamed ``program_test`` is the bind(C) param to the SDFG.
     assert "test" in text
     assert "program_test" in text
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

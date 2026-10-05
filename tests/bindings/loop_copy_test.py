@@ -227,3 +227,7 @@ def test_kind_convert_recipe_rendering():
     out_lines = render_copy_out_loop(recipe, outer_expr="st%x")
     assert "st_x_d(i1) = real(st%x(i1), kind=c_double)" in "\n".join(in_lines)
     assert "st%x(i1) = real(st_x_d(i1), kind=c_float)" in "\n".join(out_lines)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

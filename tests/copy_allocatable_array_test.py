@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_copy_normal_into_allocatable_1d(tmp_path: Path):
@@ -132,3 +132,9 @@ end subroutine main
     out = np.zeros((m, n), dtype=np.float64, order="F")
     sdfg(m=m, n=n, src=src_a, out=out)
     np.testing.assert_array_equal(out, src_a)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

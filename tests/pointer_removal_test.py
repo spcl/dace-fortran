@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_ptr_assignment_removal(tmp_path):
@@ -124,3 +124,9 @@ END SUBROUTINE type_in_call_test_function
     assert a[0, 0] == 42
     assert a[1, 0] == 11
     assert a[2, 0] == 42
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

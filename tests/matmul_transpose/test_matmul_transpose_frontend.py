@@ -7,13 +7,11 @@ surfaced libcall miss until a dedicated lowering lands.
 """
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _build(probe_name: str, entry: str, tmp_path):
@@ -71,3 +69,9 @@ def test_matmul_both_transposed(tmp_path):
     assert mm_nodes[0].transA is True and mm_nodes[0].transB is True, (
         f"MatMul should have transA=True transB=True, got transA={mm_nodes[0].transA} transB={mm_nodes[0].transB}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

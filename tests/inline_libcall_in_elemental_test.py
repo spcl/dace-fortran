@@ -14,7 +14,7 @@ maxval/any/all with DIM (goes through buildSectionReduceAssign, not the libcall 
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_inline_matmul_transpose_in_elemental_division(tmp_path):
@@ -59,3 +59,9 @@ end module
     sdfg(arr=arr, res=res)
     expected = 2.0 - np.roll(arr, -1)
     np.testing.assert_allclose(res, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

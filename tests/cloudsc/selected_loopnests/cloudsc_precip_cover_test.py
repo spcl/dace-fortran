@@ -9,8 +9,8 @@ so ``ZA(JL, JK-1)`` reads carry across JKs.  E2e against an f2py-compiled refere
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_fortran_frontend_cloudsc_precip_cover(tmp_path):
@@ -139,3 +139,9 @@ END MODULE kernel_mod
     np.testing.assert_allclose(zcovpmax, zcovpmax_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zraincld, zraincld_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(zsnowcld, zsnowcld_r, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

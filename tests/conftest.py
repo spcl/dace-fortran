@@ -1,10 +1,8 @@
-"""Puts the HLFIR test dir on sys.path (``from _util import ...``) and isolates DaCe's build cache per pytest-xdist worker so parallel runs don't race on shared ``.dacecache/<sdfg_name>/build`` (most tests reuse SDFG name ``main``)."""
+"""Isolates DaCe's build cache per pytest-xdist worker so parallel runs don't race on shared ``.dacecache/<sdfg_name>/build`` (most tests reuse SDFG name ``main``)."""
 
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # hwloc's GL/X11 probe (run during MPI_Init, before any mpi4py import) hangs forever on
 # GNOME-on-Wayland: gnome-shell's abstract X11 socket accepts the connection but never
@@ -79,7 +77,7 @@ from dace_fortran.external import clear_external_registry
 # that compiled the offending TU hundreds of times without ever reading a warning.
 from dace.sdfg import SDFG
 
-from codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
+from tests.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
 
 compile_without_check = SDFG.compile
 
@@ -161,7 +159,7 @@ def icon_build():
         pytest.skip(
             "icon-model submodule not checked out (run `git submodule update --init tests/icon/full/icon-model`)"
         )
-    from icon.full._icon_build import ensure_icon_built, default_build_dir
+    from tests.icon.full._icon_build import ensure_icon_built, default_build_dir
 
     # builds into TMP by default (no repo-tree pollution); ICON_BUILD overrides to a persistent location
     icon_build_dir = default_build_dir()

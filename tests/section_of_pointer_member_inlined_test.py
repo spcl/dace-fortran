@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # Two inlining levels are essential: mid takes the whole 3-D member and passes a per-block 2-D
@@ -89,3 +89,9 @@ def test_section_of_3d_pointer_member_inlined(tmp_path: Path):
 
     expected = gc[:, 0, :] * 10.0 + gc[:, 1, :]
     np.testing.assert_allclose(out, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

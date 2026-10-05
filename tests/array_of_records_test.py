@@ -7,7 +7,7 @@ L1 static scalar member, L2 static array member, L3 pointer scalar, L4 pointer +
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # L1: static AoR, scalar member
@@ -169,3 +169,9 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_box" in sdfg.arrays
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

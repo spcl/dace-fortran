@@ -37,3 +37,7 @@ def test_lu_single_file_builds(tmp_path):
     assert any(k in sdfg_text for k in _LU_KERNELS), (
         f"built SDFG does not reference any of {_LU_KERNELS}; the single-file build likely dropped lu.F90's body."
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

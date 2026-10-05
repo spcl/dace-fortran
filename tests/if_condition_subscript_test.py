@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _IF_OR_SRC = """
@@ -58,3 +58,9 @@ def test_if_condition_with_array_subscripts(tmp_path: Path):
     out = np.zeros(n, dtype=np.float64, order="F")
     sdfg(mask=mask, out=out, n=n, i=0)
     np.testing.assert_array_equal(out, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

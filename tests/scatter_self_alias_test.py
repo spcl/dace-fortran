@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_scatter_self_alias_rotate(tmp_path: Path):
@@ -57,3 +57,9 @@ end subroutine rev
     expected[idx_w - 1] = a[idx_r - 1]  # -> [40, 30, 20, 10]
     sdfg(a=a, idx_w=idx_w, idx_r=idx_r)
     np.testing.assert_allclose(a, expected, rtol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

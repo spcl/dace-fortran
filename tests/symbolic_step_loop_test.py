@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile, flang_binary, flang_intrinsic_modules_path
+from tests._util import build_sdfg, f2py_compile, flang_binary, flang_intrinsic_modules_path
 
 
 def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, mod_name: str = "kern"):
@@ -194,3 +194,9 @@ end subroutine kernel
     step_exprs = [n.loop_step_expr for n in loop_nodes if n.loop_step_expr]
     assert step_exprs, f"no loop carries loop_step_expr; loops: {[n.loop_step for n in loop_nodes]}"
     assert any("batch" in s for s in step_exprs), f"step expression should mention 'batch', got {step_exprs}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

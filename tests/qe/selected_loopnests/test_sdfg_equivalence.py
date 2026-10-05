@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _LOOPNESTS_DIR = Path(__file__).parent
@@ -162,3 +162,9 @@ def test_e5_usxx_phase(tmp_path: Path):
     eigqts_ref = mod.kernel(xk, xkq, tau)
     sdfg(nat=nat, xk=xk, xkq=xkq, tau=tau, eigqts=eigqts_sdfg)
     np.testing.assert_allclose(eigqts_sdfg, eigqts_ref, rtol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

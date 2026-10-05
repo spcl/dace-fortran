@@ -662,3 +662,7 @@ end subroutine run
     tdef = re.search(r"EXTENDS\(t_lhs_base\) :: t_lhs\b.*?END TYPE t_lhs\b", out, re.S)
     assert tdef and "GRID" in tdef.group(0).upper(), f"pointer component pruned from t_lhs:\n{out}"
     assert _compiles(out)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

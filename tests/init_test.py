@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_init(tmp_path):
@@ -67,3 +67,9 @@ end subroutine main
     a = np.full([4], 42, order="F", dtype=np.float64)
     sdfg(d=a)
     assert np.allclose(a, [42, 5.674532920122147, 42, 42])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

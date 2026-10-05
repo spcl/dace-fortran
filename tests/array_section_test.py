@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -75,3 +75,7 @@ def test_section_assign_numerical(tmp_path: Path, a, b, expected):
     res = np.zeros(6, dtype=np.int32)
     sdfg(res=res, a=a, b=b)
     assert res.tolist() == expected, f"res({a}:{b}) = 42 -> {res.tolist()}, expected {expected}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -41,3 +41,9 @@ def test_fft_probe_3d_lowers_to_lib_node(tmp_path):
     """3-D FFTW3 in-place FFT lowers to a single :class:`FFT` lib node."""
     src = _SRC.read_text()
     _build_and_assert_fft(src, "fft_probe::run_fft_3d", "run_fft_3d", tmp_path / "sdfg_3d")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

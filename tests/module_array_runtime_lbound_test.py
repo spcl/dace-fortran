@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # Minimal QE eigts shape: deferred-shape module allocatable, caller allocates
@@ -134,3 +134,9 @@ def test_static_negative_lbound_module_array(tmp_path: Path):
         kw["offset_arr_d0"] = np.int64(-3)
     sdfg(**kw)
     assert out[0] == -20, f"static module-array lbound broken too: {out[0]}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

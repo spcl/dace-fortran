@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_realloc_size_change(tmp_path: Path):
@@ -69,3 +69,9 @@ end subroutine main
     out = np.zeros(n, dtype=np.float64, order="F")
     sdfg(n=n, src1=src1, src2=src2, out=out)
     np.testing.assert_array_equal(out, src2)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

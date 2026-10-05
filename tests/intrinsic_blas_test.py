@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_dot(tmp_path):
@@ -205,3 +205,9 @@ end subroutine main
 
     x = np.matmul(arg1, arg2)
     assert np.all([2.0 - val for val in x] == res1)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

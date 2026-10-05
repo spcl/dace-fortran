@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from icon.full._solve_nh_min_types import MIN_STATE_TYPES_F90
+from tests.icon.full._solve_nh_min_types import MIN_STATE_TYPES_F90
 
 
 _HERE = Path(__file__).resolve().parent
@@ -246,3 +246,7 @@ def test_solve_nh_diff_frees_cleanly(diff_exe: Path):
     assert run.returncode == 0 and "PASS" in run.stdout, (
         f"driver leaked or corrupted memory under valgrind:\nstdout={run.stdout}\nstderr={run.stderr}"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

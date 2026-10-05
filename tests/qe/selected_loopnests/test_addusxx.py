@@ -31,8 +31,8 @@ rewritten as an integer enum (``ityp == nt``) at port time.
 import numpy as np
 import pytest
 
-from _prng import complex_stream
-from _util import build_sdfg
+from tests._prng import complex_stream
+from tests._util import build_sdfg
 
 
 # Small symbolic problem sizes -- a correctness test, not a benchmark.
@@ -334,3 +334,7 @@ def test_addusxx_soa(tmp_path, indir):
     )
     np.testing.assert_allclose(rhoc_re, ref.real, rtol=1e-11, atol=1e-12)
     np.testing.assert_allclose(rhoc_im, ref.imag, rtol=1e-11, atol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

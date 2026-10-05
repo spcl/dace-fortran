@@ -8,7 +8,7 @@ analogue of ``mpi_wait`` -> ``Wait``. Lowering test only; no ranks required.
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 #: nonblocking exchange, two requests in an array, completed by one MPI_Waitall -- the ICON
@@ -43,3 +43,9 @@ def test_mpi_waitall_lowers_to_waitall_libnode(tmp_path: Path):
     assert mpi == ["CommF2c", "Irecv", "Isend", "Waitall"], (
         f"expected CommF2c/Irecv/Isend/Waitall MPI libnodes, got {mpi}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

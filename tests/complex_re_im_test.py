@@ -8,7 +8,7 @@ COMPLEX dtype on the SDFG signature rather than splitting into ``_re``/``_im``.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ===========================================================================
@@ -261,3 +261,9 @@ END MODULE
     sums = np.zeros(1, dtype=np.float64)
     sdfg(z=z, sums=sums, n=np.int32(3))
     assert sums[0] == 12.0  # 2 + 4 + 6
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

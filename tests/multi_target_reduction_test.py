@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_minval_two_targets(tmp_path: Path):
@@ -83,3 +83,9 @@ end subroutine main
     res = np.zeros(2, dtype=np.float64)
     sdfg(d=d, res=res)
     np.testing.assert_array_equal(res, [d.min(), d.max()])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

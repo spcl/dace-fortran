@@ -285,3 +285,9 @@ def test_ocean_diff_deepcopy_and_compare(tmp_path: Path):
     assert run.returncode == 0 and "PASS" in run.stdout, (
         f"differential helper driver failed:\nstdout={run.stdout}\nstderr={run.stderr}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

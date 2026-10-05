@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_read_then_writeback_no_cycle(tmp_path: Path):
@@ -96,3 +96,9 @@ end subroutine kernel
     state = np.array([0.25], dtype=np.float64)
     sdfg(state=state, x=x, n=n)
     assert state[0] == max(0.25, x.max())
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

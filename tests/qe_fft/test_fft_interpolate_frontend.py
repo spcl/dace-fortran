@@ -33,3 +33,9 @@ def test_fft_interpolate_complex_recognised(tmp_path):
 
 def test_fft_interpolate_real_recognised(tmp_path):
     _build_and_assert("fft_interpolate_probe::run_fft_interpolate_real", "real", tmp_path)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

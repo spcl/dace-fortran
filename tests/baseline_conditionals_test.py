@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str):
@@ -82,3 +82,9 @@ end subroutine ifcyc
     d_sdfg = np.full(4, 42.0, dtype=np.float64)
     sdfg(d=d_sdfg)
     np.testing.assert_allclose(d_sdfg, d_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

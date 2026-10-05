@@ -11,7 +11,7 @@ shape symbol).
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_size_on_explicit_shape_array_folds_to_constant(tmp_path):
@@ -91,3 +91,9 @@ end module m
     arr = np.full((5,), -1.0, dtype=np.float64, order="F")
     sdfg(arr=arr)
     np.testing.assert_array_equal(arr, np.array([3.0, 6.0, 9.0, 12.0, 15.0]))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

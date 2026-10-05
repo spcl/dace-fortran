@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -81,3 +81,9 @@ def test_copy_and_memset_structure(tmp_path):
     memsets = [n for n in nodes if isinstance(n, FillLibraryNode)]
     assert len(copies) == 1, f"expected 1 CopyLibraryNode, got {len(copies)}"
     assert len(memsets) == 1, f"expected 1 FillLibraryNode, got {len(memsets)}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

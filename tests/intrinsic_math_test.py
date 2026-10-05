@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_min_max(tmp_path):
@@ -697,3 +697,9 @@ END SUBROUTINE intrinsic_math_test_exp2_function
 
     for f_res, p_res in zip(res, py_res):
         assert abs(f_res - p_res) < 10**-9
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

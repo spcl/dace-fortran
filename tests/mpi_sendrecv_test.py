@@ -6,7 +6,7 @@ Flang lowers ``call MPI_Send(...)`` to an opaque fir.call; the bridge recognises
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # external MPI decls + parameter constants so the program needs no mpi.mod / MPI install to lower (bridge sees the same opaque fir.call either way).
@@ -180,3 +180,9 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
     assert len(codes) == 1, f"expected 1 Send tasklet, got {len(codes)}"
     assert "_comm" in codes[0], f"user-comm Send must use ``_comm``: {codes[0]!r}"
     assert "MPI_COMM_WORLD" not in codes[0], f"user-comm Send must NOT fall back to MPI_COMM_WORLD: {codes[0]!r}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

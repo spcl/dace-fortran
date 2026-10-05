@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
@@ -165,3 +165,9 @@ def test_optional_present_and_absent_match_reference(tmp_path: Path):
     out_a = np.zeros(1, dtype=np.float64)
     sdfg(a=np.ascontiguousarray(a), out=out_a, scale=scale, scale_present=0)
     np.testing.assert_allclose(out_a[0], 7.0, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

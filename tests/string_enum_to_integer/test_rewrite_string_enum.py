@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import rewrite_string_enum_to_integer
 
 _HERE = Path(__file__).resolve().parent
@@ -203,3 +203,7 @@ def test_rewritten_probe_parses_under_flang(probe, tmp_path):
         cwd=tmp_path,
     )
     assert (tmp_path / "k.hlfir").exists()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -10,7 +10,7 @@ assert via np.isnan/np.isinf + sign rather than equality."""
 import math
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +209,9 @@ END MODULE
     sdfg(s_y=s_y, out=out, i=np.int32(4), n=np.int32(5))
     np.testing.assert_array_equal(out[:5], [1.0, 2.0, 3.0, 4.0, 5.0])
     np.testing.assert_array_equal(out[5:], 0.0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

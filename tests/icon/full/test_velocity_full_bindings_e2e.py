@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
-from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
+from tests._util import build_sdfg
+from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.bindings import (
@@ -287,3 +287,7 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
             replay = {k: v.copy(order="F") for k, v in pristine.items()}
             z_replay = [np.zeros(s, dtype=np.float64, order="F") for s in zshape]
             _run(lib_, sym, dims, replay, z_replay)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

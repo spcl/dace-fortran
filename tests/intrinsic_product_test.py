@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_product_array(tmp_path):
@@ -81,3 +81,9 @@ END SUBROUTINE intrinsic_product_2d_test_function
     assert res[1] == np.prod(d)
     assert res[2] == np.prod(d[1:4, 1])
     assert res[3] == np.prod(d[1:4, 1:3])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

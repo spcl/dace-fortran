@@ -11,7 +11,7 @@ memlet for QE's ``IF (ALL(odg(:)))``).
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _libnode_names(sdfg):
@@ -92,3 +92,7 @@ END MODULE s_mod
     a = np.asarray(x, dtype=np.float64, order="F")
     sdfg(a=a, res=res)
     assert int(res[0]) == expected
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

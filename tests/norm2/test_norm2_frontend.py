@@ -1,13 +1,11 @@
 """Fortran NORM2 lowers to a single dace.libraries.standard.nodes.norm2.Norm2 lib node."""
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def test_norm2_whole_array_recognised(tmp_path):
@@ -20,3 +18,9 @@ def test_norm2_whole_array_recognised(tmp_path):
     nodes = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Norm2"]
     assert len(nodes) == 1, f"expected one Norm2 lib node, got {len(nodes)}"
     assert nodes[0].dim is None
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

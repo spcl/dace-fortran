@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
-from icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
+from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 
 _ATMO = Path(__file__).resolve().parents[1] / "icon" / "atmosphere"
 
@@ -84,3 +84,7 @@ def test_velocity_tendencies_pipeline_numerical_e2e(monkeypatch, tu_name, loop_e
     # and forms maps but never reassociates arithmetic, and the flags pin FMA contraction off. With
     # both legs at exactly 0.0 against one reference, pre and post are bit-identical to each other.
     assert opt["max_diff"] == 0.0, f"pipeline changed the numerics, max|d|={opt['max_diff']:.3e} (must be 0)"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

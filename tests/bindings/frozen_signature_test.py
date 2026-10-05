@@ -349,3 +349,7 @@ def test_drift_detection_extra_free_symbol():
     fs = _demo_signature()
     with pytest.raises(SignatureDriftError):
         fs.verify_against(sdfg)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.inliner.ast_desugaring import cleanup
-from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 # A type-bound (elemental) function inherited via EXTENDS, called through a component
 # (``self % trans % gid(i)``), is syntactically indistinguishable from array-component access

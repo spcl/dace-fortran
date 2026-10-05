@@ -29,3 +29,9 @@ def test_qe_fwfft_recognised(tmp_path):
 def test_qe_invfft_recognised(tmp_path):
     """``invfft_y`` call site lowers to an :class:`IFFT` lib node."""
     _build_and_assert("qe_fft_probe::run_invfft", "IFFT", tmp_path)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _run(src: str, entry: str, tmp_path: Path, **arrays):
@@ -141,3 +141,9 @@ end subroutine haz_if
     s, r = _run(src, "haz_if", tmp_path, a=a, b=b, f=np.full(8, 10.0), cv=np.zeros(8))
     np.testing.assert_array_equal(s["cv"], r["cv"])
     np.testing.assert_array_equal(s["f"], r["f"])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -12,7 +12,7 @@ but NOT marked ``constant``; the bridge extracts that data like a parameter arra
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_readonly_data_array_is_constexpr(tmp_path):
@@ -123,3 +123,9 @@ end module m
         y = np.zeros(1, dtype=np.float32)
         sdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
         np.testing.assert_allclose(y[0], exp, rtol=1e-6, err_msg=f"a({ii},{jj})")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

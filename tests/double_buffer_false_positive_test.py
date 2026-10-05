@@ -9,7 +9,7 @@ runtime args, computed expressions, or constants. Positive cases live in
 ``tests/icon/dycore/test_solve_nonhydro_parse.py`` must keep passing.
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_no_split_for_runtime_arg_index(tmp_path):
@@ -200,3 +200,9 @@ end module
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_mod_" in k or "_i_" in k]
     assert not bad_names, f"false-positive computed-expr-baked names: {bad_names}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

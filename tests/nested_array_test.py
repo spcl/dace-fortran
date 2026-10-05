@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_nested_array_access(tmp_path):
@@ -84,3 +84,9 @@ end subroutine main
     # exprs reference them outside any shape-binding context) -- pass explicitly.
     sdfg(d=d, program_test=test, indices=indices, indices_d0=3, indices_d1=4, test_d0=3, test_d1=4)
     assert np.allclose(d, [42, 5.5, 42, 42])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

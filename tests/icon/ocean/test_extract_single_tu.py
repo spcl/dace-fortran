@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from icon.ocean._ocean_harness import (
+from tests.icon.ocean._ocean_harness import (
     KERNELS,
     SINGLE_TU_ARTIFACTS,
     extract_single_tu,
@@ -53,3 +53,7 @@ def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filena
     assert Path(res["tu_path"]).read_text() == committed.read_text(), (
         f"{key}[{halo_mode}]: extracted TU drifted from committed {committed.name}; regenerate it"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -18,7 +18,7 @@ import pytest
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
-from icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, parse_program
+from tests.icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, parse_program
 
 pytestmark = pytest.mark.long
 
@@ -83,3 +83,7 @@ def test_artifact_is_fully_depolymorphised():
     upper = source.upper()
     assert "CLASS(T_TRANSFER)" not in upper
     assert "CLASS(T_LHS_AGEN)" not in upper
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

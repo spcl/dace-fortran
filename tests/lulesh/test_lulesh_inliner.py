@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.preprocess import MergeEngine, merge_used_modules
@@ -145,3 +145,7 @@ def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: MergeEngine):
     np.testing.assert_allclose(dvdx, dvdx_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(dvdy, dvdy_r, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(dvdz, dvdz_r, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

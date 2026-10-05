@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, run_passes_dump
+from tests._util import build_sdfg, run_passes_dump
 
 
 _HERE = Path(__file__).resolve().parent
@@ -402,3 +402,9 @@ def test_public_sibling_of_private_component_still_flattens(tmp_path):
     """Ordinary public members (``data``, unmangled) are never a gate candidate, unaffected."""
     names = _private_component_names(tmp_path)
     assert any("data" in n for n in names), f"public member must be unaffected by the gate; got {sorted(names)}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import flang_binary
+from tests._util import flang_binary
 
 from dace_fortran.builder import SDFGBuilder  # noqa: E402
 
@@ -127,3 +127,9 @@ def test_sdfg_matches_gfortran_reference(tmp_path: Path):
     sdfg(x=x_sdfg)
 
     np.testing.assert_array_equal(x_sdfg, x_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

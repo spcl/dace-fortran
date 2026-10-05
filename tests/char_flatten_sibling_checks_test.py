@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
@@ -185,7 +185,7 @@ def test_wrapper_call_omitting_the_dead_arm_computes(tmp_path: Path):
     'c' arm must still compute.  At 6c99810 this call returned ``y`` unchanged."""
     import ctypes
 
-    from _util import gfortran_compile_so
+    from tests._util import gfortran_compile_so
 
     sdfg = _build(tmp_path)
     compiled = sdfg.compile()
@@ -224,3 +224,9 @@ def test_dead_arm_absent_still_computes(tmp_path: Path):
     a_r = np.zeros(n)  # dead-arm dummy; zero-filled, never legitimately read
     sdfg(**_call_kwargs(sdfg, n, y, a_c, a_r, a_c_present=1, a_r_present=0))
     np.testing.assert_allclose(y, a_c, err_msg="kernel skipped the baked arm when the dead arm's optional was absent")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

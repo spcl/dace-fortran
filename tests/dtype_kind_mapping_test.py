@@ -12,7 +12,7 @@ Two rules that must hold globally (the binding/codegen depend on them):
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _dtypes(src: str, tmp_path: Path, entry: str) -> dict:
@@ -78,3 +78,9 @@ end subroutine kint
     assert d["a2"] == "int16_t"
     assert d["a4"] == "int"
     assert d["a8"] == "int64_t"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

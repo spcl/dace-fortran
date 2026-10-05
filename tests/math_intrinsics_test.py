@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_hyperbolic(tmp_path: Path):
@@ -101,3 +101,9 @@ end subroutine
     sdfg(a=-7.0, b=3.0, out=out)
     np.testing.assert_allclose(out[0], np.fmod(-7.0, 3.0), rtol=1e-12)
     np.testing.assert_allclose(out[1], -7.0 - 3.0 * np.floor(-7.0 / 3.0), rtol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

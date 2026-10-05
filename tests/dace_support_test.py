@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_simplify(tmp_path):
@@ -31,3 +31,9 @@ def test_fortran_frontend_simplify(tmp_path):
     assert a[0, 0] == 0
     assert a[0, 1] == 5
     assert a[1, 2] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

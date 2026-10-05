@@ -17,12 +17,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import f2py_compile
-from cloudsc.full._registries import (
+from tests._util import f2py_compile
+from tests.cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     program_outputs,
 )
-from cloudsc.full._harness import run_cloudsc
+from tests.cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
 
@@ -73,3 +73,7 @@ def test_cloudsc_full_numerical(tmp_path, _f2py_ref, _strict_fp_cpu_args):
             continue
         report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} (max |Δ|={np.abs(a - b)[bad].max():.3e})")
     assert not report, "cloudsc_full numerical mismatch:\n" + "\n".join(report)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -25,11 +25,16 @@ import pytest
 import dace
 from dace.config import Config
 
-from _util import build_sdfg, f2py_compile
-from cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
-from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs, parameters as CLOUDSC_PARAMS
-from cloudsc.full._registries import get_inputs_physical, get_outputs
-from cloudsc.variants._harness import SCALAR_TYPES, assert_species_parameters_baked, extract_variant_tu, mismatch_report
+from tests._util import build_sdfg, f2py_compile
+from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs, parameters as CLOUDSC_PARAMS
+from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
+from tests.cloudsc.variants._harness import (
+    SCALAR_TYPES,
+    assert_species_parameters_baked,
+    extract_variant_tu,
+    mismatch_report,
+)
 
 # dotted ``tests.corpus...`` would collide with this repo's own top-level ``tests`` package
 # (both define ``tests/__init__.py``; whichever binds sys.modules['tests'] first wins) -- load by path.

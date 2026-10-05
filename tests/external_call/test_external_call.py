@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.external import ExternalCall, apply_external_functions, clear_external_registry
 from dace_fortran.external_functions import ExternalFunction
 
@@ -105,3 +105,9 @@ def test_external_default_intent_is_inout(tmp_path: Path):
     expected = a + 1.0
     sdfg(a=a, n=n)
     np.testing.assert_allclose(a, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

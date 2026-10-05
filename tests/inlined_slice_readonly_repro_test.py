@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _SRC = """
@@ -148,3 +148,9 @@ def test_inlined_flux_accumulation_shifted_index(tmp_path: Path):
     sdfg(n=np.int32(n), lev=np.int32(lev), nb=np.int32(nb), plude=p_sdfg, pfsqlf=f_sdfg)
 
     np.testing.assert_allclose(f_sdfg, f_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

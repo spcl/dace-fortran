@@ -8,7 +8,7 @@ rank.  Pins that rank-2 writes land at the right offsets.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """\
@@ -59,3 +59,9 @@ def test_assumed_rank_dispatches_to_rank2_branch(tmp_path):
             expected[i - 1, j - 1] = i + 10 * j
 
     np.testing.assert_array_equal(arr_sdfg, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

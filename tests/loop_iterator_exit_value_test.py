@@ -10,8 +10,8 @@ an f2py-compiled reference.
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def _run(tmp_path, name: str, src: str, *, expected: int, n: int):
@@ -90,3 +90,9 @@ END SUBROUTINE driver
 END MODULE kernel_mod
 """
     _run(tmp_path, name="loop_exit_strided", src=src, expected=11, n=10)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

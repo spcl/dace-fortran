@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_one_minus_transpose(tmp_path: Path):
@@ -45,3 +45,9 @@ end subroutine main
     res = np.zeros((5, 7), order="F", dtype=np.float64)
     sdfg(a=a, b=b, res=res)
     np.testing.assert_array_equal(res, 2.0 - a @ b)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

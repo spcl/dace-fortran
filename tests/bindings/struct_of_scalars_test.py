@@ -5,7 +5,7 @@ upstream cloudsc's derived-type bundles directly, without manual ASSOCIATE flatt
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import FlattenPlan
 
 
@@ -102,3 +102,9 @@ def test_dt_of_scalar_constants_numerical(tmp_path):
         out=out_sdfg,
     )
     np.testing.assert_array_equal(out_sdfg, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

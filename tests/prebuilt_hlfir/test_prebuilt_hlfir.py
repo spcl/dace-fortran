@@ -61,3 +61,9 @@ def test_csr_spmv_cmake(tmp_path: Path):
     )
     sdfg.validate()
     _assert_inlined(sdfg, "dot_row")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

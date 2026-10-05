@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, entry: str):
@@ -368,3 +368,9 @@ end module mod_kern_c
     sdfg(x=x, y=y_sdfg, tmpval=tmpval)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
     np.testing.assert_allclose(tmpval, [7.0], rtol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

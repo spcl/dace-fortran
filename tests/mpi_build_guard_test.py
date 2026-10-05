@@ -18,7 +18,7 @@ CI step times out.
 
 import pytest
 
-from _util import build_on_root
+from tests._util import build_on_root
 
 pytestmark = pytest.mark.mpi
 
@@ -64,3 +64,7 @@ def test_build_on_root_no_broadcast_returns_root_only():
 
     with pytest.raises(RuntimeError, match="all ranks abort"):
         build_on_root(comm, lambda: 1 / 0, broadcast=False)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

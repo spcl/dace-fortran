@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import have_flang
+from tests._util import have_flang
 from dace_fortran.flang_codebase import find_openmpi_include
 
 from ._fc import (
@@ -498,3 +498,7 @@ def test_sync_iso_c_wrapper_pins_bind_c_signatures():
     # ICON-side imports the wrapper depends on.
     for use in ("USE mo_sync", "USE mo_model_domain", "USE mo_kind"):
         assert use in src, f"wrapper missing {use!r}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

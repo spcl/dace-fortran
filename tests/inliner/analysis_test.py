@@ -2,7 +2,7 @@
 """Ported from upstream tests/fortran/desugaring/analysis_test.py."""
 
 from dace_fortran.inliner.ast_desugaring import analysis
-from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 
 def test_spec_mapping_of_abstract_interface():
@@ -115,3 +115,9 @@ end module lib
         ("lib", "fun"),
         ("lib", "real_fun"),
     }
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

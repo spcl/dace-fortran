@@ -12,7 +12,7 @@ binding end-to-end.
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import (
     Member,
@@ -183,3 +183,9 @@ end module kern_fld_mod
         Member(name="a", fortran_type="real(c_double)", rank=2, shape=("4", "5")),
         Member(name="tag", fortran_type="integer(c_int)", rank=1, shape=("4",)),
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

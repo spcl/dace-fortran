@@ -14,7 +14,7 @@ import pytest
 import dace
 from dace.codegen.exceptions import CompilationError
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_complex_init(tmp_path):
@@ -105,3 +105,7 @@ end subroutine main
     c = np.zeros(2, order="F", dtype=np.complex64)
     with pytest.raises(CompilationError):
         sdfg(c=c)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

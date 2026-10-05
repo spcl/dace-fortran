@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 SRC = """
@@ -69,3 +69,9 @@ def test_loop_variant_element_extent_mutated_source(tmp_path: Path):
     mod.vps_mod.vps(sz_r, a, out_r)
     np.testing.assert_array_equal(out_s, out_r)
     np.testing.assert_array_equal(sz_s, sz_r)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

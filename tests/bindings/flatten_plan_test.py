@@ -118,3 +118,7 @@ def test_empty_plan_roundtrip(tmp_path: Path):
     p = tmp_path / "plan.json"
     plan.to_json(str(p))
     assert FlattenPlan.from_json(str(p)) == plan
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

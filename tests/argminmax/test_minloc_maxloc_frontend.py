@@ -8,13 +8,11 @@ itself is covered in d-face's ``tests/library/argminmax_test.py``.
 """
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _build(probe_name: str, entry: str, tmp_path):
@@ -85,3 +83,9 @@ def test_minloc_back_recognised(tmp_path):
     nodes = _find_lib_nodes(sdfg, "ArgMin")
     assert len(nodes) == 1
     assert nodes[0].back is True
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

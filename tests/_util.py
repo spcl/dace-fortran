@@ -154,7 +154,7 @@ def f2py_compile(
     # meson backend (py>=3.12) ignores --f90flags, reads FFLAGS instead; lift line-length cap for f2py's long generated signature.
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
     # retries on transient ENOMEM; rebuilds under a fresh name if `only` routine is missing (crackfortran flake under -n auto)
-    from _helpers import f2py_build_and_import
+    from tests._helpers import f2py_build_and_import
 
     return f2py_build_and_import(
         src_file, out_dir=out_dir, mod_name=mod_name, only=only, extra_args=extra_args, env=env

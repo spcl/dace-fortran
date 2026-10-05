@@ -85,3 +85,9 @@ def test_cpp_wrapped_module_merges_and_builds(tmp_path: Path):
     sdfg(k=np.int32(k), out=out)
     ref = np.array([2 * k + i for i in range(1, 5)], dtype=np.float64)
     np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

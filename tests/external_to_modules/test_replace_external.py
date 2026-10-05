@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import replace_external_with_modules
 
 _HERE = Path(__file__).resolve().parent
@@ -178,3 +178,9 @@ def test_rewritten_basic_example_parses_under_flang(tmp_path):
         cwd=tmp_path,
     )
     assert (tmp_path / "kernel.hlfir").exists()
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

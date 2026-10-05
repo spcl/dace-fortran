@@ -8,7 +8,7 @@ dynamic-shape/descriptor-marshal case is covered separately by external_aos_test
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_dbuf_split_simple(tmp_path):
@@ -730,3 +730,7 @@ end subroutine
     # istep-2 branch fires when ndyn(jg)==kmatch: closed form is prog(nnow)+prog(nvar), +100 if fired.
     expected = w_now + w_new + (100.0 if fires else 0.0)
     np.testing.assert_array_equal(out_sdfg, expected)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

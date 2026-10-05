@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_struct(tmp_path):
@@ -88,3 +88,9 @@ end subroutine fun
     res = np.full([size], 42, order="F", dtype=np.int32)
     res[:] = 0
     sdfg(res=res, start=2, end=5)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, entry: str = "main"):
@@ -764,3 +764,9 @@ end subroutine main
     np.testing.assert_array_equal(out, ref)
     # Only column 3 (flat slots 8..11) gets +1000.
     assert list(out[8:12]) == [1031, 1032, 1033, 1034]
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

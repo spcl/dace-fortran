@@ -5,7 +5,7 @@ Was broken: materialiseElementalToTransient's walk of the SQRT elemental hit hlf
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_minval_of_sqrt_of_sum_dim(tmp_path):
@@ -64,3 +64,9 @@ end module
     out = np.zeros((1,), dtype=np.float64, order="F")
     sdfg(a=a, out=out)
     np.testing.assert_allclose(out[0], np.sum(np.log(np.sum(a, axis=0) + 1.0)))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

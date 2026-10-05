@@ -27,3 +27,9 @@ def test_target_added_to_module_allocatables_only():
     assert "target :: alloc_arr" not in patched
     assert "pointer, target" not in patched
     assert ", target ::" not in patched.split("end type t_coeffs")[0]
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

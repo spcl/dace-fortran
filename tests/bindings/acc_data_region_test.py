@@ -192,3 +192,7 @@ def test_each_direction_reaches_the_emitted_wrapper(moved, expected):
     tail = splice_acc_staging(_blocks(), _ENTRY, plan)["wrapper_tail"]
     assert expected in tail
     assert render_host_data_open(plan, "  ")[0].endswith(f"USE_DEVICE({moved[0]})")
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

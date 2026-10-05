@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim, scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.build import make_builder
@@ -188,3 +188,7 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
             f"grid-dim member {member} must marshal as a materialised pointer (&_pv_{member}); the "
             f"inner shim declares it type(c_ptr), value and dereferences via c_f_pointer"
         )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

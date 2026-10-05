@@ -31,9 +31,9 @@ permutation that is legal on a correctly ordered graph and flips the result on a
 import numpy as np
 import pytest
 
-from _helpers import f2py
-from _util import build_sdfg
-from hazard_scan import scan
+from tests._helpers import f2py
+from tests._util import build_sdfg
+from tests.hazard_scan import scan
 
 
 HEAD = """
@@ -143,3 +143,7 @@ def test_matches_gfortran(tmp_path, shape):
         a_out, d_out = run_sdfg(sdfg, arrays)
         np.testing.assert_array_equal(a_out, a_ref, err_msg=f"{shape}/{variant}: a diverged from gfortran")
         np.testing.assert_array_equal(d_out, d_ref, err_msg=f"{shape}/{variant}: d diverged from gfortran")
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -111,3 +111,7 @@ def test_unsupported_program_carries_reason():
     # callers can detect + surface *why* a program was rejected.
     assert excinfo.value.reason == str(excinfo.value)
     assert "CLASS(*)" in excinfo.value.reason
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

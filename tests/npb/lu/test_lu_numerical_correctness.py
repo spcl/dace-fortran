@@ -179,3 +179,7 @@ def test_lu_numerical_correctness(tmp_path):
     sdfg = _build_sdfg(tmp_path)
     rsdnm_sdfg = _run_sdfg(sdfg)
     np.testing.assert_allclose(rsdnm_sdfg, rsdnm_ref, rtol=1e-10, atol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

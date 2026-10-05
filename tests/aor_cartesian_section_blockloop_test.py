@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # Two inlining levels needed: ``mid`` passes a per-block 2-D SECTION of the WHOLE
@@ -95,3 +95,9 @@ def test_aor_cartesian_section_blockloop_threads_block_index(tmp_path: Path):
 
     max_diff = float(np.abs(out - expected).max())
     assert max_diff == 0.0, f"AoR-section block-loop read not bit-exact: max_diff={max_diff}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

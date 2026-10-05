@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 from dace_fortran.external import (
     Arg,
@@ -224,3 +224,7 @@ def test_derived_node_matches_authored(tmp_path: Path):
         assert d_body == explicit.body
     finally:
         clear_external_registry()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

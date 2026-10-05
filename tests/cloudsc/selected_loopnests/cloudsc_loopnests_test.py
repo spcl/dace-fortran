@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _LOOPNESTS_DIR = Path(__file__).parent
@@ -448,3 +448,9 @@ def test_cloudsc_saturation_calculation_numerical(tmp_path: Path):
         np.testing.assert_allclose(
             out_sd[k], out_ref_arrays[k], rtol=1e-10, atol=1e-13, err_msg=f"output {k!r} differs"
         )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

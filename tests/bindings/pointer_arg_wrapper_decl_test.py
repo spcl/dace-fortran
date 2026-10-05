@@ -47,3 +47,9 @@ def test_pointer_outer_arg_declared_pointer_and_wrapper_compiles(tmp_path):
     assert "pointer :: v(:,:,:)" in wrapper, f"POINTER arg not declared 'pointer' in wrapper head:\n{wrapper}"
     assert "target :: v(:,:,:)" not in wrapper, "POINTER arg wrongly declared 'target' (associated() would not compile)"
     assert "merge(1, 0, associated(v))" in wrapper, f"expected an associated() presence fold in the wrapper:\n{wrapper}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

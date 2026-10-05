@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -80,3 +80,9 @@ def test_ddot_dynamic_slice_numerical(tmp_path):
     sdfg(a=a, s=s, e=e, b=b, n=n, r=r_sdfg)
 
     np.testing.assert_allclose(r_sdfg[0], r_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

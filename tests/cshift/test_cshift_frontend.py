@@ -4,13 +4,11 @@ dimension.  Tests stop at SDFG-build time -- the lib node's pure expansion stub
 (``NotImplementedError``) never runs."""
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _build(probe_name: str, entry: str, tmp_path):
@@ -99,3 +97,9 @@ def test_cshift_memlets_cover_full_arrays(tmp_path):
     o_desc = sdfg.arrays[memlets["_out"].data]
     assert sympy.simplify(memlets["_x"].subset.num_elements() - x_desc.total_size) == 0
     assert sympy.simplify(memlets["_out"].subset.num_elements() - o_desc.total_size) == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

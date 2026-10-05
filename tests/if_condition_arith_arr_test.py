@@ -9,8 +9,8 @@ double*).  E2e against an f2py-compiled reference.
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_fortran_frontend_if_arith_array_read(tmp_path):
@@ -48,3 +48,9 @@ END SUBROUTINE filter
     out = np.zeros((klon, klev), order="F", dtype=np.int32)
     sdfg(za=za, zlcond2=zlcond2, out=out, klon=klon, klev=klev)
     np.testing.assert_array_equal(out, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

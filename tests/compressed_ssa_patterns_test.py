@@ -8,8 +8,8 @@ f2py reference compiled from the same source (``feedback_e2e_numerical``).
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py, sdfg_call_args
+from tests._util import build_sdfg
+from tests._helpers import f2py, sdfg_call_args
 
 
 def _build_and_run(tmp_path, *, src: str, name: str, entry: str, int_args=None):
@@ -424,3 +424,9 @@ END SUBROUTINE max_neighbor
     out = np.zeros(n)
     sdfg(a=a, out=out, n=n)
     np.testing.assert_allclose(out, out_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

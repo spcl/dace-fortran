@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _f2py_ref(src: str, out_dir: Path, name: str):
@@ -146,3 +146,9 @@ end subroutine add_idx
     sdfg(a=a, b=b_sdfg, n=n, m=m)
     # Only the i=1..n-1 region was written; last row stays zero in both.
     np.testing.assert_array_equal(b_sdfg, b_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

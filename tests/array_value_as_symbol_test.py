@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _SRC = """
@@ -153,3 +153,9 @@ def test_value_symbol_reaching_def_resnapshot(tmp_path: Path):
     mod.resnap_mod.resnap(np.int32(sel), tab_r, z, out_r)
     np.testing.assert_array_equal(out_s, out_r)
     np.testing.assert_array_equal(tab_s, tab_r)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

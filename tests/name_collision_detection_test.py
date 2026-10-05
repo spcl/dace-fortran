@@ -9,7 +9,7 @@ SYMBOL on collision; (2) RuntimeError at builder-init if the three role-keyed
 dicts aren't disjoint, caught at extract time instead of 200 states later.
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_inlined_callee_scalar_shadowing_outer_array(tmp_path):
@@ -59,3 +59,9 @@ end module
     # No exception -> no false-positive collision.
     assert "a" in sdfg.arrays
     assert "b" in sdfg.arrays
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -94,3 +94,9 @@ def test_1d_allocatable_member_unchanged():
     assert "allocated(becxx(aos_becxx_k_i0)%k)" in src  # allocatable member guard
     assert "aos_becxx_k_c0 = max(aos_becxx_k_c0, size(becxx(aos_becxx_k_i0)%k, 1))" in src
     assert "aos_becxx_k_c1 = max(aos_becxx_k_c1, size(becxx(aos_becxx_k_i0)%k, 2))" in src
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

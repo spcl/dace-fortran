@@ -50,3 +50,9 @@ def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
     run_sdfg(sdfg, got, cfg)
     assert_families_fire(inputs, ref)
     assert_match(ref, got, 1e-10, 1e-14)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

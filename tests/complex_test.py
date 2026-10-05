@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -122,3 +122,7 @@ end subroutine main
     out = np.zeros(n, dtype=np.float64)
     sdfg(n=n, a=a, out=out)
     np.testing.assert_allclose(out, np.abs(a), rtol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

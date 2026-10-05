@@ -29,13 +29,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.bindings.frozen_signature import refreeze
 from dace_fortran.pipelines import num_maps, optimize
-from qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
+from tests.qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
 
 pytestmark = pytest.mark.e2e
 
@@ -120,3 +120,7 @@ def test_vexx_pipeline_numerical_e2e(tmp_path, e2e_cpu_args):
     )
 
     np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-11, atol=1e-11)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

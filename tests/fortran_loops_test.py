@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_loop_region_basic_loop(tmp_path):
@@ -38,3 +38,9 @@ def test_fortran_frontend_loop_region_basic_loop(tmp_path):
 
     validate = np.full([10, 10], 5, order="F", dtype=np.float64)
     assert np.allclose(c_test, validate)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

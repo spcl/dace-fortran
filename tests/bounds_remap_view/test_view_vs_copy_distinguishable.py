@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
 _HERE = Path(__file__).resolve().parent
@@ -131,3 +131,9 @@ def test_detector_distinguishes_all_four_cases():
         ir = _emit_hlfir(_HERE / fname)
         got = _has_rank_changing_rebox_into_ptr(ir)
         assert got is expected, f"{fname}: detector said {got}, expected {expected}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

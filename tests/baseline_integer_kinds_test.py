@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_integer_kind_1_array_copy(tmp_path: Path):
@@ -96,3 +96,9 @@ end subroutine mul_int2
     c = np.zeros(n, dtype=np.int16)
     sdfg(a=a, b=b, c=c, n=n)
     np.testing.assert_array_equal(c, (a * b).astype(np.int16))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

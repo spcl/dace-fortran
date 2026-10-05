@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
 
@@ -447,3 +447,9 @@ def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
     sdfg(**kw)
 
     np.testing.assert_allclose(ddt_sdfg, ddt_ref, atol=1e-12, rtol=0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

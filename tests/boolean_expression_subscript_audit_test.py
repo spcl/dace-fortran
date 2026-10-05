@@ -8,7 +8,7 @@ the same bug: dispatch.cpp:218 (fir.store handler), :1919 (const-index assign),
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_boolean_store_to_logical_scalar(tmp_path):
@@ -96,3 +96,9 @@ end module m
     out = np.zeros((1,), dtype=np.int32, order="F")
     sdfg(a=a, b=b, c=c, d=d, e=e, f=f, out=out)
     assert out[0] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

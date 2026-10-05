@@ -106,3 +106,7 @@ def test_build_library_requires_a_pinned_sdfg(tmp_path):
     assert not hasattr(sdfg, "_frozen_signature") or sdfg._frozen_signature is None
     with pytest.raises(ValueError, match="_frozen_signature"):
         build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

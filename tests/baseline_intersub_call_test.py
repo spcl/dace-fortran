@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str, entry: str | None = None, pipeline: str | None = "hlfir-propagate-shapes"):
@@ -69,3 +69,9 @@ end subroutine opt_sum
     r_sdfg_absent = np.zeros(2, dtype=np.int32)
     sdfg(res=r_sdfg_absent, a=0, a_present=0)
     np.testing.assert_array_equal(r_sdfg_absent, r_ref_absent)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

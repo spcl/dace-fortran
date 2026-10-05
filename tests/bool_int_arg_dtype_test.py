@@ -5,8 +5,8 @@ E2e against an f2py-compiled reference."""
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 def test_bool_logical_array_pass_through(tmp_path):
@@ -148,3 +148,9 @@ END SUBROUTINE bool_scalar
     out = np.zeros(n, dtype=np.int32)
     sdfg(flag=_route_bool(False), out=out, n=n)
     np.testing.assert_array_equal(out, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

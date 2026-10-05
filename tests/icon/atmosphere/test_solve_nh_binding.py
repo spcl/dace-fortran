@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg
-from icon._halo_modes import _MPI_STUB
+from tests._util import build_sdfg
+from tests.icon._halo_modes import _MPI_STUB
 
 from dace_fortran.bindings import build_fortran_library
 
@@ -53,3 +53,7 @@ def test_solve_nh_binding_compiles(tmp_path: Path):
         sdfg, out_dir=str(tmp_path / "lib"), prelude_sources=[stub, use_mpi_tu], bind_c_shim=True
     )
     assert Path(lib.so_path).exists(), "binding .so was not produced"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

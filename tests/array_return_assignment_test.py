@@ -5,7 +5,7 @@ Once emitted the bridge's unresolved-expression ``?`` placeholder and failed to 
 
 import numpy as np
 
-from _util import f2py_compile
+from tests._util import f2py_compile
 
 from dace_fortran import build_sdfg_from_files
 
@@ -55,3 +55,9 @@ def test_whole_array_assignment_from_function_return(tmp_path):
     ref = f2py_compile(_SRC, tmp_path / "ref", "array_return_ref", only=("kern",))
     out_ref = np.asfortranarray(ref.m_array_return.kern(src_arr.copy(order="F")))
     np.testing.assert_array_equal(out, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

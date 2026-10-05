@@ -36,7 +36,7 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.ocean._ocean_harness import ocean_config, SRC, ocean_search_dirs
+    from tests.icon.ocean._ocean_harness import ocean_config, SRC, ocean_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 

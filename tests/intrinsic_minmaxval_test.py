@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_minval_double(tmp_path):
@@ -222,3 +222,9 @@ END MODULE
     assert res[1] == inp[6]
     assert res[2] == inp[5]
     assert res[3] == inp[4]
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

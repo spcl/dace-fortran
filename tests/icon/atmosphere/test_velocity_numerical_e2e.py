@@ -33,8 +33,8 @@ dot products and round ~1 ulp off the reference).
 
 import pytest
 
-from icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
-from icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
+from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = __import__("pathlib").Path(__file__).resolve().parent
 
@@ -66,3 +66,7 @@ def test_velocity_tendencies_numerical_e2e(tu_name, loop_exchange):
     assert res["passed"], f"velocity_tendencies build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, "no output buffer changed -- the kernel did no work (test is vacuous)"
     assert res["max_diff"] == 0.0, f"SDFG binding diverged from reference, max|d|={res['max_diff']:.3e} (must be 0)"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

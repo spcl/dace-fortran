@@ -134,3 +134,9 @@ def test_plan_entry_still_wins_over_struct_layout_fallback():
     # Struct-layout fallback for the plan-less one.
     assert "dfftt_nnr = int(dfftt%nnr, c_int)" in text
     assert "TODO: no plan entry gives size" not in text
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

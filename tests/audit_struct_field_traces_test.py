@@ -8,7 +8,7 @@ such site for a leaked bare struct base.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_module_struct_field_read_in_tasklet(tmp_path):
@@ -163,3 +163,9 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_inner_a" in sdfg.arrays
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

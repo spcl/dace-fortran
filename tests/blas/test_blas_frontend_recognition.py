@@ -35,3 +35,9 @@ def test_dgemv_recognised(tmp_path):
 
 def test_dgemm_recognised(tmp_path):
     _build_and_assert("blas_probes::run_dgemm", "Gemm", tmp_path)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

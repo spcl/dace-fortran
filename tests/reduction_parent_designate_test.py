@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_count_parent_designate_scalar_dim(tmp_path: Path):
@@ -93,3 +93,9 @@ END SUBROUTINE all_parent_dg
     m[1, 1] = 0
     sdfg(m=m, pos1=2, res=res)
     assert res[0] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

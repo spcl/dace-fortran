@@ -25,7 +25,7 @@ through ``replaceStructArgJagged``'s ``maxExtent`` -> column-index
 clamping).
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_jagged_scalar_struct_max_extent_packing(tmp_path):
@@ -145,3 +145,9 @@ end module
     # Jagged ``g`` -> either packed 2-D ``g`` or per-member
     # ``g_a``/``g_b`` (both valid).
     assert ("g" in arrs and len(arrs["g"].shape) == 2) or ("g_a" in arrs and "g_b" in arrs)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

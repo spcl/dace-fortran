@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
 from dace_fortran.bindings.flatten_plan import FlattenPlan
@@ -382,3 +382,9 @@ end subroutine run_kern
     y_dace, _ = _invoke(dace_lib, x, [5.0], 0)
     y_ref, _ = _invoke(ref_lib, x.copy(order="F"), [5.0], 0)
     np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="aliased module array disagrees with reference")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

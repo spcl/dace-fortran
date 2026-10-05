@@ -254,3 +254,7 @@ def test_velocity_tendencies_classification():
     assert device == {"p_prog", "p_patch", "p_int", "p_metrics", "p_diag", "z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"}
     assert all(payload["args"][a]["clause"] == "PRESENT" for a in device)
     assert payload["unclassified"] == ["ntnd", "istep", "lvn_only", "dtime", "dt_linintp_ubc", "ldeepatmo"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

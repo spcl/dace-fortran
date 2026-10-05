@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -363,3 +363,7 @@ def test_e2e_scalar_logical_intent_inout(tmp_path: Path):
         sdfg(flag=flag_d, hits=hits_d, n=n)
         np.testing.assert_array_equal(hits_d, hits_ref)
         assert bool(flag_d[0]) == flag_out_ref
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

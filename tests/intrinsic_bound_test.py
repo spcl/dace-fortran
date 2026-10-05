@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_bound(tmp_path):
@@ -328,3 +328,9 @@ END MODULE
     sdfg(res=res)
 
     assert np.allclose(res, [-1, 0, 2, 3])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

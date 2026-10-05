@@ -15,7 +15,7 @@ recursion cleanly is better than silently emitting ``?``."""
 
 import numpy as np
 
-from _util import f2py_compile
+from tests._util import f2py_compile
 
 from dace_fortran import build_sdfg_from_files
 
@@ -222,3 +222,9 @@ def test_slice_lhs_array_fn_return(tmp_path):
     ref = f2py_compile(_PAT_I, tmp_path / "ref", "pat_i_ref", only=("kern",))
     out_ref = np.asfortranarray(ref.m_pat_i.kern(src_arr.copy(order="F")))
     np.testing.assert_array_equal(out, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

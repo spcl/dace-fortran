@@ -8,9 +8,9 @@ solvers/flux/tendency.
 from pathlib import Path
 import numpy as np
 import pytest
-from _util import f2py_compile
-from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
-from cloudsc.full._harness import run_cloudsc
+from tests._util import f2py_compile
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
+from tests.cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
 
@@ -42,3 +42,7 @@ def test_cloudsc_bottom_lower_numerical(tmp_path, _f2py_lo, _strict_fp_cpu_args)
             atol=1e-14,
             err_msg=f"PCOVPTOT mismatch in bottom-lower (solvers/flux/tendency only): {name}",
         )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

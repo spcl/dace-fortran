@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
-from cloudsc.full._registries import get_inputs_physical, get_outputs
+from tests._util import build_sdfg
+from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
 from dace_fortran.pipelines import verify_numerics
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)

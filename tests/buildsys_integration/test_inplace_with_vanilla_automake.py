@@ -165,3 +165,9 @@ END SUBROUTINE
     subprocess.check_call(cmd)
     second_mtime = canon.stat().st_mtime
     assert first_mtime == second_mtime, f"canonical kernel was re-written; mtimes {first_mtime} -> {second_mtime}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

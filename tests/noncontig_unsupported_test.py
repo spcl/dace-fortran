@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg, have_flang
+from tests._util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -89,3 +89,7 @@ end subroutine main
     assert "pipeline failed" in msg or "polymorphism" in msg, (
         f"expected a pipeline-failed message naming polymorphism, got: {msg}"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

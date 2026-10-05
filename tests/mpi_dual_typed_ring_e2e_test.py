@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg
+from tests._util import build_on_root, build_sdfg
 
 
 # Dual-typed nonblocking ring, per-request MPI_Wait (distinct request scalars
@@ -264,3 +264,7 @@ def test_dual_typed_ref_typestar_is_sound(tmp_path: Path):
         f"TYPE(*) assumed-type interface should compile the dual-typed calls cleanly "
         f"without -fallow-argument-mismatch, but gfortran errored:\n{typestar_err[-800:]}"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

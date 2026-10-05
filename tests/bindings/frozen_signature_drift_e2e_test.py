@@ -11,7 +11,7 @@ from pathlib import Path
 import dace
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import SignatureDriftError, build_fortran_library
 
 
@@ -90,3 +90,7 @@ def test_extra_free_symbol_after_freeze_raises(tmp_path: Path):
     sdfg.add_edge(sink, tail, dace.InterstateEdge(condition="drift_sym > 0"))
     with pytest.raises(SignatureDriftError):
         _build_lib(sdfg, tmp_path)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

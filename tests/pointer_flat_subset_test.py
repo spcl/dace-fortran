@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str = "main", entry: str | None = None):
@@ -230,3 +230,9 @@ end subroutine main
     np.testing.assert_array_equal(out, out_ref)
     # s%w = [0, 0, 101, 102, 103, 0, 0, 0] after the writes through p.
     np.testing.assert_array_equal(out, [0, 0, 101, 102, 103, 0, 0, 0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

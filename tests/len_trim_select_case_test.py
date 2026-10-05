@@ -19,7 +19,7 @@ strip pass, so only the surrounding integer plumbing is checked).
 import dace
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # Mirrors ast_v1_h_psi.f90:88-133 (xclib_dft_is + capital), wrapped so the
@@ -117,3 +117,9 @@ def test_character_store_in_flat_loop_body(tmp_path):
     res = np.zeros(1, dtype=np.int32)
     sdfg(n=np.int32(41), res=res)
     assert int(res[0]) == 42, f"integer plumbing broken: {res[0]}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

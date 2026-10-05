@@ -10,8 +10,8 @@ an interstate edge). E2e against an f2py-compiled reference.
 
 import numpy as np
 
-from _util import build_sdfg
-from _helpers import f2py
+from tests._util import build_sdfg
+from tests._helpers import f2py
 
 
 _DRIVER_PROLOGUE_HEAD = """
@@ -94,3 +94,9 @@ END SUBROUTINE accumulate
         + _DRIVER_PROLOGUE_TAIL
     )
     _run(tmp_path, src, "view_self_update_twice_if")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -14,7 +14,7 @@ Each kernel checked against an f2py reference on several inputs.
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _run(tmp_path, src, cases, argnames):
@@ -312,3 +312,7 @@ end subroutine probe
 end module probe_mod
 """
     _run(tmp_path, src, [(5,), (3,), (8,)], ["n"])
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

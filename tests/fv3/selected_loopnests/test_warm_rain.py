@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 _HERE = Path(__file__).parent
@@ -86,3 +86,9 @@ def test_fv3_warm_rain(tmp_path):
     np.testing.assert_allclose(r1_out[0], r1_ref, rtol=1e-5, atol=5e-6)
     for name in _INOUT:
         np.testing.assert_allclose(skw[name], rkw[name], rtol=1e-5, atol=5e-6, err_msg=f"mismatch in {name}")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

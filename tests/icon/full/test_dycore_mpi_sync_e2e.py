@@ -23,7 +23,7 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg
+from tests._util import build_on_root, build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
@@ -330,3 +330,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
         atol=0.0,
         err_msg=("halo (block 2) does NOT match the neighbor's computed block 1 -- MPI_Sendrecv probably mis-fired"),
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

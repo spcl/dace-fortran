@@ -13,7 +13,7 @@ assigned to fp64 widens through convert (wrap must not block it); fp64 constants
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fp32_constant_wrapped_in_dace_float32(tmp_path):
@@ -97,3 +97,9 @@ end module m
     sdfg(out=out)
     expected = np.float64(1.4) * np.float64(2.0)
     assert out[0] == expected, f"fp64 param mismatch: got {out[0]} expected {expected}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

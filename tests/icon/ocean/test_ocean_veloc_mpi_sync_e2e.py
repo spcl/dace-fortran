@@ -32,11 +32,11 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_on_root
+from tests._util import build_on_root
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import build_sdfg
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
-from icon.ocean._ocean_e2e import (
+from tests.icon.ocean._ocean_e2e import (
     _invoke,
     _resolve_module_seeds,
     _retarget_shim,
@@ -242,3 +242,7 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
         f"rank {rank}: vort_v identical on the pair communicator and COMM_SELF -- the real 2-rank "
         "MPI_Sendrecv moved no neighbour data (sync no-op'd or comm was dropped)"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

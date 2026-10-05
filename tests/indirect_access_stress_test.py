@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +396,9 @@ def test_indirect_icon4_minimal_repro(tmp_path: Path):
         je=0,
     )
     np.testing.assert_array_equal(out_sdfg, out_ref)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

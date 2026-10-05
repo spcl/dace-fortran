@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_real_kind_selector(tmp_path):
@@ -222,3 +222,9 @@ end subroutine main
     d = np.full([3, 4, 5], 42, order="F", dtype=np.float64)
     sdfg(d=d)
     np.testing.assert_allclose(d, d_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

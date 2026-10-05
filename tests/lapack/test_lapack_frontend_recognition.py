@@ -25,3 +25,9 @@ def test_dgetrf_recognised(tmp_path):
 
 def test_dpotrf_recognised(tmp_path):
     _build_and_assert("lapack_probes::run_dpotrf", "Potrf", tmp_path)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

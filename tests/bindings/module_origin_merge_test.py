@@ -75,3 +75,9 @@ def test_frozen_signature_json_roundtrip(tmp_path):
     rt = FrozenSignature.from_json(str(p))
     assert rt.module_symbol_origins == {"nproma": ("mo_parallel_config", "nproma")}
     assert rt.args[0].shape == ("10",)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

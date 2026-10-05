@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_elemental_ecrad(tmp_path):
@@ -187,3 +187,9 @@ END SUBROUTINE
     sdfg(iters=iters, fsd=arg1, cdf=arg2, val=arg3)
 
     assert np.allclose(val[1:4], arg3[1:4])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -11,7 +11,7 @@ Pins the acceptance criteria for the ``_FortranAio*`` recognizer (maps Fortran I
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_list_directed_read(tmp_path, monkeypatch):
@@ -164,3 +164,9 @@ end module m
     sdfg(a=a, b=b)
     np.testing.assert_allclose(a, [1.0, 2.0])
     np.testing.assert_allclose(b, [3.0, 4.0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -75,3 +75,7 @@ def test_present_guarded_conditional_pointer_rebind(tmp_path: Path, entry: str):
     expected = np.zeros(n)
     expected[sblk - 1 : eblk] = np.arange(sblk, eblk + 1, dtype=np.float64)
     np.testing.assert_allclose(out, expected, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

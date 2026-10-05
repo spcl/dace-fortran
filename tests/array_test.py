@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_array_access(tmp_path):
@@ -206,3 +206,9 @@ end subroutine main
     d = np.full([50], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert d[0] == 65
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

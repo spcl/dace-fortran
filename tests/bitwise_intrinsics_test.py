@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_bitwise_set_clear_xor_shift_and(tmp_path: Path):
@@ -85,3 +85,9 @@ end subroutine
     sdfg(x=x_in, out_ibits=out_ibits, out_btest=out_btest)
     assert int(out_ibits[0]) == (x_in >> 2) & ((1 << 3) - 1)
     assert int(out_btest[0]) == 1 if (x_in & (1 << 1)) else 0
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

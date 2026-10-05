@@ -7,7 +7,7 @@ externalising the whole sync: ``monomorphize`` the abstract pattern to its concr
 body in -- the bridge auto-recognises the MPI calls and lowers them to
 ``dace.libraries.mpi`` nodes."""
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, monomorphize, MonomorphizationSpec
 
@@ -364,3 +364,9 @@ def test_sync_patch_array_is_not_external_anymore(tmp_path):
     assert any(isinstance(n, MPINode) for n, _ in sdfg.all_nodes_recursive()), (
         "the MPI primitives should remain, as dace.libraries.mpi library nodes"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

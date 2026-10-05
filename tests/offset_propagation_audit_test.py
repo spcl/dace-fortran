@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _build(src: str, tmp_path: Path, entry: str):
@@ -177,3 +177,9 @@ end subroutine computed_dummy
     out = np.zeros(1, dtype=np.int32, order="F")
     sdfg(arr=arr, out=out, arr_d0=np.int64(11))
     assert out[0] == 777
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -6,7 +6,7 @@ Complementary case (tracker kept when ALLOCATED IS queried) is pinned by intrins
 from pathlib import Path
 
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_unread_allocatable_dummy_skips_tracker(tmp_path: Path):
@@ -51,3 +51,9 @@ end subroutine kernel
     # tracker registers as a symbol (role=symbol in extract_vars), not an array -- both paths kept for safety.
     has_tracker = "data_allocated" in sdfg.symbols or "data_allocated" in sdfg.arrays
     assert has_tracker, "tracker MUST be emitted when ALLOCATED(...) reader exists"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

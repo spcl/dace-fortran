@@ -40,3 +40,9 @@ end module loop_test_function_mod
 
     validate = np.full((10, 10), 5.0, dtype=np.float64)
     assert np.allclose(c_test, validate)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

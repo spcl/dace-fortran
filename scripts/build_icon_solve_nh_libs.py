@@ -41,11 +41,10 @@ from typing import Sequence
 import dace
 
 _DACE_FORTRAN = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_DACE_FORTRAN / "tests"))
-from _util import build_sdfg, have_flang
-from icon._halo_modes import _MPI_STUB
-from icon.full._icon_solve_nh_patch import SOLVE_NH_WRAPPER_NAME
-from icon.full.test_dycore_from_icon_source import (
+from tests._util import build_sdfg, have_flang
+from tests.icon._halo_modes import _MPI_STUB
+from tests.icon.full._icon_solve_nh_patch import SOLVE_NH_WRAPPER_NAME
+from tests.icon.full.test_dycore_from_icon_source import (
     _ICON_DEFINES_FALLBACK,
     _ICON_EXTERNAL_STUBS,
 )

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "velocity_advection_inlined_single_tu.f90"
@@ -37,3 +37,7 @@ def test_velocity_percall_orig_vs_binding_bitexact():
     assert res["passed"], f"velocity orig-vs-binding build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, "no output buffer changed -- the call did no work (integration check is vacuous)"
     assert res["max_diff"] == 0.0, f"binding diverged from original ICON, max|d|={res['max_diff']:.3e} (must be 0)"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

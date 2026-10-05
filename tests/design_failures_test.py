@@ -6,7 +6,7 @@ scope-qualification / collision-detection pipeline.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ===========================================================================
@@ -382,3 +382,9 @@ END MODULE kern_mod
     out = np.zeros(1, dtype=np.float64)
     sdfg(pi=np.float64(3.14), out=out)
     np.testing.assert_allclose(out[0], 6.28, rtol=1e-6)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from icon.atmosphere._atmo_harness import (
+from tests.icon.atmosphere._atmo_harness import (
     KERNELS,
     SINGLE_TU_ARTIFACTS,
     extract_single_tu,
@@ -95,3 +95,7 @@ def test_keep_acc_directives_survive_into_the_velocity_tu(tmp_path):
     committed = (_HERE / "velocity_advection_inlined_no_loop_exchange_single_tu.f90").read_text()
     stripped = "".join(line for line in tu_lines if not _ACC_LINE.match(line))
     assert stripped == committed, "keep_acc_directives perturbed the TU beyond the inserted directive lines"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

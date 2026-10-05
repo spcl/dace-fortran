@@ -19,7 +19,7 @@ from pathlib import Path
 
 from dace_fortran.external_functions import ExternalFunction
 
-from icon._halo_modes import halo_config
+from tests.icon._halo_modes import halo_config
 
 _HERE = Path(__file__).resolve().parent
 #: ``tests/icon/full/icon-model`` holds the pinned ICON checkout (shared with

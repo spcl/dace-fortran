@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str = "main", entry: str | None = None):
@@ -1287,3 +1287,7 @@ end subroutine kern_ki
     with pytest.raises(Exception):
         _build(src, tmp_path, name="kern_ki", entry="kern_ki")
     assert "intent(out)" in capfd.readouterr().err
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -76,3 +76,7 @@ def test_solve_nonhydro_emits_hlfir():
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

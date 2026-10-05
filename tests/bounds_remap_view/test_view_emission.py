@@ -10,13 +10,11 @@ probes catch the expected post-descriptor validation error and inspect the parti
 descriptor is emitted before validation runs).
 """
 
-import sys
 from pathlib import Path
 
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
-from _util import build_sdfg  # noqa: E402
+from tests._util import build_sdfg  # noqa: E402
 
 
 def _make_builder(probe_name: str, tmp_path: Path, entry: str = "run"):
@@ -206,3 +204,9 @@ def test_plain_pointer_rebind_yields_view_at_destination(tmp_path):
     assert isinstance(sdfg.arrays["prhoc"], View), (
         f"{probe}: 'prhoc' should be a View (plain rebind), got {type(sdfg.arrays['prhoc']).__name__}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

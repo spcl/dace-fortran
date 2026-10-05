@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
+from tests._util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -288,3 +288,9 @@ def test_struct_flatten_f90_binding(tmp_path: Path):
     u_r, v_r = _call(ref, "run_state_ref")
     np.testing.assert_allclose(u_s, u_r, rtol=1e-13, atol=1e-13)
     np.testing.assert_allclose(v_s, v_r, rtol=1e-13, atol=1e-13)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

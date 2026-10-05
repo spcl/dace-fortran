@@ -98,3 +98,9 @@ def test_a_differently_configured_build_dir_is_reported(monkeypatch, tmp_path):
 
     conflicts = build_bridge._cache_conflicts({"LLVM_VERSION": "22"})
     assert len(conflicts) == 1 and "LLVM_VERSION" in conflicts[0], conflicts
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

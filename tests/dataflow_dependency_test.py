@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _f2py(src_text: str, out_dir: Path, mod_name: str):
@@ -439,3 +439,9 @@ END SUBROUTINE cw_nested
         "the WAR ordering bug from cloudsc Section 4.5 reproduced here.",
     )
     np.testing.assert_allclose(f_sdfg, f_ref, rtol=1e-12, atol=1e-12, err_msg="f final mismatch")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

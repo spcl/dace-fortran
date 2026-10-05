@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -73,3 +73,9 @@ def test_elemwise_sin_structure(tmp_path):
     assert any("sin(" in t.code.as_string for t in tasklets), "no tasklet body calls sin; got: " + repr(
         [t.code.as_string for t in tasklets]
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

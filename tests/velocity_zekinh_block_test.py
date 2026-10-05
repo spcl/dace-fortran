@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC_PATH = Path(__file__).resolve().parent / "velocity_zekinh_block.f90"
@@ -118,3 +118,9 @@ def test_velocity_zekinh_block_builds_and_calls(tmp_path: Path):
     # 3-term FMA-reorderable sum -- bridge and numpy may pick different
     # accumulation orders.  Hold a tight rel/abs but not bit-exact.
     np.testing.assert_allclose(z_ekinh, z_ekinh_ref, rtol=1e-13, atol=1e-13)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

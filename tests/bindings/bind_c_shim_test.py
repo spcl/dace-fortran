@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, gfortran_compile_so
+from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -595,3 +595,9 @@ def test_snapshot_skips_pointer_to_record_handle_member(tmp_path):
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     assert "comm_pat_c" not in text, "shim reconstructed the pointer-to-record handle"
     assert "area" in text and "nblks_e" in text
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

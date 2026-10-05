@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _HERE = Path(__file__).resolve().parent
@@ -48,3 +48,9 @@ def test_do_loop_exit_numerical(tmp_path):
     sdfg(a=np.ascontiguousarray(a), b=b_sdfg, n=n, i=0)
 
     np.testing.assert_allclose(b_sdfg, b_ref, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

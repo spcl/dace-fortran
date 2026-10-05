@@ -16,7 +16,7 @@ the transpose flag threaded through -- no transposed-matrix materialisation.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_matmul_transpose_whole_assign_into_array_temp(tmp_path):
@@ -185,3 +185,9 @@ end module
     assert not transposes, f"B-side fold must allocate no transient transpose, got {transposes}"
     assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
     assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

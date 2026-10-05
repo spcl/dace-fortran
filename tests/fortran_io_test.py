@@ -171,3 +171,9 @@ def test_namelist_selects_named_group(tmp_path):
     np.testing.assert_allclose(scale, [2.5], rtol=1e-6)
     np.testing.assert_array_equal(flags, [1, 2, 3])
     np.testing.assert_allclose(ratio, [0.5])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

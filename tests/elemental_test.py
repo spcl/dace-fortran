@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_elemental_subroutine_with_inout(tmp_path: Path):
@@ -210,3 +210,9 @@ end module apply_softmax_step_mod
     sdfg(x=x, s=s_val, n=n)
 
     np.testing.assert_allclose(x, x_ref, atol=1e-12, rtol=0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

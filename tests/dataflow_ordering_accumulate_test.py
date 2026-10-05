@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def _f2py(src_text: str, out_dir: Path, mod: str):
@@ -221,3 +221,9 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
 def _mkd(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

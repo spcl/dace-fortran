@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import flang_binary
+from tests._util import flang_binary
 from dace_fortran.flang_codebase import (
     FLANG_BUG_PATCHES,
     LIBRARY_STUBS,
@@ -175,3 +175,7 @@ def test_lazy_import_surface():
     assert callable(dace_fortran.mpi_stub_source)
     assert "mpi" in dace_fortran.LIBRARY_STUBS
     assert "mpi_sizeof" in dace_fortran.FLANG_BUG_PATCHES
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

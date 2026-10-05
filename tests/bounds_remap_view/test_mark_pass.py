@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 
-from _util import flang_binary, flang_intrinsic_modules_path
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
 _HERE = Path(__file__).resolve().parent
@@ -121,3 +121,9 @@ def test_summary_distinguishes_all_four_cases_end_to_end():
             assert count >= 1, f"{fname}: expected >=1 tag, got 0"
         else:
             assert count == 0, f"{fname}: expected 0 tags, got {count}"
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -31,7 +31,7 @@ inside a loop / conditional branch -> the extent is FROZEN (snapshot) at each
 ALLOCATE, so the valid kernel still lifts without a corrupting mutable shape.
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +391,9 @@ end subroutine
     compiled(nproma=np.int32(nproma), nblk=np.int32(nblk), r=r)
     expected = sum(jc + jb for jb in range(1, nblk + 1) for jc in range(1, nproma + 1))
     np.testing.assert_allclose(r[0], expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

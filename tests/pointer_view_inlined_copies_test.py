@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """
@@ -49,3 +49,9 @@ def test_inlined_pointer_rebind_copies_keep_their_targets(tmp_path: Path):
     sdfg(a=a, b=b, n=np.int32(n), a_d0=n, b_d0=n)
     np.testing.assert_allclose(a, np.ones(n), rtol=0, atol=0)
     np.testing.assert_allclose(b, np.full(n, 11.0), rtol=0, atol=0)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

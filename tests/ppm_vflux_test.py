@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 
@@ -150,3 +150,9 @@ def test_ppm_vflux_numerical_e2e_via_binding(tmp_path):
     flux_ref = _call("run_ppm_ref")
     assert np.all(np.isfinite(flux_ref)), "reference produced non-finite values"
     np.testing.assert_allclose(flux_binding, flux_ref, rtol=1e-10, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

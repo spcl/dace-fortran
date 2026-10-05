@@ -7,7 +7,7 @@ always sees ``x = 0`` regardless of the caller's value. Same root cause as LU's 
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 _SRC = """\
 module m
@@ -45,3 +45,9 @@ def test_module_scalar_input_survives_sccp(tmp_path):
         kw["x"] = np.float64(5.0)
     sdfg(**kw)
     np.testing.assert_allclose(y_buf[0], 10.0, err_msg=f"y={y_buf[0]}; expected 2*x=10 (x was pre-set to 5)")
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

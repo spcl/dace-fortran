@@ -3,13 +3,11 @@ AoS-of-pointer-records pattern emits ``hlfir.aos_ptr_records.<aos_decl>``, ahead
 """
 
 from pathlib import Path
-import sys
 
 
 from dace_fortran.build import make_builder
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def _post_pass_module(probe_name: str, entry: str, tmp_path):
@@ -105,3 +103,9 @@ def test_allocatable_member_aos_not_matched(tmp_path):
     assert not _materialisation_landed(mod), (
         "matcher wrongly minted an _QXaos_lift_ companion for an allocatable-member AoS"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

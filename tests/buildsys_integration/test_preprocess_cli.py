@@ -282,3 +282,9 @@ def test_warn_when_rewrite_external_without_search_dir(tmp_path):
     assert "no-op" in stderr.lower() or "search-dir" in stderr.lower(), (
         f"expected a search-dir warning, got stderr:\n{stderr}"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # Module-global TARGET derived-type object (mirrors ICON's mo_ocean_physics_types::v_params)
@@ -114,3 +114,9 @@ def test_opaque_struct_dead_rebind_prunes_clean(tmp_path: Path):
     original = y.copy()
     sdfg(y=y, n=np.int32(n), y_d0=n)
     np.testing.assert_allclose(y, original * 3.0, rtol=1e-12, atol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

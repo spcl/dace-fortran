@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from _util import flang_binary
+from tests._util import flang_binary
 from dace_fortran.builder import SDFGBuilder
 
 
@@ -178,3 +178,7 @@ end subroutine
     # 99.0 proves the real definition was used (else verify-no-unresolved-calls would error).
     assert b.module.list_functions() == ["_QPkernel"]
     assert "9.900000e+01" in b.module.dump()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

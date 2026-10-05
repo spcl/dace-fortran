@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, flang_binary, flang_intrinsic_modules_path, have_flang
+from tests._util import build_sdfg, flang_binary, flang_intrinsic_modules_path, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
@@ -213,3 +213,7 @@ end subroutine kernel
         mod.set_entry_symbol("kernel")
         # before the fix this raised at hlfir-lift-reduction-operands
         mod.run_passes(DEFAULT_PIPELINE)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

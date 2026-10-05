@@ -6,7 +6,7 @@ lower as SUM intrinsic calls with offsets handled by the memlet machinery.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_sum2loop_1d_without_offset(tmp_path):
@@ -143,3 +143,9 @@ def test_fortran_frontend_arr2loop_2d_offset(tmp_path):
     assert res[0] == 190
     assert res[1] == 190
     assert res[2] == 57
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

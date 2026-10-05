@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -191,3 +191,7 @@ def test_keep_external_with_comm_signature_round_trip():
     assert tuple(a.kind for a in sig.args) == (ArgKind.ARRAY, ArgKind.SCALAR, ArgKind.COMM)
     assert sig.c_declaration() == 'extern "C" void exch_with_comm_c(double *, int, MPI_Comm);'
     clear_external_registry()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

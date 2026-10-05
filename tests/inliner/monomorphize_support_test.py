@@ -222,3 +222,7 @@ def test_abstract_base_without_concrete_subtype_is_rejected():
 def test_subtype_missing_a_deferred_override_is_rejected():
     with pytest.raises(UnsupportedProgram, match=r"does not override deferred"):
         analyze_source(UNSUPPORTED_MISSING_OVERRIDE)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

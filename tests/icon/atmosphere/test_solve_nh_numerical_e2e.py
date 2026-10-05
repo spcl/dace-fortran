@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
-from icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
+from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 
 pytestmark = pytest.mark.long
 
@@ -100,3 +100,7 @@ def test_solve_nh_numerical_e2e(tmp_path: Path):
     assert res["passed"], f"solve_nh e2e did not run:\n{res['output'][-6000:]}"
     assert res["n_changed"] > 0, "solve_nh produced no output changes (kernel ran as a no-op?)"
     assert res["max_diff"] == 0.0, f"solve_nh not bit-exact: max|dut-ref| = {res['max_diff']}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

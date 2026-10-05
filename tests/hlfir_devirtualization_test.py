@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 
-from _util import _FLANG
+from tests._util import _FLANG
 
 
 # Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
@@ -164,3 +164,9 @@ def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Pat
         "--fir-polymorphic-op produced a direct call -- it now devirtualises; "
         "revisit the ocean solver externalisation policy"
     )
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

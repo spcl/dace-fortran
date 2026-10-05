@@ -12,13 +12,12 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import dace
 import pytest
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings.acc_transfers import (
@@ -31,9 +30,6 @@ from dace_fortran.bindings.acc_transfers import (
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
 _VELOCITY_SRC = _HERE / "velocity_full.f90"
-
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
 
 _bil_spec = importlib.util.spec_from_file_location(
     "_icon_wrapper_acc_bil", _REPO / "scripts" / "build_icon_dace_libs.py"
@@ -487,3 +483,7 @@ def test_emit_bindings_acc_host_data_wraps_the_sdfg_call(tmp_path):
     close_at = body.index("!$ACC END HOST_DATA")
     call = next(i for i, ln in enumerate(body) if ln.startswith("call dace_program_kernel("))
     assert open_at < call < close_at
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

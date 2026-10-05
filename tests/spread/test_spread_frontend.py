@@ -5,13 +5,11 @@
 """
 
 from pathlib import Path
-import sys
 
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))
 
 
 def test_spread_1d_to_2d_recognised(tmp_path):
@@ -24,3 +22,9 @@ def test_spread_1d_to_2d_recognised(tmp_path):
     nodes = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Broadcast"]
     assert len(nodes) == 1, f"expected one Broadcast lib node, got {len(nodes)}"
     assert nodes[0].dim == 1
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

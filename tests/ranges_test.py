@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_multiple_ranges_all(tmp_path):
@@ -534,3 +534,9 @@ END MODULE
     sdfg(arg1=arg1, res1=res1)
 
     assert np.all(res1 == (arg1 + 1))
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

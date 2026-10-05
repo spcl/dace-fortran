@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_call_extract(tmp_path):
@@ -32,3 +32,9 @@ def test_fortran_frontend_call_extract(tmp_path):
     res = np.full([2], 42, order="F", dtype=np.float32)
     sdfg(d=inp, res=res)
     assert np.allclose(res, [np.sqrt(np.exp(inp[0])), np.sqrt(np.exp(inp[0])) - 1])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from tests.bindings.struct_bindings_e2e_test import _build_reference_lib, _build_sdfg_lib
@@ -198,3 +198,9 @@ def test_e2e_associated_pointer_member(tmp_path: Path):
     )
     np.testing.assert_array_equal(base_sdfg, base_ref)
     np.testing.assert_array_equal(base_ref, base_init + opt_vals)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

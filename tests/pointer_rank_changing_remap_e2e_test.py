@@ -7,7 +7,7 @@ that every ``p(i, j)`` write lands at the correct flat offset inside ``arr1d``.
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 _SRC = """\
@@ -47,3 +47,9 @@ def test_pointer_2d_view_of_1d_target_writes_at_correct_offsets(tmp_path):
             expected[lin] = i + 10 * j
 
     np.testing.assert_array_equal(arr, expected)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

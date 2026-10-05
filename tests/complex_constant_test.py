@@ -4,7 +4,7 @@ confused with a real scalar/loop iterator literally named `j` (spurious _in_j co
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_complex_2d_zero_fill(tmp_path):
@@ -93,3 +93,9 @@ END MODULE
     res = np.zeros(1, dtype=np.complex128)
     sdfg(j=3.0, res=res)
     np.testing.assert_allclose(res[0], 3.0 + 1.0j)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

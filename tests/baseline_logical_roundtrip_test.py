@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_logical_array_copy_in_copy_out_roundtrip(tmp_path: Path):
@@ -82,3 +82,9 @@ end subroutine invert_in_place
     # Symmetry: invoking again restores the original.
     sdfg(mask=mask, n=n)
     np.testing.assert_array_equal(mask, original)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

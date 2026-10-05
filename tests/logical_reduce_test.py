@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 def test_any_whole_array(tmp_path: Path):
@@ -57,3 +57,9 @@ end subroutine
     res_mixed = np.zeros(1, dtype=np.bool_)
     sdfg(mask=mask_mixed, result=res_mixed, n=5)
     assert bool(res_mixed[0]) is False
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

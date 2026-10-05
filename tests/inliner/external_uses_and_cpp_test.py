@@ -186,3 +186,7 @@ def test_namelist_both_engines_compile(tmp_path):
     # fparser engine: pruned, but the surviving namelist references only declared vars, so it still compiles
     tu = inline_to_single_tu({"mo_cfg.f90": _NAMELIST_MODULE}, entry="mo_cfg::uses_one", out_dir=tmp_path, name="cfg")
     assert _gfortran_compiles(tu.read_text()), "fparser-pruned namelist TU must compile"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -34,7 +34,7 @@ Still pending (xfail / TODO):
     designate-chain rewriting.
 """
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------
@@ -271,3 +271,9 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_idx" in sdfg.symbols or "g_idx" in sdfg.arrays
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

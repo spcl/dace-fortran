@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg
+from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -128,3 +128,9 @@ end subroutine main
     out = np.zeros(3, dtype=np.int32)
     sdfg(arr=arr, n=n, m=m, p=p, out=out)
     np.testing.assert_array_equal(out, [n, m, p])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

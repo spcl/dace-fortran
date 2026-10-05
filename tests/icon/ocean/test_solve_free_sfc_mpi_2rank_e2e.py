@@ -27,9 +27,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_on_root
-from icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
-from icon.ocean._ocean_e2e import build_dut_and_ref, synth_call_inputs, _invoke
+from tests._util import build_on_root
+from tests.icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
+from tests.icon.ocean._ocean_e2e import build_dut_and_ref, synth_call_inputs, _invoke
 
 pytestmark = [
     pytest.mark.long,
@@ -257,3 +257,7 @@ def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
     assert any(not np.array_equal(dut[k], self_bufs[k]) for k in ptr_args), (
         f"rank {rank}: the 2-rank run is identical to the single-rank one -- the halo exchange moved no neighbour data"
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

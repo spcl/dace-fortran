@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, f2py_compile
+from tests._util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, name: str):
@@ -65,3 +65,9 @@ end subroutine case_pick
     o_sdfg = np.zeros(1, dtype=np.int32)
     sdfg(v=2, out=o_sdfg)
     assert int(o_sdfg[0]) == int(o_ref[0])
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))

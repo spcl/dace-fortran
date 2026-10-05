@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from _util import build_sdfg, compile_to_hlfir
+from tests._util import build_sdfg, compile_to_hlfir
 
 
 _PRELUDE = (
@@ -304,3 +304,9 @@ end module seqassoc2d_mod
     sdfg(a=a, out=out)
     # a(1,2) + 2*a(2,2) + 3*a(3,2) -- proves the column section composed right.
     np.testing.assert_allclose(out[0], a[0, 1] + 2.0 * a[1, 1] + 3.0 * a[2, 1], rtol=1e-6)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))
