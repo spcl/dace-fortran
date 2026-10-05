@@ -563,7 +563,7 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     (inner_dir / "sdfg").mkdir(parents=True, exist_ok=True)
     clear_external_registry()
     inner_src = srcs["types"] + srcs["inner"]
-    inner_sdfg = build_sdfg(inner_src, inner_dir / "sdfg", name=inner_name, entry=f"_QP{inner_name}").build()
+    inner_sdfg = build_sdfg(inner_src, inner_dir / "sdfg", name=inner_name, entry=f"{inner_name}").build()
     inner_sdfg.name = inner_name
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
@@ -595,7 +595,7 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
         outer_dir.mkdir(parents=True, exist_ok=True)
         (outer_dir / "sdfg").mkdir(parents=True, exist_ok=True)
         outer_src = srcs["types"] + srcs["inner"] + srcs["outer"]
-        outer_sdfg = build_sdfg(outer_src, outer_dir / "sdfg", name=outer_name, entry=f"_QP{outer_name}").build()
+        outer_sdfg = build_sdfg(outer_src, outer_dir / "sdfg", name=outer_name, entry=f"{outer_name}").build()
         outer_sdfg.name = outer_name
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(

@@ -523,13 +523,12 @@ def sdfg_name(builder: SDFGBuilder) -> str:
     """Derive the SDFG name -- and therefore the generated ``.so``
     library name -- from the procedure being built.
 
-    Prefers the explicit ``entry`` symbol passed to :class:`SDFGBuilder`
-    (demangled to the procedure name -- ``_QMmoduleP<proc>`` or
-    ``_QP<proc>`` -> ``<proc>``).  Falls back to the first ``_QF<proc>``
+    Prefers the entry procedure of :class:`SDFGBuilder` (its resolved
+    Flang symbol, demangled back to the procedure name).  Falls back to the first ``_QF<proc>``
     mangled name on a registered variable, then to a generic ``sdfg``.
 
     Using the entry-procedure name means
-    ``build_sdfg_from_hlfir(..., entry="_QMmo_velocity_advectionPvelocity_tendencies")``
+    ``build_sdfg_from_hlfir(..., entry="mo_velocity_advection::velocity_tendencies")``
     produces ``libvelocity_tendencies.so`` instead of a generic name,
     so a registered external callee can be linked against it by
     function-keyed library name.

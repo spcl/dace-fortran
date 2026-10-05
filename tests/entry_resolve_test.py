@@ -1,21 +1,11 @@
-"""Resolve a plain Fortran procedure name to its mangled flang symbol (and
-back), so callers pass ``solve_nh`` instead of ``_QMmo_solve_nonhydroPsolve_nh``.
-"""
+"""Resolve a Fortran procedure name (``solve_nh`` / ``module::proc``) against the project sources."""
 
 import pytest
 
-from dace_fortran.emit_hlfir import demangle_entry, resolve_entry
+from dace_fortran.emit_hlfir import resolve_entry
 
 
-def test_demangle_entry():
-    # A plain Fortran name has nothing to demangle -- it stays as-is.
-    assert demangle_entry("solve_nh") == "solve_nh"
-    assert demangle_entry("add_array") == "add_array"
-    # A mangled flang symbol demangles to ``module::proc``.
-    assert demangle_entry("_QMmo_xFcompute") == "mo_x::compute"
-
-
-def test_resolve_passthrough_for_mangled():
+def test_resolve_passthrough_without_sources():
     assert resolve_entry("foo", []) == "foo"
 
 

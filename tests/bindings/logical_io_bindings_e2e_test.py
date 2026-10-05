@@ -141,7 +141,7 @@ def test_e2e_logical_intent_out(tmp_path: Path, kind_spec: str, width: int, cty)
         tmp_path,
         kernel_src=kernel,
         name=name,
-        entry=f"_QP{name}",
+        entry=name,
         iface=iface,
         driver_src=_out_sdfg_driver(kind_spec, suffix),
     )

@@ -147,24 +147,6 @@ def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
     return out
 
 
-def _entry_module(entry: str) -> Optional[str]:
-    """Module name from a mangled entry symbol, or ``None`` for a free
-    subroutine.  ``_QM<module>P<proc>`` (module subroutine) / ``...F<proc>``
-    (function) -> ``<module>``; ``_QP<proc>`` has no module."""
-    m = re.match(r"_QM([a-z0-9_]+?)[PF][a-z0-9_]+$", entry, re.IGNORECASE)
-    return m.group(1).lower() if m else None
-
-
-def demangle_entry(sym: str) -> str:
-    """Flang mangled symbol -> the Fortran name.  ``_QM<mod>P<proc>`` /
-    ``_QM<mod>F<proc>`` -> ``<mod>::<proc>``; ``_QP<proc>`` -> ``<proc>``."""
-    m = re.match(r"_QM([a-z0-9_]+?)[PF]([a-z0-9_]+)$", sym, re.IGNORECASE)
-    if m:
-        return f"{m.group(1)}::{m.group(2)}"
-    m = re.match(r"_Q[PF]([a-z0-9_]+)$", sym, re.IGNORECASE)
-    return m.group(1) if m else sym
-
-
 _MOD_OPEN_RE = re.compile(r"^\s*module\s+([a-z_]\w*)\s*$", re.IGNORECASE)
 _MOD_END_RE = re.compile(r"^\s*end\s+module\b", re.IGNORECASE)
 _INTERFACE_RE = re.compile(r"^\s*(abstract\s+)?interface\b", re.IGNORECASE)
@@ -222,21 +204,12 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Reso
     not part of the user-facing name).
 
     Accepts ``module::proc`` to disambiguate; a bare ``proc`` resolves
-    uniquely or raises.  A mangled ``_Q...`` name passes through (demangled
-    to its plain ``proc`` + module) for back-compat.
+    uniquely or raises.
 
     :raises ValueError: ``name`` is not found, or is ambiguous across
         modules (the message lists the candidates so the caller can
         qualify it ``module::proc``).
     """
-    if name.startswith("_Q"):
-        # Back-compat: a hand-written mangled symbol.  Demangle to the plain
-        # proc + module so the rest of the pipeline stays mangling-free.
-        mod = _entry_module(name)
-        m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) or re.match(
-            r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE
-        )
-        return ResolvedEntry((m.group(1).lower() if m else name), mod)
     want_mod, want_proc = split_qualified_entry(name)
 
     matches: set[ResolvedEntry] = set()
@@ -254,9 +227,7 @@ def _resolve_entry_with_module(name: str, sources: Iterable[str | Path]) -> Reso
         raise ValueError(f"resolve_entry: no subroutine {name!r} found in the sources")
     if len(matches) > 1:
         cands = ", ".join(f"{m or '<free>'}::{p}" for p, m in sorted(matches))
-        raise ValueError(
-            f"resolve_entry: {name!r} is ambiguous ({cands}); qualify it as module::proc or pass the mangled symbol"
-        )
+        raise ValueError(f"resolve_entry: {name!r} is ambiguous ({cands}); qualify it as module::proc")
     return matches.pop()
 
 
@@ -383,7 +354,7 @@ def emit(
     / ``hdf5`` / ...); they are emitted first (in the order given)
     so the project sources' ``USE`` lines resolve.
 
-    ``entry`` (a mangled symbol like ``_QMmodPproc``) restricts the
+    ``entry`` (the Fortran name ``proc`` or ``module::proc``) restricts the
     ``compile_commands`` run to the entry's TU + its transitive
     ``USE``-closure -- the only TUs the bridge needs to lower that entry.
     Without it every TU in the database is emitted (fine for small
@@ -406,8 +377,7 @@ def emit(
     if compile_commands is not None:
         parsed = parse_compile_commands(Path(compile_commands))
         if entry is not None:
-            # Accept a plain Fortran name / ``module::proc`` / a mangled
-            # symbol; keep ``entry`` plain and use its enclosing module
+            # Keep ``entry`` plain and use its enclosing module
             # (context, scanned from the sources) to keep only the entry's
             # USE-closure.
             entry, mod = _resolve_entry_with_module(entry, [t[0] for t in parsed])
@@ -481,7 +451,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument(
         "--entry",
         default=None,
-        help="mangled entry symbol (_QMmodPproc); restricts a "
+        help="Fortran name of the entry procedure (proc or module::proc); restricts a "
         "compile_commands run to that entry's USE-closure "
         "instead of emitting every TU.",
     )

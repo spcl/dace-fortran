@@ -85,7 +85,7 @@ hlfir = dace_fortran.emit_hlfir_from_codebase(
 
 # 3. Lower to SDFG.
 sdfg = dace_fortran.build_sdfg_from_hlfir(
-    hlfir, entry="_QMmo_velocity_advectionPvelocity_tendencies")
+    hlfir, entry="mo_velocity_advection::velocity_tendencies")
 sdfg.validate()
 ```
 

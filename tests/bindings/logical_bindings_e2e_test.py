@@ -330,7 +330,7 @@ def test_e2e_rank1_logical_kind(tmp_path: Path, kind: int):
         tmp_path,
         kernel_src=src,
         name=f"flip_kind{kind}",
-        entry=f"_QPflip_kind{kind}",
+        entry=f"flip_kind{kind}",
         outer_args=outer,
         driver_src=_kind_driver(kind),
         module_name=f"flip_kind{kind}_e2e",

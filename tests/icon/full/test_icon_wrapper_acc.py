@@ -313,7 +313,7 @@ def velocity_sdfg():
     out = (Path(dace.Config.get("default_build_folder")) / "_acc_residency_velocity").resolve()
     out.mkdir(parents=True, exist_ok=True)
     return build_sdfg(
-        _VELOCITY_SRC.read_text(), out, name="velocity_tendencies", entry="_QMmo_velocity_advectionPvelocity_tendencies"
+        _VELOCITY_SRC.read_text(), out, name="velocity_tendencies", entry="mo_velocity_advection::velocity_tendencies"
     ).build()
 
 

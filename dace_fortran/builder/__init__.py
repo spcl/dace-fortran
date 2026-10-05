@@ -565,12 +565,8 @@ def _resolve_entry_symbol(module: HlfirModule, entry: str) -> str:
     (``main``, ``vexx_bp_k_gpu``), optionally qualified as ``module::proc``
     (``exx_bp::vexx_bp_k_gpu``) to disambiguate -- the bridge resolves it
     against the module's actual function symbols (``_QP<name>`` for a free
-    procedure, ``_QM<mod>P<name>`` for a module procedure).  A name already
-    given in mangled form (leading ``_Q``) passes through unchanged for
-    back-compatibility.
+    procedure, ``_QM<mod>P<name>`` for a module procedure).
     """
-    if entry.startswith("_Q"):
-        return entry
     # ``module::proc`` -> (module, proc); a bare name leaves the module
     # unconstrained.  flang lower-cases Fortran identifiers.
     want_mod_opt, want_proc = split_qualified_entry(entry)
@@ -588,8 +584,7 @@ def _resolve_entry_symbol(module: HlfirModule, entry: str) -> str:
             f"available: {sorted(set(demangle_fortran_proc(s) for s in funcs))}"
         )
     raise RuntimeError(
-        f"entry '{entry}' is ambiguous -- {len(matches)} procedures match "
-        f"({matches}); qualify it as module::proc or pass the mangled symbol"
+        f"entry '{entry}' is ambiguous -- {len(matches)} procedures match ({matches}); qualify it as module::proc"
     )
 
 
@@ -754,9 +749,8 @@ class SDFGBuilder:
         Arguments:
             hlfir_paths: list of paths to HLFIR files.  The first file
                          becomes the base; the rest are merged in.
-            entry:       mangled Flang symbol (``_QPkernel`` /
-                         ``_QMmodPsub``) of the subroutine the SDFG
-                         should represent.
+            entry:       Fortran name (``kernel`` / ``mod::sub``) of the
+                         subroutine the SDFG should represent.
             pipeline:    pass pipeline to run before extraction.
         """
         obj = cls.__new__(cls)
@@ -2053,7 +2047,7 @@ def generate_sdfg(
         ``generate_sdfg("code.hlfir")``  --  parses + DEFAULT_PIPELINE.
 
     Multi-file form (ICON-style linked entry):
-        ``generate_sdfg(entry="_QPkernel", hlfir_files=[...])``  --  parses
+        ``generate_sdfg(entry="kernel", hlfir_files=[...])``  --  parses
         every file, merges them, drops non-entry siblings, errors on
         unresolved calls, then runs the HLFIR rewrite chain.
     """

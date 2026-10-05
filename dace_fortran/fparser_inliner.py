@@ -1224,43 +1224,19 @@ def parse_and_improve(sources: Dict[str, str], entry_points: Optional[Iterable[t
     return ast
 
 
-def _demangle_spec(mangled: str) -> types.SPEC:
-    """Turn a flang-mangled symbol (``_QP<proc>`` / ``_QM<mod>P<proc>``)
-    into an fparser entry SPEC ``(proc,)`` / ``(mod, proc)``.
-
-    Self-contained so the inliner's unit tests need not import the C++
-    bridge (which ``dace_fortran.builder`` pulls in eagerly).  Kept in
-    lock-step with ``dace_fortran.builder.demangle_fortran_proc`` /
-    ``module_of_fortran_sym``: flang lower-cases every identifier, so the
-    only upper-case markers are the structural ``M`` / ``P`` / ``F``."""
-    if not mangled.startswith("_Q"):
-        return (mangled.lower(),)
-    p = mangled.rfind("P")
-    proc = mangled[p + 1 :].lower() if p > 1 else mangled.lower()
-    if mangled.startswith("_QM"):
-        body = mangled[3:]
-        for i, ch in enumerate(body):
-            if ch in ("P", "F"):
-                if i > 0:
-                    return (body[:i].lower(), proc)
-                break
-    return (proc,)
-
-
 def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
-    """Resolve ``entry`` (plain name / ``module::proc`` / mangled ``_Q...``)
-    to an fparser entry-point SPEC ``(module, proc)`` or ``(proc,)``.
+    """Resolve ``entry`` (``proc`` / ``module::proc``) to an fparser entry-point SPEC ``(module, proc)`` or
+    ``(proc,)``.
 
-    Resolution goes through dace-fortran's own ``resolve_entry_symbol`` (so the
-    inliner agrees byte-for-byte with the HLFIR build path on which
-    procedure is the root); the result is demangled locally to avoid
-    importing the bridge-heavy ``dace_fortran.builder``.  ``None`` passes
-    through (every top-level subprogram is kept as an entry point)."""
+    Resolution goes through dace-fortran's own ``resolve_entry_name`` (so the inliner agrees with the HLFIR build path
+    on which procedure is the root).  ``None`` passes through (every top-level subprogram is kept as an entry
+    point)."""
     if entry is None:
         return None
-    from dace_fortran.build import resolve_entry_symbol
+    from dace_fortran.build import resolve_entry_name
 
-    return _demangle_spec(resolve_entry_symbol(source, entry))
+    module, proc = resolve_entry_name(source, entry)
+    return (module, proc) if module else (proc,)
 
 
 #: One physical ``!$acc`` sentinel line (directive opener or continuation piece).
@@ -1709,9 +1685,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         required=True,
         help="A Fortran source file or directory (repeatable).",
     )
-    argp.add_argument(
-        "-k", "--entry_point", default=None, help="Entry procedure: plain name, module::proc, or mangled _Q... symbol."
-    )
+    argp.add_argument("-k", "--entry_point", default=None, help="Entry procedure: plain name or module::proc.")
     argp.add_argument(
         "-o", "--output", default=None, help="Output .f90 path (default: ./inlined.f90; '-' writes to stdout)."
     )

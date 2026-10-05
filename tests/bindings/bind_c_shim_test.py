@@ -364,7 +364,7 @@ def test_bind_c_shim_e2e_axpy(tmp_path: Path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name=name, entry=f"_QP{name}")
+    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name=name, entry=name)
     sdfg = builder.build()
     sdfg.name = name
     sdfg.build_folder = str(tmp_path / "dacecache")
@@ -492,7 +492,7 @@ def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_STRUCT_KERNEL_SRC, sdfg_dir, name=name, entry=f"_QP{name}")
+    builder = build_sdfg(_STRUCT_KERNEL_SRC, sdfg_dir, name=name, entry=name)
     plan_dict = builder.module.get_flatten_plan()
     sdfg = builder.build()
     sdfg.name = name

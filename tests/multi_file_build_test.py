@@ -11,7 +11,7 @@ import pytest
 
 
 from dace_fortran import build_sdfg, build_sdfg_from_files
-from dace_fortran.build import _entry_proc_name
+from dace_fortran.build import build_sdfg as build_sdfg_api
 from dace_fortran.preprocess import MergeEngine
 
 
@@ -107,16 +107,11 @@ def test_three_files_transitive_use(tmp_path: Path, merge_engine: MergeEngine):
     _check_scaled_sum(sdfg, n=8, seed=1, scale=2.0)
 
 
-def test_entry_proc_name_accepts_all_three_spellings():
-    """Root-file selection reduces every accepted entry spelling (``module::proc``,
-    mangled Flang symbol, plain name) to the bare procedure name.  Regression:
-    ``module::proc`` used to fall through unstripped and match nothing."""
-    assert _entry_proc_name("mo_solve_nonhydro::solve_nh") == "solve_nh"
-    assert _entry_proc_name("m_array_return::kern") == "kern"
-    assert _entry_proc_name("_QMmymodPbar") == "bar"
-    assert _entry_proc_name("_QPmain") == "main"
-    assert _entry_proc_name("solve_nh") == "solve_nh"
-    assert _entry_proc_name(None) is None
+def test_mangled_entry_is_rejected():
+    """The entry is named as in Fortran (``proc`` / ``module::proc``); a Flang-mangled symbol is refused with a
+    message saying so instead of being half-supported."""
+    with pytest.raises(ValueError, match="Flang-mangled symbol"):
+        build_sdfg_api("subroutine main(x)\n  real :: x\n  x = 1\nend subroutine\n", entry="_QPmain")
 
 
 @pytest.mark.parametrize("merge_engine", list(MergeEngine))
@@ -169,7 +164,7 @@ def test_entry_resolution_contract(tmp_path: Path):
 
 
 if __name__ == "__main__":
-    test_entry_proc_name_accepts_all_three_spellings()
+    test_mangled_entry_is_rejected()
     for engine in MergeEngine:
         with tempfile.TemporaryDirectory() as d:
             test_two_files_driver_plus_module(Path(d), engine)

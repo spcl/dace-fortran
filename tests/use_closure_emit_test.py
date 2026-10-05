@@ -9,15 +9,7 @@ wasteful and drags in modules flang need never touch.  ``emit(entry=...)``
 import json
 
 
-from dace_fortran.emit_hlfir import _entry_module, parse_compile_commands, _select_use_closure, emit
-
-
-def test_entry_module_parsing():
-    # ``_entry_module`` parses the enclosing module out of a *mangled* flang
-    # symbol (an IR-introspection helper); user-facing entry names are plain.
-    assert _entry_module("_QMmo_solve_nonhydroPsolve_nh") == "mo_solve_nonhydro"
-    assert _entry_module("_QMmo_xPfoo") == "mo_x"
-    assert _entry_module("_QPbar") is None  # free subroutine, no module
+from dace_fortran.emit_hlfir import parse_compile_commands, _select_use_closure, emit
 
 
 def _write(tmp_path, name, body):

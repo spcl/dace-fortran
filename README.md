@@ -202,9 +202,8 @@ from dace_fortran.bindings import build_fortran_library
 src = open("kernel.f90").read()
 
 # Build the SDFG.  ``entry`` selects the target procedure; it accepts a
-# plain Fortran name (``kernel``), a ``module::proc`` qualifier
-# (``mo_x::kernel``), or a mangled Flang symbol (``_QPkernel`` /
-# ``_QMmo_xPkernel``).  Omit it only when the source has exactly one
+# plain Fortran name (``kernel``) or a ``module::proc`` qualifier
+# (``mo_x::kernel``).  Omit it only when the source has exactly one
 # procedure.
 sdfg = dace_fortran.build_sdfg(src, entry="kernel", name="kernel")
 
@@ -235,7 +234,7 @@ sdfg = dace_fortran.build_sdfg_from_files([driver, mod], entry="mo_x::kernel",
 # A large / dependency-tangled project: emit .hlfir from your own build,
 # then consume compile_commands.json directly (tier 3):
 sdfg = dace_fortran.build_sdfg_from_project(
-    "build/compile_commands.json", entry="_QMmymodPmysub")
+    "build/compile_commands.json", entry="mymod::mysub")
 
 # A kernel that CALLs a separately-compiled bind(c) function — keep it
 # external and bind it to a C-ABI symbol / library:

@@ -93,7 +93,7 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(src, sdfg_dir, name=sub, entry=f"_QM{kern_mod}P{sub}")
+    builder = build_sdfg(src, sdfg_dir, name=sub, entry=f"{kern_mod}::{sub}")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.validate()
