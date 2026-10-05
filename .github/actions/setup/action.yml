@@ -26,7 +26,7 @@ runs:
       sudo apt-get update
       sudo apt-get install -y \
         llvm-$V-dev libmlir-$V-dev mlir-$V-tools libflang-$V-dev flang-$V clang-$V clang-tidy-$V \
-        build-essential cmake ninja-build gfortran libgomp1 libopenmpi-dev openmpi-bin \
+        build-essential cmake ninja-build libtool gfortran libgomp1 libopenmpi-dev openmpi-bin \
         libnetcdff-dev libnetcdf-dev libhdf5-dev libfftw3-dev libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
         pkg-config perl bear autoconf automake m4 rsync zlib1g-dev cppcheck
       echo "/usr/lib/llvm-$V/bin" >> "$GITHUB_PATH"
@@ -49,8 +49,8 @@ runs:
     run: |
       # A missing tool must fail here, not turn its tests into silent skips.
       missing=0
-      for t in flang-new-$V clang-$V gfortran gcc g++ make cmake ninja meson mpicc mpicxx mpifort mpif90 perl \
-               bear autoconf automake aclocal m4 rsync pkg-config cppcheck clang-tidy; do
+      for t in flang-new-$V clang-$V gfortran gcc g++ make cmake ninja meson mpicc mpicxx mpifort mpif90 perl libtoolize autoreconf \
+               bear autoconf automake aclocal m4 rsync pkg-config cppcheck clang-tidy nf-config; do
         command -v "$t" >/dev/null 2>&1 || { echo "MISS $t"; missing=1; }
       done
       test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h || { echo 'MISS mpif-config.h'; missing=1; }
