@@ -1,6 +1,6 @@
 ! Fortran caller wrapper for the QE h_psi_module::h_psi e2e test.
 !
-! Two BIND(C) entry points, plus stubs for the QE pruner gaps, mirroring
+! Three BIND(C) entry points, plus stubs for the QE pruner gaps, mirroring
 ! the structure of ``vexx_bp_k_gpu_caller.f90``:
 !
 !   init_h_psi_state_c  -- one-shot initialisation of the QE module-level
@@ -29,6 +29,11 @@
 !                                    meta/U/scissor/exx/elfield all skipped
 !                          Expected output: hpsi(i,j) = g2kin(i)*psi(i,j)
 !                          for i<=n, 0 for n<i<=lda (no other FP touches it).
+!
+!   h_psi_save_buffer_c, h_psi_initialize_local_to_exact_map_c,
+!   h_psi_transform_to_exx_c, h_psi_transform_to_local_c
+!                       -- C entries for the routines the SDFG keeps external
+!                          (scissor / EXX paths, not taken).
 !
 ! On the controlled path ``vloc_psi_k_acc`` reaches ``wave_g2r`` /
 ! ``wave_r2g``, which call the ``fft_interfaces`` generics ``invfft`` /
@@ -126,6 +131,52 @@ SUBROUTINE run_h_psi_c(lda, n, m, psi, hpsi) &
   COMPLEX(KIND=dp), INTENT(INOUT) :: hpsi(lda * npol, m)
   CALL h_psi(lda, n, m, psi, hpsi)
 END SUBROUTINE run_h_psi_c
+
+
+! Routines that stay external to the SDFG (keep_external), called through
+! these shims with the arrays by reference and the scalars by value:
+! ``buffers::save_buffer`` writes into ``buiol``'s module-global linked list
+! of regrowable POINTER records, and
+! the ``exx_bp_utils`` routines below allocate and read the ragged members
+! of its module-variable communication packets (``comm_send_reverse(i, j, k)
+! % msg``), which the bridge does not lower for module variables.
+SUBROUTINE h_psi_save_buffer_c(vect, nword, unit, nrec) &
+    BIND(C, NAME="h_psi_save_buffer_c")
+  USE kinds, ONLY: dp
+  USE buffers, ONLY: save_buffer
+  IMPLICIT NONE
+  INTEGER, VALUE :: nword, unit, nrec
+  COMPLEX(KIND=dp), INTENT(INOUT) :: vect(nword)
+  CALL save_buffer(vect, nword, unit, nrec)
+END SUBROUTINE h_psi_save_buffer_c
+
+SUBROUTINE h_psi_initialize_local_to_exact_map_c(lda, m) &
+    BIND(C, NAME="h_psi_initialize_local_to_exact_map_c")
+  USE exx_bp_utils, ONLY: initialize_local_to_exact_map
+  IMPLICIT NONE
+  INTEGER, VALUE :: lda, m
+  CALL initialize_local_to_exact_map(lda, m)
+END SUBROUTINE h_psi_initialize_local_to_exact_map_c
+
+SUBROUTINE h_psi_transform_to_exx_c(lda, n, m, m_out, ik, psi, psi_out, type) &
+    BIND(C, NAME="h_psi_transform_to_exx_c")
+  USE kinds, ONLY: dp
+  USE exx_bp_utils, ONLY: transform_to_exx
+  IMPLICIT NONE
+  INTEGER, VALUE :: lda, n, m, m_out, ik, type
+  COMPLEX(KIND=dp), INTENT(INOUT) :: psi(*), psi_out(*)
+  CALL transform_to_exx(lda, n, m, m_out, ik, psi, psi_out, type)
+END SUBROUTINE h_psi_transform_to_exx_c
+
+SUBROUTINE h_psi_transform_to_local_c(m, m_exx, psi, psi_out) &
+    BIND(C, NAME="h_psi_transform_to_local_c")
+  USE kinds, ONLY: dp
+  USE exx_bp_utils, ONLY: transform_to_local
+  IMPLICIT NONE
+  INTEGER, VALUE :: m, m_exx
+  COMPLEX(KIND=dp), INTENT(INOUT) :: psi(*), psi_out(*)
+  CALL transform_to_local(m, m_exx, psi, psi_out)
+END SUBROUTINE h_psi_transform_to_local_c
 
 
 ! Wall / CPU time stubs.  ``start_clock`` / ``stop_clock`` (and their

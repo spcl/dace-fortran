@@ -52,6 +52,7 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
+from dace_fortran.external import keep_external
 from tests._util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
@@ -243,28 +244,11 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
 
 
 @pytest.mark.timeout(1800)  # the deeply-inlined h_psi parse alone takes ~6 min, past the lanes' 300 s default
-@pytest.mark.xfail(
-    reason="bridge gap: get_ast's buildExpr reaches HLFIR/FIR ops it does not yet "
-    "lower on the deeply-inlined h_psi body -- a long tail (fir.iterate_while, "
-    "scf.index_switch, fir.allocmem, hlfir.elemental).  The earlier blockers are "
-    "now FIXED: the two scatter-lowering gaps (scalar-broadcast source + a section "
-    "source computed inside the rhs region), the extent-after-ALLOCATE symbol "
-    "(VersionShapeScalars now FREEZES the extent at each ALLOCATE instead of "
-    "refusing loop/branch reassignment), the O(n^2) literal-access extract, and "
-    "nested scf.while in the AST builder.  This unhandled-op tail is the residual.",
-    strict=False,
-)
 def test_h_psi_parses(tmp_path):
     """End-to-end SDFG build for ``h_psi``: the QE checkpoint parses,
-    inlines, and lowers to a validated SDFG.
-
-    Currently xfails in ``get_ast``: ``buildExpr`` reaches HLFIR/FIR ops
-    it does not yet lower on a deeply-inlined call site in the h_psi
-    USE-closure (fir.iterate_while / scf.index_switch / fir.allocmem /
-    hlfir.elemental).  The parse itself
-    (``test_restore_and_nyfft_unblock_flang_parse``) already passes, and
-    the extent/scatter/perf/nested-while blockers are fixed; when this
-    op tail is covered the build returns cleanly and this test flips."""
+    inlines, and lowers to a validated SDFG, with the routines the bridge
+    does not lower kept external (see :func:`_keep_unlowerable_routines_external`)."""
+    _keep_unlowerable_routines_external()
     src = _preprocess(_SRC.read_text())
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="h_psi")
     sdfg.validate()
@@ -275,10 +259,29 @@ def test_h_psi_parses(tmp_path):
 _CALLER = _HERE / "h_psi_caller.f90"
 
 
+def _keep_unlowerable_routines_external(libraries: tuple[str, ...] = ()) -> None:
+    """Leave the routines the bridge does not lower external, called through the
+    bind(c) shims in :file:`h_psi_caller.f90`:
+
+    * ``buffers::save_buffer`` (reached through ``p_psi``) writes into ``buiol``'s
+      module-global linked list of regrowable POINTER records
+      (``new(i) % data => old(i) % data``);
+    * ``exx_bp_utils::initialize_local_to_exact_map`` / ``transform_to_exx`` /
+      ``transform_to_local`` allocate and read the ragged members of its module-variable
+      communication packets (``ALLOCATE(comm_send_reverse(..) % msg(count, ..))``), which
+      the bridge flattens for local arrays of records only.
+
+    ``libraries`` names the shared library exporting the shims when the SDFG is compiled.
+    """
+    keep_external("save_buffer", c_name="h_psi_save_buffer_c", libraries=libraries)
+    for name in ("initialize_local_to_exact_map", "transform_to_exx", "transform_to_local"):
+        keep_external(name, c_name=f"h_psi_{name}_c", libraries=libraries)
+
+
 def _compile_reference(tmp_path):
     """Compile QE source + caller wrapper into a ctypes-loadable .so.
 
-    Returns ``(ctypes.CDLL, init, run)`` where ``init`` and ``run`` are
+    Returns ``(library path, init, run)`` where ``init`` and ``run`` are
     ready-to-call function objects.  The caller wrapper provides:
 
     * ``init_h_psi_state_c(lda, n, m, npol)`` -- one-shot module-state
@@ -333,7 +336,7 @@ def _compile_reference(tmp_path):
     run = lib.run_h_psi_c
     run.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
     run.restype = None
-    return lib, init, run
+    return libpath, init, run
 
 
 def _make_random_inputs(lda, npol, m, *, seed=0):
@@ -404,12 +407,6 @@ def test_h_psi_reference_runs(tmp_path):
 
 
 @pytest.mark.timeout(1800)  # rebuilds the same SDFG as test_h_psi_parses (~6 min), past the lanes' 300 s default
-@pytest.mark.xfail(
-    reason="depends on test_h_psi_parses: the SDFG build currently xfails "
-    "in the MLIR pass pipeline (hlfir-expand-vector-subscript-"
-    "scatter), so the binding is never emitted; flips with it.",
-    strict=False,
-)
 def test_h_psi_numerical_correctness(tmp_path):
     """End-to-end numerical correctness for ``h_psi`` THROUGH the generated
     Fortran binding.
@@ -443,7 +440,8 @@ def test_h_psi_numerical_correctness(tmp_path):
     lda, n, m, npol = 4, 4, 1, 1
 
     # --- gfortran reference (kinetic term on the no-op path) ---
-    _, init, run = _compile_reference(tmp_path)
+    ref_lib, init, run = _compile_reference(tmp_path)
+    _keep_unlowerable_routines_external(libraries=(str(ref_lib),))
     init(lda, n, m, npol)
     psi_ref, hpsi_ref = _make_random_inputs(lda, npol, m)
     psi_dace = psi_ref.copy(order="F")
