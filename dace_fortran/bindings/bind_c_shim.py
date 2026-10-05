@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import List, Sequence
 
 from dace_fortran.bindings.fortran_interface import (
+    FORTRAN_C_TYPE,
     DerivedType,
     Member,
     OriginalArg,
     OriginalInterface,
+    fortran_c_type,
 )
 from typing import TYPE_CHECKING
 
@@ -344,7 +346,7 @@ def _emit_double_buffer_member(
     for sym in sym_names:
         for info in syms[sym]:
             flat, leaf, rank = info["flat"], info["leaf"], info["rank"]
-            ftype = _MOD_FORWARD_SCALAR_FTYPE.get(info["dtype"], "real(c_double)")
+            ftype = FORTRAN_C_TYPE.get(info["dtype"], "real(c_double)")
             ext_names = [f"{flat}_d{i}" for i in range(rank)]
             for en in ext_names:
                 header_args.append(en)
@@ -608,17 +610,6 @@ def _emit_struct_arg(
     call_args.append(a.name)
 
 
-# SDFG dtype -> iso_c_binding Fortran type for by-value scalar C ABI args.
-# Keep in sync with emit_library._sym2c so the two ABIs coincide.
-_MOD_FORWARD_SCALAR_FTYPE = {
-    "int32": "integer(c_int)",
-    "int64": "integer(c_long_long)",
-    "float32": "real(c_float)",
-    "float64": "real(c_double)",
-    "bool": "logical(c_bool)",
-}
-
-
 def _emit_module_symbol_forward(
     module_symbol_forward: Sequence[tuple[str, str, str, int]],
     header_args: List[str],
@@ -641,14 +632,7 @@ def _emit_module_symbol_forward(
     """
     seen_use_aliases = set()
     for module, member, dtype, rank in module_symbol_forward:
-        ftype = _MOD_FORWARD_SCALAR_FTYPE.get(dtype)
-        if ftype is None:
-            raise ValueError(
-                f"bind_c_shim module_symbol_forward: unsupported dtype "
-                f"{dtype!r} for ``{module}::{member}``; extend "
-                f"``_MOD_FORWARD_SCALAR_FTYPE`` for new pass-by-value "
-                f"shapes."
-            )
+        ftype = fortran_c_type(dtype)
         # Same module may repeat -- collapse into one `only:` list per module.
         alias = f"{member}__sink"
         if alias not in seen_use_aliases:

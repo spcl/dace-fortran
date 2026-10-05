@@ -27,8 +27,21 @@ import numpy as np
 _HERE = Path(__file__).resolve().parent
 
 # Fortran C-ABI type -> (numpy dtype, ctypes value type).
-_NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
-_CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
+# A LOGICAL(KIND=k) arg is the caller's k-byte LOGICAL storage.
+_NP = {
+    "real(c_double)": np.float64,
+    "integer(c_int)": np.int32,
+    "logical(c_bool)": np.int8,
+    "logical(1)": np.uint8,
+    "logical(4)": np.uint32,
+}
+_CT = {
+    "real(c_double)": ctypes.c_double,
+    "integer(c_int)": ctypes.c_int,
+    "logical(c_bool)": ctypes.c_bool,
+    "logical(1)": ctypes.c_uint8,
+    "logical(4)": ctypes.c_uint32,
+}
 
 # ICON refin-ctrl index arrays (verts/cells/edges%{start,end}_{block,index}) are
 # ALLOCATABLE with a NEGATIVE lower bound (min_rl:max_rl) and read at negative
@@ -202,7 +215,7 @@ def _retarget_shim(
     ORIGINAL kernel ``entry`` instead of ``<dace_name>_dace``.
 
     ``logical(c_bool)`` args are coerced to the kernel's LOGICAL kind at the
-    call site (C ABI keeps them ``c_bool``), same as the SDFG path.
+    call site.
 
     ``module_dims`` (grid-DIMENSION globals from :func:`_size_derived_module_dims`)
     are seeded to ``n_val`` before the call, mirroring ICON's namelist init --
@@ -351,14 +364,16 @@ def _parse_abi(shim: str):
     value_ftype = {
         name: ftype
         for ftype, name in re.findall(
-            r"(integer\(c_int\)|real\(c_double\)|logical\(c_bool\)),\s*value\s*::\s*(\w+)", shim
+            r"(integer\(c_int\)|real\(c_double\)|logical\((?:c_bool|[14])\)),\s*value\s*::\s*(\w+)", shim
         )
     }
     ptr_ftype, ptr_shape, ptr_local = {}, {}, {}
     for p, local, shp in re.findall(r"call c_f_pointer\((\w+),\s*(\w+),\s*\[([^\]]*)\]\)", shim):
         ptr_shape[p] = shp
         ptr_local[p] = local
-        dt = re.search(rf"(real\(c_double\)|integer\(c_int\)|logical\(c_bool\)),\s*pointer\s*::\s*{local}\b", shim)
+        dt = re.search(
+            rf"(real\(c_double\)|integer\(c_int\)|logical\((?:c_bool|[14])\)),\s*pointer\s*::\s*{local}\b", shim
+        )
         ptr_ftype[p] = dt.group(1)
     dim_symbols = set()
     for shp in ptr_shape.values():

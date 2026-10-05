@@ -74,9 +74,8 @@ subroutine main(d)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
-    # d is Fortran LOGICAL -- pass np.bool_ (1 byte/elem) to match the SDFG's bool*
     # declaration. Filled True so assertions can distinguish SDFG writes from the initial value.
-    d = np.full([3, 4, 5], True, order="F", dtype=np.bool_)
+    d = np.full([3, 4, 5], True, order="F", dtype=np.uint32)
     sdfg(d=d, a=0, jk=0, jl=0, jm=0)
     # LLFALL(1)=.false. (no positive ZVQX at JM=1); LLFALL(2)=.true. (ZVQX(2)=1.0).
     assert not d[0, 0, 0]

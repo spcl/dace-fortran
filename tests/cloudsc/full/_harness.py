@@ -34,7 +34,8 @@ def f2py_argnames(fn) -> set:
 
 
 def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
-    """Route each scalar to a plain Python scalar (SDFG Scalar/symbol) or length-1 numpy array (intent out/inout), matching the bridge's declared dtype (see ``feedback_scalar_io_convention``)."""
+    """Route each scalar to a plain Python scalar (SDFG Scalar/symbol) or a length-1 numpy array (intent out/inout) of
+    the dtype the SDFG declares (a LOGICAL is its storage, e.g. ``uint32``)."""
     from dace.data import Scalar
 
     arglist = sdfg.arglist()
@@ -44,13 +45,7 @@ def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
         if desc is None or isinstance(desc, Scalar):
             out[k] = v
         else:
-            decl = str(desc.dtype) if hasattr(desc, "dtype") else ""
-            if "bool" in decl.lower():
-                out[k] = np.array([bool(v)], dtype=np.bool_)
-            elif isinstance(v, float):
-                out[k] = np.array([v], dtype=np.float64)
-            else:
-                out[k] = np.array([v], dtype=np.int32)
+            out[k] = np.array([v], dtype=desc.dtype.as_numpy_dtype())
     return out
 
 

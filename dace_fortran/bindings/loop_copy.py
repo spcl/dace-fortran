@@ -11,28 +11,17 @@ return ``List[str]`` of lines pre-indented to wrapper-body level.
 
 from typing import List, Tuple
 
+from dace_fortran.bindings.fortran_interface import FORTRAN_C_TYPE
 from dace_fortran.bindings.flatten_plan import (
     FlattenRecipe,
     strip_index_args,
     substitute_indices,
 )
 
-_DTYPE_TO_F = {
-    "float64": "real(c_double)",
-    "float32": "real(c_float)",
-    "int8": "integer(c_int8_t)",
-    "int16": "integer(c_int16_t)",
-    "int32": "integer(c_int)",
-    "int64": "integer(c_long)",
-    "bool": "logical(c_bool)",
-    "complex64": "complex(c_float)",
-    "complex128": "complex(c_double)",
-}
-
 
 def fortran_scalar_type(dtype: str) -> str:
     """Map a DaCe dtype string to its Fortran iso_c_binding form."""
-    return _DTYPE_TO_F.get(dtype, "real(c_double)")
+    return FORTRAN_C_TYPE.get(dtype, "real(c_double)")
 
 
 def _loop_index_names(rank: int) -> Tuple[str, ...]:

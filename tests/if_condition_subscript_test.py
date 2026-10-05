@@ -53,10 +53,10 @@ def test_if_condition_with_array_subscripts(tmp_path: Path):
     out_ref = mod.if_logical_or_neighbour(mask, n=n)
     np.testing.assert_array_equal(out_ref, expected)
 
-    # SDFG: xfail expects this assertion to fail until extract_ast subscript-preservation is fixed.
+    # The SDFG works on the caller's LOGICAL(4) storage.
     sdfg = build_sdfg(_IF_OR_SRC, tmp_path, name="if_logical_or_neighbour").build()
     out = np.zeros(n, dtype=np.float64, order="F")
-    sdfg(mask=mask, out=out, n=n, i=0)
+    sdfg(mask=mask.astype(np.uint32), out=out, n=n, i=0)
     np.testing.assert_array_equal(out, expected)
 
 

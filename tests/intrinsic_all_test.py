@@ -21,14 +21,14 @@ END SUBROUTINE intrinsic_all_test_function
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     size = 5
-    d = np.full([size], False, order="F", dtype=np.bool_)
-    res = np.full([2], False, order="F", dtype=np.bool_)
+    d = np.full([size], False, order="F", dtype=np.uint32)
+    res = np.full([2], False, order="F", dtype=np.uint32)
 
     d[2] = True
     sdfg(d=d, res=res)
     assert not res[0]
 
-    d = np.full([size], True, order="F", dtype=np.bool_)
+    d = np.full([size], True, order="F", dtype=np.uint32)
     sdfg(d=d, res=res)
     assert res[0]
 
@@ -71,13 +71,13 @@ END SUBROUTINE intrinsic_all_test_function
     first = np.full([size], 1, order="F", dtype=np.int32)
     second = np.full([size], 1, order="F", dtype=np.int32)
     second[2] = 2
-    res = np.full([7], False, order="F", dtype=np.bool_)
+    res = np.full([7], False, order="F", dtype=np.uint32)
 
     sdfg(first=first, second=second, res=res)
     assert list(res) == [0, 0, 0, 0, 0, 0, 1]
 
     second = np.full([size], 2, order="F", dtype=np.int32)
-    res = np.full([7], False, order="F", dtype=np.bool_)
+    res = np.full([7], False, order="F", dtype=np.uint32)
     sdfg(first=first, second=second, res=res)
     for val in res:
         assert not val
@@ -104,7 +104,7 @@ END SUBROUTINE intrinsic_all_test_function
 
     size = 5
     first = np.full([size], 42, order="F", dtype=np.int32)
-    res = np.full([6], False, order="F", dtype=np.bool_)
+    res = np.full([6], False, order="F", dtype=np.uint32)
 
     sdfg(first=first, res=res)
     for val in res[0:-1]:
@@ -138,8 +138,8 @@ END SUBROUTINE intrinsic_all_test_function
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
 
     sizes = [5, 7]
-    d = np.full(sizes, True, order="F", dtype=np.bool_)
-    res = np.full([2], False, order="F", dtype=np.bool_)
+    d = np.full(sizes, True, order="F", dtype=np.uint32)
+    res = np.full([2], False, order="F", dtype=np.uint32)
 
     d[2, 2] = False
     sdfg(d=d, res=res)
@@ -174,14 +174,14 @@ END SUBROUTINE intrinsic_all_test_function
     first = np.full(sizes, 1, order="F", dtype=np.int32)
     second = np.full(sizes, 1, order="F", dtype=np.int32)
     second[2, 2] = 2
-    res = np.full([7], False, order="F", dtype=np.bool_)
+    res = np.full([7], False, order="F", dtype=np.uint32)
 
     sdfg(first=first, second=second, res=res)
     for val in res:
         assert not val
 
     second = np.full(sizes, 1, order="F", dtype=np.int32)
-    res = np.full([7], False, order="F", dtype=np.bool_)
+    res = np.full([7], False, order="F", dtype=np.uint32)
     sdfg(first=first, second=second, res=res)
     for val in res:
         assert val
@@ -213,7 +213,7 @@ END SUBROUTINE intrinsic_all_test_function
     second[3:5, 0] = 3
     second[3:5, 3:5] = 3
 
-    res = np.full([2], False, order="F", dtype=np.bool_)
+    res = np.full([2], False, order="F", dtype=np.uint32)
 
     sdfg(first=first, second=second, res=res)
     assert list(res) == [0, 1]
@@ -245,7 +245,7 @@ END SUBROUTINE intrinsic_all_test_function
     second[3:5, 0] = 3
     second[3:5, 3:5] = 3
 
-    res = np.full([2], False, order="F", dtype=np.bool_)
+    res = np.full([2], False, order="F", dtype=np.uint32)
 
     sdfg(first=first, second=second, res=res)
     assert list(res) == [0, 1]

@@ -75,7 +75,7 @@ def test_patch_preserves_signature():
             end += 1
         surface = list(lines[start : end + 1])
         # Stop at the first INTERFACE block: the patch's wrapper interface has its
-        # own dummy decls (c_bool/c_int types, not solve_nh's) -- internal, not ABI.
+        # own dummy decls -- internal, not ABI.
         for i in range(end + 1, len(lines)):
             stripped = lines[i].lstrip().upper()
             if stripped.startswith("END SUBROUTINE SOLVE_NH"):

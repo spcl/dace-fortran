@@ -47,14 +47,20 @@ from dace_fortran.dace_types import library_node
 if TYPE_CHECKING:
     from dace_fortran.external_functions import ExternalFunction
 
-#: ``Arg.dtype`` -> the C scalar type used in the ``extern "C"``
-#: declaration.  Array args take the pointer form (``<ctype> *``).
-_C_TYPES = {
+#: SDFG dtype -> the C scalar type of an ``extern "C"`` declaration (array args take the pointer form
+#: ``<ctype> *``).  The unsigned dtypes are LOGICAL(KIND=1/2/4/8) storage.
+C_TYPES = {
     "float64": "double",
     "float32": "float",
+    "int8": "int8_t",
+    "int16": "int16_t",
     "int32": "int",
     "int64": "long long",
     "bool": "bool",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
+    "uint32": "uint32_t",
+    "uint64": "uint64_t",
     # Layout-compatible with Fortran ``complex(c_double_complex)`` / ``complex(c_float_complex)``.
     "complex128": "dace::complex128",
     "complex64": "dace::complex64",
@@ -161,7 +167,7 @@ class Arg:
           work.  The C parameters expand to one pointer per leaf
           member, in marshal-expansion order.
 
-    :ivar dtype: element dtype string -- a key of :data:`_C_TYPES`
+    :ivar dtype: element dtype string -- a key of :data:`C_TYPES`
         (``'float64'`` / ``'int32'`` / ...).  Ignored when ``kind``
         is ``AOS`` or ``COMM``.
     :ivar intent: ``IN`` | ``OUT`` | ``INOUT``.  Defaults to
@@ -214,9 +220,9 @@ class Arg:
             raise ValueError(
                 f"external Arg(kind=AOS): unsupported c_abi {abi}; expected AOS_STRUCT_PTR or PER_MEMBER_SOA"
             )
-        base = _C_TYPES.get(self.dtype)
+        base = C_TYPES.get(self.dtype)
         if base is None:
-            raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; known: {sorted(_C_TYPES)}")
+            raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; known: {sorted(C_TYPES)}")
         return f"{base} *" if self.kind is ArgKind.ARRAY else base
 
 

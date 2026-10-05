@@ -20,12 +20,12 @@ from typing import Dict, Optional, Tuple
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
 
-# SDFG dtype -> iso_c_binding Fortran type.  bool is the uniform image for
-# any LOGICAL(KIND) (bridge converts kind width at the boundary).  No
-# unsigned entries -- Fortran <2023 has none; flang lowers to signless ints.
-_DTYPE_TO_FORTRAN_C = {
-    "complex128": "complex(c_double)",
-    "complex64": "complex(c_float)",
+#: SDFG dtype -> iso_c_binding Fortran type.  The unsigned dtypes are LOGICAL(KIND=1/2/4/8): the SDFG works on the
+#: caller's LOGICAL storage (Fortran before 2023 has no unsigned integers, so nothing else maps to them).  flang and
+#: gfortran number LOGICAL kinds by their byte width.
+FORTRAN_C_TYPE = {
+    "complex128": "complex(c_double_complex)",
+    "complex64": "complex(c_float_complex)",
     "float64": "real(c_double)",
     "float32": "real(c_float)",
     "int8": "integer(c_int8_t)",
@@ -33,7 +33,24 @@ _DTYPE_TO_FORTRAN_C = {
     "int32": "integer(c_int)",
     "int64": "integer(c_int64_t)",
     "bool": "logical(c_bool)",
+    "uint8": "logical(1)",
+    "uint16": "logical(2)",
+    "uint32": "logical(4)",
+    "uint64": "logical(8)",
 }
+
+#: The SDFG dtypes whose Fortran type is a LOGICAL.
+LOGICAL_DTYPES = frozenset(dtype for dtype, ftype in FORTRAN_C_TYPE.items() if ftype.startswith("logical"))
+
+
+def fortran_c_type(dtype: str) -> str:
+    """The iso_c_binding Fortran type of the SDFG dtype ``dtype``.
+
+    :raises ValueError: for a dtype with no Fortran counterpart.
+    """
+    if dtype not in FORTRAN_C_TYPE:
+        raise ValueError(f"no iso_c_binding Fortran type for SDFG dtype {dtype!r}")
+    return FORTRAN_C_TYPE[dtype]
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +139,7 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
             fortran_type = f"type({a['struct_name']})"
             struct_type = a["struct_name"]
         else:
-            mapped_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
+            mapped_type = FORTRAN_C_TYPE.get(a["dtype"])
             if mapped_type is None:
                 raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} for argument {a['name']!r}")
             fortran_type = mapped_type
@@ -157,7 +174,7 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                 # follows struct_name to recurse.
                 fortran_type = f"type({nested_name})"
             else:
-                fortran_type = _DTYPE_TO_FORTRAN_C.get(m["dtype"], "??")
+                fortran_type = FORTRAN_C_TYPE.get(m["dtype"], "??")
             members.append(
                 Member(
                     name=m["name"],

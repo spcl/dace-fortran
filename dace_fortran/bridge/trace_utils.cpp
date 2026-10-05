@@ -883,4 +883,26 @@ fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t) {
   return mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
 }
 
+std::string dtypeName(mlir::Type t) {
+  if (auto ft = mlir::dyn_cast<mlir::FloatType>(t)) {
+    unsigned const w = ft.getWidth();
+    return (w == 16 || w == 32 || w == 64) ? "float" + std::to_string(w) : "";
+  }
+  if (t.isInteger(1)) return "bool";
+  if (auto it = mlir::dyn_cast<mlir::IntegerType>(t)) {
+    unsigned const w = it.getWidth();
+    return (w == 8 || w == 16 || w == 32 || w == 64) ? "int" + std::to_string(w) : "";
+  }
+  if (auto lt = mlir::dyn_cast<fir::LogicalType>(t)) {
+    int const k = lt.getFKind();
+    return (k == 1 || k == 2 || k == 4 || k == 8) ? "uint" + std::to_string(8 * k) : "";
+  }
+  if (auto ct = mlir::dyn_cast<mlir::ComplexType>(t)) {
+    mlir::Type const et = ct.getElementType();
+    if (et.isF32()) return "complex64";
+    if (et.isF64()) return "complex128";
+  }
+  return "";
+}
+
 }  // namespace hlfir_bridge

@@ -24,7 +24,7 @@ END SUBROUTINE merge_test_function
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
-    mask = np.full([size], False, order="F", dtype=np.bool_)
+    mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
     sdfg(input1=first, input2=second, mask=mask, res=res)
@@ -243,8 +243,8 @@ END SUBROUTINE merge_test_function
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
     third = np.full([size], 43, order="F", dtype=np.float64)
-    mask1 = np.full([size], False, order="F", dtype=np.bool_)
-    mask2 = np.full([size], True, order="F", dtype=np.bool_)
+    mask1 = np.full([size], False, order="F", dtype=np.uint32)
+    mask2 = np.full([size], True, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
     for i in range(int(size / 2)):
@@ -275,10 +275,9 @@ END SUBROUTINE merge_test_function
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
-    # mask is Fortran LOGICAL -- pass np.bool_ (1 byte/elem) to match the SDFG's bool*
     # declaration. Previously np.int32 worked by LSB coincidence but corrupted values with
     # bit-0=0 (256, -2, ...).
-    mask = np.full([size], False, order="F", dtype=np.bool_)
+    mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
     sdfg(input1=first, input2=second, mask=mask, res=res)
@@ -313,8 +312,7 @@ END SUBROUTINE merge_test_function
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
-    # See merge_scalar above -- ``mask`` is LOGICAL, pass ``np.bool_``.
-    mask = np.full([size], False, order="F", dtype=np.bool_)
+    mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
     sdfg(input1=first, input2=second, mask=mask, res=res)

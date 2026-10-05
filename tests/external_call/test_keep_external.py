@@ -163,12 +163,12 @@ def test_comm_kind_c_decl_type_is_mpi_comm():
 
 
 def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
-    """Unknown ``dtype`` is fatal for array/scalar (resolved via ``_C_TYPES``) but not for comm (its type is fixed)."""
+    """Unknown ``dtype`` is fatal for array/scalar (resolved via ``C_TYPES``) but not for comm (its type is fixed)."""
 
     with pytest.raises(ValueError, match="unsupported dtype"):
         Arg(kind=ArgKind.ARRAY, dtype="float16").c_decl_type()
     with pytest.raises(ValueError, match="unsupported dtype"):
-        Arg(kind=ArgKind.SCALAR, dtype="uint8").c_decl_type()
+        Arg(kind=ArgKind.SCALAR, dtype="float128").c_decl_type()
     # comm: the dtype is ignored, so a nonsense one still yields MPI_Comm.
     assert Arg(kind=ArgKind.COMM, dtype="something_irrelevant").c_decl_type() == "MPI_Comm"
 

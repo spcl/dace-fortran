@@ -21,7 +21,7 @@ END SUBROUTINE intrinsic_count_test_function
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     size = 5
-    d = np.full([size], False, order="F", dtype=np.bool_)
+    d = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([2], 42, order="F", dtype=np.int32)
 
     d[2] = True
@@ -145,7 +145,7 @@ END SUBROUTINE intrinsic_count_test_function
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
 
     sizes = [5, 7]
-    d = np.full(sizes, True, order="F", dtype=np.bool_)
+    d = np.full(sizes, True, order="F", dtype=np.uint32)
     res = np.full([2], 42, order="F", dtype=np.int32)
     sdfg(d=d, res=res)
     assert res[0] == 35
@@ -154,7 +154,7 @@ END SUBROUTINE intrinsic_count_test_function
     sdfg(d=d, res=res)
     assert res[0] == 34
 
-    d = np.full(sizes, False, order="F", dtype=np.bool_)
+    d = np.full(sizes, False, order="F", dtype=np.uint32)
     sdfg(d=d, res=res)
     assert res[0] == 0
 

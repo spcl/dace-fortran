@@ -394,7 +394,7 @@ END SUBROUTINE merge_arrays
     n = 8
     a = rng.standard_normal(n)
     b = rng.standard_normal(n)
-    mask = rng.integers(0, 2, n).astype(np.bool_)
+    mask = rng.integers(0, 2, n).astype(np.uint32)
     out_ref = ref.merge_arrays(a=a, b=b, mask=mask)
     out = np.zeros(n)
     sdfg(a=a, b=b, mask=mask, out=out, n=n)

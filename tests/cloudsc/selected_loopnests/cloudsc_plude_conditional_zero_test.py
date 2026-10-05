@@ -68,7 +68,7 @@ END MODULE kernel_mod
     rng = np.random.default_rng(42)
     plude_in = np.asfortranarray(rng.random((klon, klev, nblocks)))
     plu = np.asfortranarray(rng.random((klon, klev, nblocks)))
-    ldcum = np.asfortranarray(rng.integers(0, 2, (klon, nblocks)).astype(np.bool_))
+    ldcum = np.asfortranarray(rng.integers(0, 2, (klon, nblocks)).astype(np.uint32))
     zgdp = np.asfortranarray(rng.random((klon,)))
     ptsphy_val = rng.random()
     rlmin_val = rng.random()

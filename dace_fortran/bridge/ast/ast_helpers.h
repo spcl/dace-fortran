@@ -142,6 +142,12 @@ std::string buildExprWithSubscripts(mlir::Value val, int d);
 /// control_flow.cpp.
 std::string buildBoolExpr(mlir::Value val, int d);
 
+/// The truth value of the LOGICAL SSA value ``logical`` as a Python boolean expression.  LOGICAL storage holds the
+/// caller's bytes and any non-zero value is .TRUE. (a foreign producer may store -1 or 0x7FFFFFFF), so a stored value
+/// reads as ``(x != 0)``; a LOGICAL converted from an ``i1`` is that boolean itself.  ``render`` renders a stored
+/// value (bare name or subscripted, per the caller's context).
+std::string logicalTruth(mlir::Value logical, int d, std::string (*render)(mlir::Value, int));
+
 /// Render the dim-th index expression of an hlfir.designate, applying section/assumed-shape lower-bound rebases. See
 /// expressions.cpp.
 std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::Value idx, int depth);

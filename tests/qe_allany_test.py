@@ -49,7 +49,7 @@ END MODULE s_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     assert {"AllNode", "AnyNode"} & _libnode_names(sdfg)
-    res = np.zeros(1, dtype=np.bool_)
+    res = np.zeros(1, dtype=np.uint32)
     a = np.asarray(x, dtype=np.float64, order="F")
     sdfg(a=a, res=res, n=np.int32(len(x)))
     assert bool(res[0]) == expected

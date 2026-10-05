@@ -144,8 +144,10 @@ def test_char_compare_folds_per_literal(tmp_path: Path):
     live."""
     stores = _flag_stores(_build(tmp_path))
     assert set(stores) == {"add_c", "add_r"}, f"dispatch flags not found: {stores}"
-    assert stores["add_c"].endswith("= (- 1)"), f"baked 'c' arm not folded TRUE: {stores['add_c']}"
-    assert stores["add_r"].endswith("= 0"), f"dead 'r' arm not folded FALSE: {stores['add_r']}"
+    # A LOGICAL store writes flang's .TRUE. (1) / .FALSE. (0).
+    stored = {flag: code.split("=", 1)[1].strip() for flag, code in stores.items()}
+    assert stored["add_c"] in ("True", "1"), f"baked 'c' arm not folded TRUE: {stores['add_c']}"
+    assert stored["add_r"] in ("False", "0"), f"dead 'r' arm not folded FALSE: {stores['add_r']}"
 
 
 def test_dead_arm_validation_cannot_gate_the_live_arm(tmp_path: Path):

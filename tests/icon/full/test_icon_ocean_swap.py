@@ -88,7 +88,7 @@ def test_patch_preserves_signature():
             end += 1
         surface = list(lines[start : end + 1])
         # collect INTENT(...) lines up to the first INTERFACE block -- the patch's inner
-        # INTERFACE declares the wrapper's own c_bool/c_int dummies, not part of the ABI
+        # INTERFACE declares the wrapper's own dummies, not part of the ABI
         for i in range(end + 1, len(lines)):
             stripped = lines[i].lstrip().upper()
             if stripped.startswith("END SUBROUTINE SOLVE_FREE_SFC_AB_MIMETIC"):
@@ -110,17 +110,17 @@ def test_patch_preserves_signature():
 
 
 def test_patched_body_calls_wrapper():
-    """Driver forwards to ``solve_free_sfc_dace_icon`` with all 11 dummies (``lacc`` via
-    the resolved ``lzacc__dace`` cast since the original dummy is OPTIONAL)."""
+    """Driver forwards to ``solve_free_sfc_dace_icon`` with all 11 dummies (``lacc`` as the
+    resolved ``lzacc__dace`` since the original dummy is OPTIONAL)."""
     patched = apply_ocean_solve_patch(_real_source().read_text())
     assert f"CALL {OCEAN_WRAPPER_NAME}(" in patched
     dut_call = patched[patched.index(f"CALL {OCEAN_WRAPPER_NAME}(") :]
     dut_call = dut_call[: dut_call.index("\n\n")]
     for arg in _DUMMIES[:-2]:
         assert arg in dut_call, f"forwarded arg {arg!r} missing from the DUT call"
-    # ret_status forwarded raw; lacc goes through set_acc_host_or_device + a 1-byte cast
+    # ret_status forwarded raw; lacc goes through set_acc_host_or_device
     assert "ret_status" in dut_call
-    assert "LOGICAL(lzacc__dace, kind=1)" in dut_call
+    assert "lzacc__dace)" in dut_call
 
 
 def test_differential_driver_injected():

@@ -98,8 +98,6 @@ def test_fortran_frontend_optional_complex(tmp_path):
     size = 5
     res = np.full([size], 42, order="F", dtype=np.int32)
     res2 = np.full([size], 42, order="F", dtype=np.int32)
-    # c is Fortran LOGICAL -- pass True not 1; routing as a Python int triggers a
-    # runtime int32->bool* reinterpret warning even though c_present=0 means it's unread
     sdfg(res=res, res2=res2, a=5, a_present=1, b=7.0, b_present=1, c=True, c_present=0)
 
     # safe path only -- first call got a,b (c unpassed, UB if read); second call got

@@ -277,7 +277,6 @@ class HLFIRModule {
         recipeDict["scratch_dtype"] = asStr(recipe.get("scratch_dtype"));
         recipeDict["aos_alloc"] = asBool(recipe.get("aos_alloc"));
         recipeDict["cap_symbol"] = asStr(recipe.get("cap_symbol"));
-        recipeDict["source_logical_kind"] = asInt(recipe.get("source_logical_kind"));
       }
       entryDict["recipe"] = recipeDict;
       entries.append(entryDict);

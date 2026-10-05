@@ -39,9 +39,9 @@ def test_auto_iface_flat_matches_handwritten(tmp_path):
     assert auto.used_modules == {}
     assert auto.args == (
         OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, shape=(), intent="in"),
-        OriginalArg(name="a", fortran_type="complex(c_double)", rank=1, shape=("1",), intent="in"),
-        OriginalArg(name="x", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="in"),
-        OriginalArg(name="y", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="inout"),
+        OriginalArg(name="a", fortran_type="complex(c_double_complex)", rank=1, shape=("1",), intent="in"),
+        OriginalArg(name="x", fortran_type="complex(c_double_complex)", rank=1, shape=("n",), intent="in"),
+        OriginalArg(name="y", fortran_type="complex(c_double_complex)", rank=1, shape=("n",), intent="inout"),
     )
 
 

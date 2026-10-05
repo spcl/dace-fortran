@@ -1,4 +1,4 @@
-"""E2e LOGICAL -> logical(c_bool) bridge tests (build+compile+run, vs emit_bindings_test.py's string-match coverage).
+"""E2e LOGICAL binding tests: the SDFG works on the caller's LOGICAL storage (build+compile+run, vs emit_bindings_test.py's string-match coverage).
 Covers rank-1/2/3 default LOGICAL, LOGICAL(KIND=1/4/8), c_bool pass-through, and scalar LOGICAL."""
 
 import ctypes
@@ -120,7 +120,7 @@ end module flip_mask_driver
 
 
 def test_e2e_rank1_default(tmp_path: Path):
-    """LOGICAL, intent(in) :: mask(n) -- default kind rank 1; c_bool bridge widens np.bool_ to 4-byte default LOGICAL."""
+    """LOGICAL, intent(in) :: mask(n) -- default kind rank 1."""
     outer = (
         OriginalArg(name="mask", fortran_type="logical", rank=1, shape=("n",), intent="in"),
         OriginalArg(name="out", fortran_type="integer(c_int)", rank=1, shape=("n",), intent="out"),
@@ -319,7 +319,7 @@ end module flip_kind{kind}_driver
 
 @pytest.mark.parametrize("kind", [1, 4, 8])
 def test_e2e_rank1_logical_kind(tmp_path: Path, kind: int):
-    """LOGICAL(KIND=1/4/8) rank-1 round-trip -- kind 1 matches c_bool size; all three bridge through the c_bool scratch."""
+    """LOGICAL(KIND=1/4/8) rank-1 round-trip on the caller's storage of each kind."""
     src = _kind_kernel(kind)
     outer = (
         OriginalArg(name="mask", fortran_type=f"logical(kind={kind})", rank=1, shape=("n",), intent="in"),
@@ -345,7 +345,7 @@ def test_e2e_rank1_logical_kind(tmp_path: Path, kind: int):
 
 
 # ---------------------------------------------------------------------------
-# logical(c_bool) outer type: pass-through (no scratch / no cast bridge)
+# logical(c_bool) outer type
 # ---------------------------------------------------------------------------
 
 _CBOOL_KERNEL = """
@@ -366,9 +366,7 @@ END SUBROUTINE flip_cbool
 """
 
 _CBOOL_DRIVER = """
-! C-callable driver that exercises the pass-through path: ``mask`` is
-! ``logical(c_bool)`` matching the SDFG's bool ABI exactly, so the
-! bindings wrapper allocates NO scratch and emits NO intrinsic cast.
+! C-callable driver for a ``logical(c_bool)`` ``mask``.
 ! ``logical(c_bool)`` is not parseable by f2py (it emits ``unsigned_char``
 ! with underscore -- gcc rejects), so we expose this driver via plain
 ! ``bind(c)`` and invoke it with ctypes from Python.
@@ -387,7 +385,7 @@ end subroutine run_cbool_passthrough
 
 
 def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
-    """logical(c_bool) matches the SDFG ABI -- pass-through, no scratch/cast bridge. f2py can't parse
+    """logical(c_bool) is LOGICAL(KIND=1) storage. f2py can't parse
     logical(c_bool) (emits an invalid `unsigned_char` cast), so this gfortran-compiles bindings+driver
     into one .so and calls via ctypes."""
     sdfg_dir = tmp_path / "sdfg"
@@ -486,7 +484,7 @@ end module scalar_flag_driver
 
 
 def test_e2e_scalar_logical(tmp_path: Path):
-    """Scalar LOGICAL intent(in) -- cloudsc LDMAINCALL/LDSLPHY pattern; bindings emitter passes a length-1 c_bool pointer to the SDFG."""
+    """Scalar LOGICAL intent(in) -- cloudsc LDMAINCALL/LDSLPHY pattern."""
     outer = (
         OriginalArg(name="flag", fortran_type="logical", rank=0, intent="in"),
         OriginalArg(name="out", fortran_type="integer(c_int)", rank=1, shape=("n",), intent="out"),

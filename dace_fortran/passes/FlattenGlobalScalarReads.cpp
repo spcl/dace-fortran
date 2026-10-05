@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
@@ -84,22 +85,6 @@ bool splitModuleScopeSymbol(llvm::StringRef sym, llvm::StringRef& mod, llvm::Str
   return true;
 }
 
-std::string scalarDtypeName(mlir::Type t) {
-  if (t.isF32()) return "float32";
-  if (t.isF64()) return "float64";
-  if (t.isInteger(8)) return "int8";
-  if (t.isInteger(16)) return "int16";
-  if (t.isInteger(32)) return "int32";
-  if (t.isInteger(64)) return "int64";
-  if (t.isInteger(1) || mlir::isa<fir::LogicalType>(t)) return "bool";
-  if (auto ct = mlir::dyn_cast<mlir::ComplexType>(t)) {
-    mlir::Type const et = ct.getElementType();
-    if (et.isF32()) return "complex64";
-    if (et.isF64()) return "complex128";
-  }
-  return "";
-}
-
 bool isPlainComponentDesignate(hlfir::DesignateOp d) {
   return d.getComponent().has_value() && d.getIndices().empty() && d.getSubstring().empty() && !d.getComponentShape() &&
          !d.getShape() && d.getTypeparams().empty() && !d.getComplexPart().has_value() && d->getNumResults() == 1;
@@ -167,7 +152,7 @@ struct FlattenGlobalScalarReadsPass
       std::string const newSym = (llvm::Twine(sym) + "_" + member).str();
       auto refTy = mlir::dyn_cast<fir::ReferenceType>(d.getResult().getType());
       if (!refTy) return;
-      std::string const dtype = scalarDtypeName(refTy.getEleTy());
+      std::string const dtype = dtypeName(refTy.getEleTy());
 
       bool ok = !dtype.empty() && !writtenGlobals.contains(sym) && !takenNames.contains(newSym);
       for (mlir::Operation* user : d.getResult().getUsers())

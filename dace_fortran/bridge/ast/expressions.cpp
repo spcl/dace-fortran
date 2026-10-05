@@ -1364,6 +1364,12 @@ std::string buildExpr(mlir::Value val, int d) {
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
     auto inT = conv.getValue().getType();
     auto outT = conv.getRes().getType();
+    // A LOGICAL read as a truth value, as another LOGICAL kind or as an integer is normalised to 0 / 1; a same-kind
+    // copy keeps the stored bytes and a boolean (i1) stored into a LOGICAL is 0 / 1 already.
+    if (mlir::isa<fir::LogicalType>(inT) && inT != outT) {
+      NoSubscriptGuard const _g;
+      return logicalTruth(conv.getValue(), d + 1, &buildExpr);
+    }
     bool const inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) || inT.isInteger(64);
     bool const outIsInt = outT.isInteger(8) || outT.isInteger(16) || outT.isInteger(32) || outT.isInteger(64);
     bool const inIsFloat = mlir::isa<mlir::FloatType>(inT);
@@ -1763,7 +1769,11 @@ std::string buildExpr(mlir::Value val, int d) {
       if (isF32 && !kSuppressFloatCast) return "float32(" + lit + ")";
       return lit;
     }
-    if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return std::to_string(i.getInt());
+    if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) {
+      // An i1 ``true`` reads back as -1 (all bits set); a LOGICAL stores flang's .TRUE., which is 1.
+      if (i.getType().isInteger(1)) return i.getValue().isZero() ? "False" : "True";
+      return std::to_string(i.getInt());
+    }
   }
 
   // hlfir.apply %elem, %i  --  read one element of an hlfir.elemental expr

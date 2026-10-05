@@ -66,7 +66,7 @@ end subroutine main
     f = np.ascontiguousarray(rng.standard_normal(n, dtype=np.float64))
     mask = np.ascontiguousarray(rng.random(n) > 0.5)
     out = np.zeros(n, dtype=np.float64)
-    sdfg(t=t, f=f, mask=mask, out=out, n=n)
+    sdfg(t=t, f=f, mask=mask.astype(np.uint32), out=out, n=n)
     np.testing.assert_array_equal(out, np.where(mask, t, f))
 
 

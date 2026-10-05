@@ -175,15 +175,15 @@ def test_velocity_full_numerical(tmp_path: Path):
         z_vt_ie=z_vt_ie_sdfg,
         ntnd=scalar_or_arr("ntnd", 1, np.int32),
         istep=scalar_or_arr("istep", 1, np.int32),
-        lvn_only=scalar_or_arr("lvn_only", False, np.bool_),
+        lvn_only=scalar_or_arr("lvn_only", 0, np.uint32),
         dtime=scalar_or_arr("dtime", 60.0, np.float64),
         dt_linintp_ubc=scalar_or_arr("dt_linintp_ubc", 0.0, np.float64),
-        ldeepatmo=scalar_or_arr("ldeepatmo", False, np.bool_),
+        ldeepatmo=scalar_or_arr("ldeepatmo", 0, np.uint32),
         nrdmax=nrdmax_in,
         nflatlev=nflatlev_in,
-        lvert_nest=scalar_or_arr("lvert_nest", False, np.bool_),
-        lextra_diffu=scalar_or_arr("lextra_diffu", False, np.bool_),
-        i_am_accel_node=scalar_or_arr("i_am_accel_node", False, np.bool_),
+        lvert_nest=scalar_or_arr("lvert_nest", 0, np.uint32),
+        lextra_diffu=scalar_or_arr("lextra_diffu", 0, np.uint32),
+        i_am_accel_node=scalar_or_arr("i_am_accel_node", 0, np.uint32),
         timers_level=scalar_or_arr("timers_level", 0, np.int32),
         timer_intp=scalar_or_arr("timer_intp", 0, np.int32),
         timer_solve_nh_veltend=scalar_or_arr("timer_solve_nh_veltend", 0, np.int32),
@@ -194,8 +194,8 @@ def test_velocity_full_numerical(tmp_path: Path):
         p_patch_nlev=scalar_or_arr("p_patch_nlev", nlev, np.int32),
         p_patch_nlevp1=scalar_or_arr("p_patch_nlevp1", nlevp1, np.int32),
         p_patch_nshift=scalar_or_arr("p_patch_nshift", 0, np.int32),
-        p_diag_ddt_vn_adv_is_associated=scalar_or_arr("p_diag_ddt_vn_adv_is_associated", False, np.bool_),
-        p_diag_ddt_vn_cor_is_associated=scalar_or_arr("p_diag_ddt_vn_cor_is_associated", False, np.bool_),
+        p_diag_ddt_vn_adv_is_associated=scalar_or_arr("p_diag_ddt_vn_adv_is_associated", 0, np.uint32),
+        p_diag_ddt_vn_cor_is_associated=scalar_or_arr("p_diag_ddt_vn_cor_is_associated", 0, np.uint32),
         p_diag_max_vcfl_dyn=scalar_or_arr("p_diag_max_vcfl_dyn", 0.0, np.float64),
         nproma=scalar_or_arr("nproma", nproma, np.int32),
     )
@@ -211,10 +211,9 @@ def test_velocity_full_numerical(tmp_path: Path):
                 sdfg_kw.setdefault(extent_sym, np.int64(arr.shape[d]))
             if offset_sym in arglist:
                 sdfg_kw.setdefault(offset_sym, np.int64(1))
-    # bridge stores LOGICAL arrays as bool8; ctypes/owner_mask is int8 ->
-    # convert to a writable bool view so DaCe's wrapper accepts it.
+    # The SDFG works on the caller's LOGICAL(4) storage; ctypes/owner_mask is int8.
     sdfg_kw["p_patch_cells_decomp_info_owner_mask"] = sdfg_kw["p_patch_cells_decomp_info_owner_mask"].astype(
-        np.bool_, order="F"
+        np.uint32, order="F"
     )
     sdfg(**sdfg_kw)
 

@@ -196,7 +196,7 @@ END SUBROUTINE
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="if_cse", entry="if_cse").build()
     assert count_cond_hoists(sdfg) == 1, "identical read-only guards must share one symbol"
     out = np.zeros(4, dtype=np.float64, order="F")
-    sdfg(n=np.int32(4), flag_a=np.bool_(True), flag_b=np.bool_(False), out=out)
+    sdfg(n=np.int32(4), flag_a=np.uint32(1), flag_b=np.uint32(0), out=out)
     np.testing.assert_array_equal(out, [3.0, 3.0, 3.0, 3.0])
 
 

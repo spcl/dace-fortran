@@ -484,7 +484,11 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // as the bare scalar, bypassing the inline-unroll reduction table below.
   if (auto it = kCondReductionScalars.find(def); it != kCondReductionScalars.end()) return it->second;
 
-  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) return buildExprWithSubscripts(conv.getValue(), d + 1);
+  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+    if (mlir::isa<fir::LogicalType>(conv.getValue().getType()) && conv.getValue().getType() != conv.getType())
+      return logicalTruth(conv.getValue(), d + 1, &buildExprWithSubscripts);
+    return buildExprWithSubscripts(conv.getValue(), d + 1);
+  }
   // hlfir.no_reassoc is Flang's reassociation-blocker wrapper around order-preserved expressions (e.g. `(1.0 -
   // ZA(JL,JK))`); pure structural metadata, so peel through to keep the inner chain subscript-aware -- without this it
   // bottoms out to buildExpr and emits bare `za`, which C++ codegen renders as `int - double*`.
@@ -803,6 +807,12 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
 
 /// Build a Python-syntax boolean expression for an i1 SSA value (cmpf/cmpi predicates, andi/ori/xori chains incl. the
 /// `xori %x, true` not-pattern, constant booleans); opaque inputs fall back to buildExpr (possibly "?").
+std::string logicalTruth(mlir::Value logical, int d, std::string (*render)(mlir::Value, int)) {
+  if (auto conv = logical.getDefiningOp<fir::ConvertOp>(); conv && conv.getValue().getType().isInteger(1))
+    return buildBoolExpr(conv.getValue(), d + 1);
+  return "(" + render(logical, d + 1) + " != 0)";
+}
+
 std::string buildBoolExpr(mlir::Value val, int d) {
   if (d > limits::kBuildExprDepth) return "?";
   auto* def = val.getDefiningOp();
@@ -826,7 +836,11 @@ std::string buildBoolExpr(mlir::Value val, int d) {
 
   // fir.convert (i1<->i1 kind, i8->i1, ...) and arith.trunci/extui are transparent here -- DaCe codegen treats any
   // non-zero integer as True in a Python condition, so the cast is a no-op.
-  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) return buildBoolExpr(conv.getValue(), d + 1);
+  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+    if (mlir::isa<fir::LogicalType>(conv.getValue().getType()))
+      return logicalTruth(conv.getValue(), d + 1, kBoolExprNoSubscripts ? &buildExpr : &buildExprWithSubscripts);
+    return buildBoolExpr(conv.getValue(), d + 1);
+  }
   auto nm2 = def->getName().getStringRef();
   if (nm2 == "arith.trunci" || nm2 == "arith.extui" || nm2 == "arith.extsi") {
     if (def->getNumOperands() == 1) return buildBoolExpr(def->getOperand(0), d + 1);

@@ -160,7 +160,7 @@ end module mod_flag
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order="F")
     y_ref = ref.mod_flag.apply_flag(x)  # default .true. -> negate
-    sdfg(x=x, y=y_sdfg, use_neg=np.array([True], dtype=np.bool_, order="F"))
+    sdfg(x=x, y=y_sdfg, use_neg=np.array([True], dtype=np.uint32, order="F"))
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
@@ -207,11 +207,11 @@ end module mod_state
     y_sdfg = np.zeros(4, dtype=np.float64, order="F")
     y_ref = ref.mod_state.compute(x)  # initialized .false. -> cached 10, y = x + 10
     # pass the inout globals' host defaults; the kernel writes final values back in place
-    initialized = np.array([False])
+    initialized = np.array([0], dtype=np.uint32)
     cached = np.array([0.0], dtype=np.float64, order="F")
     sdfg(x=x, y=y_sdfg, initialized=initialized, cached=cached)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
-    assert bool(initialized[0]) is True, "the kernel's flag update is visible to the caller"
+    assert initialized[0] == 1, "the kernel's flag update is visible to the caller"
     np.testing.assert_allclose(cached, [10.0], rtol=1e-12)
 
 

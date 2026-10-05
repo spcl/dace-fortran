@@ -47,20 +47,17 @@ parameters = {
     "NCLDDIAG": 1,
     "NAERCLD": 1,
     "NBLOCKS": nbvalue,
-    # Keep as np.bool_ (not np.int32) so call-site routing in
-    # test_cloudsc_full.py::_sdfg_call_args picks the bridge's ``bool *`` ABI;
-    # int32 would silently corrupt values with bit-0=0 -- see
-    # test_bool_scalar_logical_pass_through.
-    "LDMAINCALL": np.bool_(True),
-    "LDSLPHY": np.bool_(True),
-    "LAERLIQAUTOCP": np.bool_(True),
-    "LAERLIQAUTOCPB": np.bool_(True),
-    "LAERLIQAUTOLSP": np.bool_(True),
-    "LAERLIQCOLL": np.bool_(True),
-    "LAERICESED": np.bool_(True),
-    "LAERICEAUTO": np.bool_(True),
-    "LCLDEXTRA": np.bool_(True),
-    "LCLDBUDGET": np.bool_(True),
+    # LOGICAL scalars: Fortran .TRUE. (the SDFG reads the caller's LOGICAL(4) storage).
+    "LDMAINCALL": True,
+    "LDSLPHY": True,
+    "LAERLIQAUTOCP": True,
+    "LAERLIQAUTOCPB": True,
+    "LAERLIQAUTOLSP": True,
+    "LAERLIQCOLL": True,
+    "LAERICESED": True,
+    "LAERICEAUTO": True,
+    "LCLDEXTRA": True,
+    "LCLDBUDGET": True,
     "NGPBLKS": 10,
     "NUMOMP": 10,
     "NGPTOT": nbvalue * 1,
@@ -209,7 +206,7 @@ data = {
     "RCL_FZRBB": (0,),
     "IPHASE": (parameters["NCLV"],),
     "KTYPE": [(parameters["KLON"], parameters["NBLOCKS"]), np.int32],
-    "LDCUM": [(parameters["KLON"], parameters["NBLOCKS"]), np.bool_],
+    "LDCUM": [(parameters["KLON"], parameters["NBLOCKS"]), np.uint32],
     "PA": (parameters["KLON"], parameters["KLEV"], parameters["NBLOCKS"]),
     "PAP": (parameters["KLON"], parameters["KLEV"], parameters["NBLOCKS"]),
     "PAPH": (parameters["KLON"], parameters["KLEV"] + 1, parameters["NBLOCKS"]),
@@ -945,7 +942,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
             # Land-sea mask fraction in [0, 1] (per column, per block).
             inp[name] = np.asfortranarray(rng.integers(0, 2, (klon, nblk)).astype(np.float64))
         elif name == "LDCUM":
-            inp[name] = np.asfortranarray(rng.integers(0, 2, (klon, nblk), np.int32).astype(np.bool_))
+            inp[name] = np.asfortranarray(rng.integers(0, 2, (klon, nblk), np.uint32))
         elif name == "KTYPE":
             inp[name] = np.asfortranarray(rng.integers(0, 3, (klon, nblk), np.int32))
         elif name in ("PLU", "PLUDE"):
@@ -1004,17 +1001,11 @@ def get_outputs(rng: np.random.Generator) -> Dict[str, np.ndarray]:
         else:
             shape = info
             dtype = np.float64
-        if issubclass(dtype, Integral) or dtype is np.bool_:
-            if dtype is np.bool_:
+        if issubclass(dtype, Integral):
 
-                def method(s, d):
-                    return rng.integers(0, 2, s, d)
+            def method(s, d):
+                return rng.integers(0, 10, s, d)
 
-                dtype = np.int32
-            else:
-
-                def method(s, d):
-                    return rng.integers(0, 10, s, d)
         else:
 
             def method(s, d):

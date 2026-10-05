@@ -1,7 +1,7 @@
-"""Boolean/integer argument dtype correctness in the bridge bindings. Regression guard for
-the cloudsc_full PLUDE diagnosis: the registry allocated LOGICAL input as numpy ``int32``
-while the SDFG declared ``bool *``, silently corrupting LDCUM across element boundaries.
-E2e against an f2py-compiled reference."""
+"""Boolean/integer argument dtype correctness. Regression guard for the cloudsc_full PLUDE
+diagnosis (a LOGICAL array read with the wrong element width corrupted LDCUM across element
+boundaries): a default LOGICAL is its 4-byte storage on the SDFG signature. E2e against an
+f2py-compiled reference."""
 
 import numpy as np
 
@@ -38,7 +38,7 @@ END SUBROUTINE bool_pass
     out_ref = ref.bool_pass(flags)
 
     out = np.zeros(n, dtype=np.int32)
-    sdfg(flags=flags, out=out, n=n)
+    sdfg(flags=flags.astype(np.uint32), out=out, n=n)
     np.testing.assert_array_equal(out, out_ref)
 
 
@@ -71,7 +71,7 @@ END SUBROUTINE bool_2d_pass
     out_ref = ref.bool_2d_pass(flags)
 
     out = np.zeros((klon, nblocks), dtype=np.int32, order="F")
-    sdfg(flags=flags, out=out, klon=klon, nblocks=nblocks)
+    sdfg(flags=np.asfortranarray(flags.astype(np.uint32)), out=out, klon=klon, nblocks=nblocks)
     np.testing.assert_array_equal(out, out_ref)
 
 
@@ -103,9 +103,7 @@ END SUBROUTINE int_double
 
 
 def test_bool_scalar_logical_pass_through(tmp_path):
-    """Scalar LOGICAL passed as a length-1 array argument. Closes the audit gap where the
-    cloudsc registry passed ``np.int32(np.bool_(True))`` to a ``bool *`` param -- worked by
-    LSB coincidence but silently corrupted for values with bit-0=0 (e.g. 256)."""
+    """Scalar LOGICAL passed in the storage dtype the SDFG declares for it."""
     src = """
 SUBROUTINE bool_scalar(flag, out, n)
 integer, intent(in) :: n
@@ -131,12 +129,12 @@ END SUBROUTINE bool_scalar
     desc = sdfg.arglist().get("flag")
 
     def _route_bool(v):
-        """Route scalar LOGICAL to whatever the bridge declared: ``Scalar(bool)`` takes a
-        plain Python bool, ``Array(1,) bool`` takes a length-1 ``np.bool_`` array. Routing
-        as ``np.int32`` would mis-type the C ABI (silent corruption on bit-0=0 values)."""
+        """Route scalar LOGICAL to whatever the bridge declared (``Scalar`` or ``Array(1,)``)
+        in its LOGICAL storage dtype."""
+        storage = desc.dtype.as_numpy_dtype()
         if isinstance(desc, Scalar):
-            return bool(v)
-        return np.array([bool(v)], dtype=np.bool_)
+            return storage.type(v)
+        return np.array([v], dtype=storage)
 
     n = 5
     out_ref = ref.bool_scalar(True, n=n)

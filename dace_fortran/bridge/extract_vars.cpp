@@ -2220,44 +2220,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     }
 
     // Element type string.
-    if (ty.isF64())
-      v.dtype = "float64";
-    else if (ty.isF32())
-      v.dtype = "float32";
-    else if (ty.isInteger(8))
-      v.dtype = "int8";  // Fortran INTEGER(1)
-    else if (ty.isInteger(16))
-      v.dtype = "int16";  // Fortran INTEGER(2)
-    else if (ty.isInteger(32))
-      v.dtype = "int32";
-    else if (ty.isInteger(64))
-      v.dtype = "int64";
-    // Fortran ``COMPLEX(kind)`` lowers to ``mlir::ComplexType`` over
-    // an ``f32`` / ``f64`` element.  DaCe has native ``complex64`` /
-    // ``complex128`` dtypes that match numpy's ABI.
-    else if (auto ct = mlir::dyn_cast<mlir::ComplexType>(ty)) {
-      auto et = ct.getElementType();
-      if (et.isF32())
-        v.dtype = "complex64";
-      else if (et.isF64())
-        v.dtype = "complex128";
-      else {
-        std::string s;
-        llvm::raw_string_ostream os(s);
-        ty.print(os);
-        v.dtype = s;
-      }
-    }
-    // MLIR ``i1`` and Fortran ``LOGICAL(KIND=N)`` (any kind) both
-    // surface as ``bool`` on the SDFG signature (= ``np.bool_`` =
-    // C++ ``bool``, 1 byte).  Element-wise boolean ops in tasklets
-    // render as ``bool`` operations directly  --  no ``(x != 0)``
-    // truthiness coercion needed.  The caller-side bindings
-    // wrapper translates between the original ``LOGICAL(KIND=N)``
-    // image and the SDFG's bool layout at the Fortran boundary.
-    else if (ty.isInteger(1) || mlir::isa<fir::LogicalType>(ty))
-      v.dtype = "bool";
-    else if (mlir::isa<fir::RecordType>(ty)) {
+    if (std::string dt = dtypeName(ty); !dt.empty())
+      v.dtype = dt;
+    else if (mlir::isa<mlir::ComplexType>(ty)) {
+      std::string s;
+      llvm::raw_string_ostream os(s);
+      ty.print(os);
+      v.dtype = s;
+    } else if (mlir::isa<fir::RecordType>(ty)) {
       // ``fir.RecordType`` declares fall into three categories:
       //
       //   1. Flang-internal type-info metadata
@@ -2332,53 +2302,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         // levels.  Tracks ``visitedKey`` to keep recursion
         // bounded for cyclic or self-referential type structures.
         //
-        // Type-to-dtype mapping is shared with the top-level path
-        // via the lambda below; non-supported leaf types
-        // (CharacterType, PointerType, allocatable boxes, ...)
-        // are skipped silently and the downstream traceToDecl
-        // lookup will fail loudly if a kernel actually reads the
-        // unsupported leaf.
-        auto dtypeFor = [](mlir::Type elemTy, std::string& outDtype) -> bool {
-          if (auto fty = mlir::dyn_cast<mlir::FloatType>(elemTy)) {
-            unsigned const w = fty.getWidth();
-            outDtype = (w == 32) ? "fp32" : (w == 64) ? "fp64" : "fp" + std::to_string(w);
-            return true;
-          }
-          if (auto ity = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
-            unsigned const w = ity.getWidth();
-            outDtype = (w == 8)    ? "i8"
-                       : (w == 16) ? "i16"
-                       : (w == 32) ? "i32"
-                       : (w == 64) ? "i64"
-                                   : "i" + std::to_string(w);
-            return true;
-          }
-          if (mlir::isa<fir::LogicalType>(elemTy) || elemTy.isInteger(1)) {
-            outDtype = "bool";
-            return true;
-          }
-          // Fortran ``COMPLEX(kind)`` lowers to ``mlir::ComplexType`` over an
-          // f32/f64 element.  A complex ALLOCATABLE struct member (QE's
-          // ``bec_type%k :: COMPLEX(DP), ALLOCATABLE(:,:)``) would otherwise
-          // fall through ``return false`` -> the member's per-field VarInfo is
-          // never synthesised -> the section-alias bound to it (``becxx(i)%k``)
-          // dangles (``KeyError: 'becxx_k'``).  Emit the canonical DaCe name so
-          // ``descriptors.DTYPE`` maps it (NOT the ``ty.print()``
-          // ``complex<f64>`` spelling, which also works but is less explicit).
-          if (auto ct = mlir::dyn_cast<mlir::ComplexType>(elemTy)) {
-            auto et = ct.getElementType();
-            if (et.isF32()) {
-              outDtype = "complex64";
-              return true;
-            }
-            if (et.isF64()) {
-              outDtype = "complex128";
-              return true;
-            }
-            return false;
-          }
-          return false;
-        };
+        // Leaf types without a DaCe dtype (CharacterType,
+        // PointerType, allocatable boxes, ...) are skipped silently
+        // and the downstream traceToDecl lookup will fail loudly if
+        // a kernel actually reads the unsupported leaf.
         std::set<std::string> emittedFlatNames;
         std::function<void(mlir::Value, fir::RecordType, const std::string&, const std::string&, const std::string&,
                            int)>
@@ -2578,8 +2505,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                     bool const staticExtent = !ext.empty() && ext.find_first_not_of("0123456789") == std::string::npos;
                     mv.lower_bounds.emplace_back(staticExtent ? "1" : "?");
                   }
-                  std::string dtype;
-                  if (!dtypeFor(elemTy, dtype)) continue;
+                  std::string dtype = dtypeName(elemTy);
+                  if (dtype.empty()) continue;
                   mv.dtype = dtype;
                   // Marshalling provenance: this flat array is the SoA image of
                   // a module-global AoS struct component.  The binding sources
@@ -4092,23 +4019,6 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       }
       return false;
     };
-    // Element mlir::Type -> DaCe dtype string, mirroring the main VarInfo
-    // loop's classification (line ~2004) so a synthesised companion keys the
-    // same ``descriptors.DTYPE`` entry as a flattened one.
-    auto dtypeStr = [](mlir::Type t) -> std::string {
-      if (t.isF64()) return "float64";
-      if (t.isF32()) return "float32";
-      if (t.isInteger(8)) return "int8";
-      if (t.isInteger(16)) return "int16";
-      if (t.isInteger(32)) return "int32";
-      if (t.isInteger(64)) return "int64";
-      if (t.isInteger(1) || mlir::isa<fir::LogicalType>(t)) return "bool";
-      if (auto ct = mlir::dyn_cast<mlir::ComplexType>(t)) {
-        if (ct.getElementType().isF32()) return "complex64";
-        if (ct.getElementType().isF64()) return "complex128";
-      }
-      return {};
-    };
     // The structured component path of a nested-AoR array member, recovered by
     // walking a leaf whole-member designate's memref back to its dummy root.
     // ``names`` / ``is_pointer`` / ``record_dims`` are parallel, root->leaf;
@@ -4360,7 +4270,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         // DIRECT struct array member is split by the flatten pass into a flat
         // declare; the nested one is left as a designate chain, so the memlet
         // names ``<flat>`` with no backing array.
-        std::string const dt = dtypeStr(seq.getEleTy());
+        std::string const dt = dtypeName(seq.getEleTy());
         if (dt.empty()) continue;  // unsupported element type
         int const memberRank = static_cast<int>(seq.getShape().size());
         // Record dims: ``expandDesignateChain`` PREPENDS the record-array
@@ -4674,20 +4584,8 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
             }
             mt = seq.getEleTy();
           }
-          if (mt.isF64())
-            m.dtype = "float64";
-          else if (mt.isF32())
-            m.dtype = "float32";
-          else if (mt.isInteger(8))
-            m.dtype = "int8";
-          else if (mt.isInteger(16))
-            m.dtype = "int16";
-          else if (mt.isInteger(32))
-            m.dtype = "int32";
-          else if (mt.isInteger(64))
-            m.dtype = "int64";
-          else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
-            m.dtype = "bool";  // see ``dtypeName`` in FlattenStructs.cpp
+          if (std::string dt = dtypeName(mt); !dt.empty() && !mlir::isa<mlir::ComplexType>(mt))
+            m.dtype = dt;
           else if (auto nested_rec = mlir::dyn_cast<fir::RecordType>(mt)) {
             // Nested derived-type member: register its name + module
             // on this member, queue the type for its own layout entry.
@@ -4766,31 +4664,8 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
       // pointer) keep empty dtype + empty struct_name so the
       // Python side can flag them clearly.
       if (!a.struct_name.empty()) recordStructLayoutRecursive(rec, a.struct_module, a.struct_name);
-    } else if (ty.isF64())
-      a.dtype = "float64";
-    else if (ty.isF32())
-      a.dtype = "float32";
-    else if (ty.isInteger(8))
-      a.dtype = "int8";
-    else if (ty.isInteger(16))
-      a.dtype = "int16";
-    else if (ty.isInteger(32))
-      a.dtype = "int32";
-    else if (ty.isInteger(64))
-      a.dtype = "int64";
-    // Top-level ``LOGICAL`` dummy args stay ``bool`` regardless of
-    // KIND; the existing ``_build_logical_bridges`` Python pass
-    // wraps the wrapper's outer LOGICAL(KIND=N) dummy in a
-    // ``logical(c_bool)`` scratch + per-element bridge so the
-    // SDFG-facing storage is always 1 byte.  The struct-member
-    // walker below uses KIND-driven width because there is no such
-    // bridge layer for struct-internal flatten companions (the
-    // ``c_loc`` / ``c_f_pointer`` reinterpret needs the storage
-    // size to match the source LOGICAL slot byte-for-byte).
-    else if (ty.isInteger(1) || mlir::isa<fir::LogicalType>(ty))
-      a.dtype = "bool";
-    else if (auto ct = mlir::dyn_cast<mlir::ComplexType>(ty)) {
-      a.dtype = ct.getElementType().isF32() ? "complex64" : "complex128";
+    } else if (std::string dt = dtypeName(ty); !dt.empty()) {
+      a.dtype = dt;
     } else {
       // Unknown element (e.g. character) -- leave dtype empty so the
       // Python side can fall back / raise rather than mis-bind.

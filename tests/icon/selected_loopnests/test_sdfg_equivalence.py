@@ -259,16 +259,15 @@ def test_icon_loopnest_6_sdfg_matches_f2py(tmp_path: Path):
     i_startblk, i_endblk = 2, 10
     jk_start, jk_end = 3, nlev - 3
 
-    # f2py's LOGICAL(4) ABI is np.int32; the SDFG uses np.bool_ (1 byte) end-to-end.
-    # Build both shapes from the same random source so both backends see identical truth values.
+    # f2py's LOGICAL(4) ABI is np.int32; the SDFG works on the same LOGICAL(4) storage (uint32).
     levmask_bool = np.asfortranarray(rng.random((nblks_c, nlev)) > 0.7)
     levmask_int = levmask_bool.astype(np.int32)
     levelmask_ref = np.zeros(nlev, dtype=np.int32)
-    levelmask_sdfg = np.zeros(nlev, dtype=np.bool_)
+    levelmask_sdfg = np.zeros(nlev, dtype=np.uint32)
 
     ref.kernel_flat(levmask_int, levelmask_ref, jk_start, jk_end, i_startblk, i_endblk)
 
-    kw = dict(levmask=levmask_bool, levelmask=levelmask_sdfg, nlev=nlev, nblks_c=nblks_c)
+    kw = dict(levmask=levmask_bool.astype(np.uint32), levelmask=levelmask_sdfg, nlev=nlev, nblks_c=nblks_c)
     kw.update(_sdfg_call_args(sdfg, dict(jk_start=jk_start, jk_end=jk_end, i_startblk=i_startblk, i_endblk=i_endblk)))
     sdfg(**kw)
 

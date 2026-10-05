@@ -74,8 +74,7 @@ subroutine run_ppm_binding(np, nz, tracer, w, dtime, vlt, ct, cih, {margs}, flux
   use upwind_vflux_ppm_dace_bindings, only: upwind_vflux_ppm_dace, upwind_vflux_ppm_dace_finalize
   implicit none
 {common}
-  call upwind_vflux_ppm_dace(tracer, w, dtime, vlt, ct, cih, ppmcoeffs, flux, si, ei, nlev, &
-                             logical(.false., c_bool))
+  call upwind_vflux_ppm_dace(tracer, w, dtime, vlt, ct, cih, ppmcoeffs, flux, si, ei, nlev, .false.)
   call upwind_vflux_ppm_dace_finalize()
 end subroutine run_ppm_binding
 

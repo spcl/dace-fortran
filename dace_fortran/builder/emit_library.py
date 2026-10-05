@@ -20,7 +20,7 @@ from dace import dtypes, InterstateEdge, Memlet
 from dace_fortran.builder.access import acc, iter_view_dim_map
 from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.builder.records import NodeLike, SyntheticNode
-from dace_fortran.external import Arg, ArgKind, CAbi, Intent
+from dace_fortran.external import C_TYPES, Arg, ArgKind, CAbi, Intent
 
 if TYPE_CHECKING:
     from dace.sdfg.nodes import LibraryNode, Node
@@ -69,16 +69,6 @@ _LIBCALL_CONNECTORS = {
     "Norm2": (("_x",), "_out"),
     # Fortran SPREAD -- single-array source, broadcasted destination.
     "Broadcast": (("_src",), "_dst"),
-}
-
-# SDFG dtype -> C scalar type for extern "C" BSS decls (ExternalSignature.module_symbol_forward).
-# Must mirror bind_c_shim's _MOD_FORWARD_SCALAR_FTYPE byte-for-byte.
-_MOD_FORWARD_CTYPE = {
-    "int32": "int",
-    "int64": "long long",
-    "float32": "float",
-    "float64": "double",
-    "bool": "bool",
 }
 
 
@@ -1859,7 +1849,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     module_extern_decls: list = []
     for module, member, dtype, rank in sig.module_symbol_forward:
         sym = f"__{module}_MOD_{member}"
-        fwd_ct = _MOD_FORWARD_CTYPE.get(dtype)
+        fwd_ct = C_TYPES.get(dtype)
         if fwd_ct is None:
             raise ValueError(
                 f"external {callee!r}: unsupported module_symbol_forward dtype {dtype!r} for ``{module}::{member}``"
@@ -1961,7 +1951,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # ride by value (``int`` / ``double`` / ...); rank-N module
     # arrays decay to the matching pointer (``<ct>*``) on the C ABI.
     for module, member, dtype, rank in sig.module_symbol_forward:
-        fwd_ct = _MOD_FORWARD_CTYPE.get(dtype)
+        fwd_ct = C_TYPES.get(dtype)
         if fwd_ct is None:
             raise ValueError(
                 f"external {callee!r}: unsupported module_symbol_forward dtype {dtype!r} for ``{module}::{member}``"

@@ -447,12 +447,8 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# LOGICAL kind variants -- exercise source_logical_kind bridging for struct members.
-#
-#   * LOGICAL :: flag (default kind=4): wrapper bridges through a logical(c_bool),
-#     allocatable, target scratch -- SDFG bool slot must NOT alias the wider 4-byte LOGICAL
-#     field directly (aliasing caused the "free(): invalid next size" glibc crash in ICON e2e).
-#   * LOGICAL(c_bool) :: flag (kind=1): existing aliasable c_f_pointer path, zero-copy.
+# LOGICAL kind variants: the SDFG aliases the struct member's own LOGICAL storage (4 bytes for
+# the default kind, 1 byte for c_bool), so the companion has the member's width.
 #
 # Kernel: if flag, inner doubles u; outer pre-multiplies by 3, calls inner, post-multiplies
 # by 0.5. Checked bit-exact against gfortran for both flag=.TRUE. and flag=.FALSE.
@@ -521,21 +517,23 @@ subroutine outer_state_log_{s}_c(u_p, flag_p) bind(c, name="outer_state_log_{s}_
   type(c_ptr), value :: u_p, flag_p
   type(state_log_{s}_t), target :: s
   real(c_double), pointer :: u(:)
-  logical(c_bool), pointer :: flag_cbool
+  {logical_decl}, pointer :: flag
   external :: outer_state_log_{s}
   call c_f_pointer(u_p, u, [N])
-  call c_f_pointer(flag_p, flag_cbool)
+  call c_f_pointer(flag_p, flag)
   s%u = u
-  s%flag = flag_cbool
+  s%flag = flag
   call outer_state_log_{s}(s)
   u = s%u
-  flag_cbool = s%flag
+  flag = s%flag
 end subroutine outer_state_log_{s}_c
 """,
     )
 
 
-def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, member_fortran_type: str):
+def _run_logical_kind_variant(
+    tmp_path: Path, suffix: str, logical_decl: str, member_fortran_type: str, flag_ctype: type[ctypes._SimpleCData]
+):
     """Build inner + outer SDFGs for one LOGICAL-kind variant + a
     gfortran reference, then assert SDFG output == reference for
     both ``flag = .TRUE.`` and ``flag = .FALSE.``."""
@@ -641,12 +639,12 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
     n = 8
     rng = np.random.default_rng(31)
 
-    for flag_in in (np.int8(1), np.int8(0)):
+    for flag_in in (1, 0):
         u_init = np.asfortranarray(rng.standard_normal(n))
         u_sdfg = u_init.copy(order="F")
         u_ref = u_init.copy(order="F")
-        flag_sdfg = ctypes.c_int8(int(flag_in))
-        flag_ref = ctypes.c_int8(int(flag_in))
+        flag_sdfg = flag_ctype(flag_in)
+        flag_ref = flag_ctype(flag_in)
 
         sdfg_fn = getattr(sdfg_so, f"{outer_name}_c")
         sdfg_fn.restype = None
@@ -662,17 +660,20 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
 
 
 def test_dycore_struct_ext_logical_default_kind_e2e(tmp_path: Path):
-    """Variant a) LOGICAL :: flag (default kind, 4 bytes). Wrapper goes through the
-    source_logical_kind > 1 width-bridging scratch (allocatable c_bool target, element copy
-    with kind conversion before/after the SDFG call)."""
-    _run_logical_kind_variant(tmp_path, suffix="def", logical_decl="logical", member_fortran_type="logical")
+    """Variant a) LOGICAL :: flag (default kind, 4 bytes)."""
+    _run_logical_kind_variant(
+        tmp_path, suffix="def", logical_decl="logical", member_fortran_type="logical", flag_ctype=ctypes.c_uint32
+    )
 
 
 def test_dycore_struct_ext_logical_cbool_e2e(tmp_path: Path):
-    """Variant b) LOGICAL(c_bool) :: flag (1-byte kind). Wrapper stays on the zero-copy aliasable
-    path (source_logical_kind == 1 short-circuits the bridge); SDFG bool* aliases the source directly."""
+    """Variant b) LOGICAL(c_bool) :: flag (1-byte kind)."""
     _run_logical_kind_variant(
-        tmp_path, suffix="cbool", logical_decl="logical(c_bool)", member_fortran_type="logical(c_bool)"
+        tmp_path,
+        suffix="cbool",
+        logical_decl="logical(c_bool)",
+        member_fortran_type="logical(c_bool)",
+        flag_ctype=ctypes.c_uint8,
     )
 
 

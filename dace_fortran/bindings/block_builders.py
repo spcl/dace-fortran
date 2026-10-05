@@ -18,7 +18,13 @@ from dace_fortran.bindings.flatten_plan import (
     FlattenRecipe,
     strip_index_args,
 )
-from dace_fortran.bindings.fortran_interface import DerivedType, OriginalArg, OriginalInterface
+from dace_fortran.bindings.fortran_interface import (
+    LOGICAL_DTYPES,
+    DerivedType,
+    OriginalArg,
+    OriginalInterface,
+    fortran_c_type,
+)
 from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature, ModuleOrigin
 from dace_fortran.bindings.loop_copy import (
     fortran_scalar_type,
@@ -96,7 +102,7 @@ def build_c_interface(
         elif a.kind is FrozenArgKind.SYMBOL:
             # Free symbol, pass-by-value int of its own width -- must match the
             # wrapper-local decl build_wrapper_head emits for it.
-            body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
+            body_lines.append(f"      {fortran_c_type(a.dtype)}, value :: {a.sdfg_name}")
         elif a.kind is FrozenArgKind.MPI_COMM:
             # MPI_Comm is a pointer-sized handle (OpenMPI ompi_communicator_t*) --
             # binds as type(c_ptr), value; wrapper feeds it the MPI_Comm_f2c result.
@@ -104,7 +110,7 @@ def build_c_interface(
         elif a.kind is FrozenArgKind.SCALAR:
             # Scalar input is a non-transient SDFG Scalar -- DaCe passes by value,
             # so the Fortran interface must bind by value too (not c_ptr).
-            body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
+            body_lines.append(f"      {fortran_c_type(a.dtype)}, value :: {a.sdfg_name}")
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
     init_syms = _init_sym_names(frozen, init_symbols)
@@ -143,7 +149,7 @@ def _init_symbol_decl(sym: str, frozen: FrozenSignature | None = None) -> str:
     if frozen is not None:
         for a in frozen.args:
             if a.sdfg_name == sym and a.kind in (FrozenArgKind.SYMBOL, FrozenArgKind.SCALAR):
-                return f"{_fortran_c_value_type(a.dtype)}, value"
+                return f"{fortran_c_type(a.dtype)}, value"
     return "integer(c_int), value"
 
 
@@ -206,51 +212,13 @@ def _dace_call_order(frozen: FrozenSignature, dace_arglist: Sequence[str]) -> li
     return [*frozen.args, *_free_sym_names(frozen)]
 
 
-def _render_logical_bridge_copy_in(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
-    """Copy-in for a source_logical_kind > 1 flat companion: struct member is
-    Fortran LOGICAL(KIND=N) (2/4/8 bytes) but SDFG storage is 1-byte bool.
-    Allocates scratch at source extents; Fortran's intrinsic LOGICAL-kind
-    conversion handles the per-element width change on assignment."""
-    flat = recipe.flat_names[0]
-    if recipe.rank == 0:
-        return [f"    allocate({flat})", f"    {flat} = {outer_expr}"]
-    shape_args = ", ".join(recipe.shape_exprs)
-    return [f"    allocate({flat}({shape_args}))", f"    {flat} = {outer_expr}"]
-
-
-def _render_logical_bridge_copy_out(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
-    """Inverse of _render_logical_bridge_copy_in: pack the bool flat back into the
-    source struct slot for intent(out)/inout entries, then release the scratch."""
-    flat = recipe.flat_names[0]
-    return [f"    {outer_expr} = {flat}", f"    deallocate({flat})"]
-
-
-def _fortran_c_value_type(dtype: str) -> str:
-    """Map a frozen-arg dtype string to its iso_c_binding form for a pass-by-value dummy."""
-    table = {
-        "int32": "integer(c_int)",
-        "int64": "integer(c_long_long)",
-        "float32": "real(c_float)",
-        "float64": "real(c_double)",
-        "bool": "logical(c_bool)",
-        "complex64": "complex(c_float_complex)",
-        "complex128": "complex(c_double_complex)",
-    }
-    if dtype not in table:
-        raise ValueError(
-            f"_fortran_c_value_type: unsupported scalar dtype {dtype!r} -- "
-            "extend the dtype map for new pass-by-value scalar shapes."
-        )
-    return table[dtype]
-
-
 def _module_arg_aliasable(a: FrozenArg) -> bool:
     """True when an orphan module-global array can be zero-copy aliased via a
     ``pointer, contiguous`` local and ``X => X__mod`` instead of a deep copy.
 
     Criteria: rank > 0, host storage
-    is deferred (allocatable/pointer) and already allocated by the caller, dtype
-    needs no logical-kind bridge, and the kernel does not allocate the array.
+    is deferred (allocatable/pointer) and already allocated by the caller, and
+    the kernel does not allocate the array.
     Read-only or inout intent is allowed; out-only still falls back to copy.
     """
     from dace_fortran.bindings.frozen_signature import FrozenArg
@@ -262,8 +230,6 @@ def _module_arg_aliasable(a: FrozenArg) -> bool:
     if a.global_alloc_inside:
         return False
     if not (a.module_origin_allocatable or a.module_origin_pointer):
-        return False
-    if a.dtype == "bool":
         return False
     if a.intent == "out":
         return False
@@ -403,10 +369,7 @@ def build_wrapper_head(
         ftype = fortran_scalar_type(r.scratch_dtype)
         # Rank-0 member takes no array spec -- ``real :: x()`` is invalid Fortran.
         shape_dims = ("(" + ", ".join(":" for _ in range(r.rank)) + ")") if r.rank > 0 else ""
-        # LOGICAL(KIND=N>1) member can't alias directly: c_loc+c_f_pointer as
-        # logical(c_bool) reinterprets 4 bytes as 1, corrupting adjacent struct heap
-        # metadata (real ICON "free(): invalid next size" bug) -- force scratch+copy.
-        if r.aliasable and r.source_logical_kind in (0, 1):
+        if r.aliasable:
             for flat in r.flat_names:
                 flat_ptr_lines.append(f"    {ftype}, pointer :: {flat}{shape_dims}")
             if _recipe_presence_guard(iface, r):
@@ -441,7 +404,7 @@ def build_wrapper_head(
             return "type(c_ptr)"
         if s == _USER_COMM_SIZE_SYMBOL_NAME:
             return "integer(c_long_long)"
-        return _fortran_c_value_type(sym_dtype.get(s, "int32"))
+        return fortran_c_type(sym_dtype.get(s, "int32"))
 
     symbol_decls = "\n".join(
         f"    {_local_decl(s)} :: {s}"
@@ -457,7 +420,7 @@ def build_wrapper_head(
     # use a pointer local to avoid the deep copy; scalars and non-aliasable arrays
     # keep an allocatable/target scratch.
     for a, _mod, _member in _orphan_module_args(frozen, iface, plan):
-        ftype = _fortran_c_value_type(a.dtype)
+        ftype = fortran_c_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")" if a.rank > 0 else ""
         if _module_arg_aliasable(a):
             scratch_lines.append(f"    {ftype}, pointer, contiguous :: {a.sdfg_name}{spec}")
@@ -469,7 +432,7 @@ def build_wrapper_head(
     # AoS-struct component SoA buffers: allocatable/target per arg + loop index +
     # one cap per member dim (filled in build_wrapper_body, drained in build_wrapper_tail).
     for a in _aos_module_args(frozen):
-        ftype = _fortran_c_value_type(a.dtype)
+        ftype = fortran_c_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")" if a.rank else ""
         scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
         its, caps, _mrank, _elem = _aos_loop_pieces(a)
@@ -479,7 +442,7 @@ def build_wrapper_head(
 
     # Absent-optional data buffers with no host source: a degenerate local.
     for a in _unsourced_array_args(frozen, iface, plan):
-        ftype = _fortran_c_value_type(a.dtype)
+        ftype = fortran_c_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")"
         scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
 
@@ -492,17 +455,13 @@ def build_wrapper_head(
     # is never referenced. Filled in build_wrapper_body, passed in build_wrapper_tail.
     for _oa, fa in _optional_outer_dummies(frozen, iface):
         local = _optional_local_name(fa.sdfg_name)
-        ftype = _fortran_c_value_type(fa.dtype)
+        ftype = fortran_c_type(fa.dtype)
         if _optional_array_dummy(fa):
             spec = "(" + ", ".join(":" for _ in range(fa.rank)) + ")"
             scratch_lines.append(f"    {ftype}, pointer, contiguous :: {local}{spec}")
             scratch_lines.append(f"    {ftype}, allocatable, target :: {_optional_absent_scratch(fa.sdfg_name)}{spec}")
         else:
             scratch_lines.append(f"    {ftype} :: {local}")
-
-    bridge_decls, _, _, _ = _build_logical_bridges(frozen, iface)
-    if bridge_decls:
-        scratch_lines = scratch_lines + bridge_decls
 
     # One type(c_ptr) local per communicator arg, holding the MPI_Comm_f2c result
     # fed to the SDFG call (outer dummy stays the caller's Fortran integer handle).
@@ -607,9 +566,7 @@ def build_wrapper_body(
     copyin.append("    ! ----- Copy-in / alias per flatten entry -----")
     for entry in live_entries(frozen, plan):
         r = entry.recipe
-        # Four mutually exclusive emitter shapes -- see FlattenRecipe for the flag
-        # matrix. source_logical_kind > 1 overrides aliasable with a width-bridging
-        # scratch (rationale in build_wrapper_head).
+        # Mutually exclusive emitter shapes -- see FlattenRecipe for the flag matrix.
         #
         # A deferred-storage member may be absent at runtime: unguarded c_loc/size
         # then reads garbage descriptor bounds (gfortran's internal_pack smashes the
@@ -617,7 +574,7 @@ def build_wrapper_body(
         guard = _recipe_presence_guard(iface, r)
         if r.aos_alloc:
             copyin.extend(render_aos_alloc_pack_in(r, entry.outer_expr))
-        elif r.aliasable and r.source_logical_kind in (0, 1):
+        elif r.aliasable:
             lines = render_alias_calls(r)
             if guard:
                 copyin.append(f"    if ({guard}) then")
@@ -634,10 +591,7 @@ def build_wrapper_body(
             else:
                 copyin.extend(lines)
         else:
-            if r.aliasable and r.source_logical_kind > 1:
-                lines = _render_logical_bridge_copy_in(r, entry.outer_expr)
-            else:
-                lines = render_copy_in_loop(r)
+            lines = render_copy_in_loop(r)
             if guard:
                 copyin.append(f"    if ({guard}) then")
                 copyin.extend("  " + ln for ln in lines)
@@ -649,12 +603,6 @@ def build_wrapper_body(
                 copyin.append("    end if")
             else:
                 copyin.extend(lines)
-
-    _, copy_in_lines, _, _ = _build_logical_bridges(frozen, iface)
-    if copy_in_lines:
-        copyin.append("")
-        copyin.append("    ! ----- LOGICAL -> logical(c_bool) bridge (copy-in) -----")
-        copyin.extend(copy_in_lines)
 
     # Symbol population is SPLIT by data dependency: a shape sym from a module
     # global/dummy/constant must be assigned BEFORE the allocates below, while a
@@ -832,12 +780,11 @@ def build_wrapper_tail(
     Template templates/wrapper_call.f90.in supplies the skeleton; we splice the
     copy-back block in before its end marker."""
     tpl = _load("wrapper_call.f90.in")
-    _, _, bridge_copy_out, name_override = _build_logical_bridges(frozen, iface)
 
     # Enum dummies pass their SELECT CASE INTEGER scratch, not the outer CHARACTER.
     # Extend name_override so _call_actual picks up the swap.
     enum_args = _enum_args(iface, enum_maps or {})
-    name_override = dict(name_override)
+    name_override: Dict[str, str] = {}
     if enum_args:
         # name_override is keyed by FrozenArg.sdfg_name; map each iface arg's outer
         # name to its frozen sdfg_name (defensive against a future flatten-rename).
@@ -884,18 +831,9 @@ def build_wrapper_tail(
                 # intent(in): no copy-back, but pack-in's scratch still needs releasing.
                 copy_out_lines.append(f"    deallocate({r.flat_names[0]})")
             continue
-        # source_logical_kind > 1: scratch was allocated unconditionally in
-        # copy-in and needs releasing; out/inout adds <outer>=<flat> first.
         # Presence guard mirrors copy-in: an ABSENT member's writeback must not
         # touch the member, but its degenerate copy-in scratch still needs releasing.
         guard = _recipe_presence_guard(iface, r)
-        if r.aliasable and r.source_logical_kind > 1:
-            if entry.writeback_intent in ("out", "inout"):
-                lines = _render_logical_bridge_copy_out(r, entry.outer_expr)
-            else:
-                lines = [f"    deallocate({r.flat_names[0]})"]
-            copy_out_lines.extend(_guarded_copy_out(lines, guard, r))
-            continue
         if r.aliasable:
             continue
         if entry.writeback_intent not in ("out", "inout"):
@@ -933,19 +871,13 @@ def build_wrapper_tail(
     for a in _unsourced_array_args(frozen, iface, plan):
         aos_out_lines.append(f"    deallocate({a.sdfg_name})")
 
-    bridge_block = ""
-    if bridge_copy_out:
-        bridge_block = "\n    ! ----- logical(c_bool) -> LOGICAL bridge (copy-out + dealloc) -----\n" + "\n".join(
-            bridge_copy_out
-        )
-
     writeback_block = ""
     if module_writeback_lines:
         writeback_block = "\n    ! ----- Write-back for kernel-written module globals -----\n" + "\n".join(
             module_writeback_lines
         )
 
-    if not copy_out_lines and not bridge_copy_out and not module_writeback_lines and not aos_out_lines:
+    if not copy_out_lines and not module_writeback_lines and not aos_out_lines:
         return call_block
 
     copy_out_block = ""
@@ -956,7 +888,7 @@ def build_wrapper_tail(
         aos_out_block = "\n    ! ----- AoS-struct component copy-out / dealloc -----\n" + "\n".join(aos_out_lines)
     marker = f"  end subroutine {iface.entry}_dace"
     pre, post = call_block.split(marker, 1)
-    return pre + copy_out_block + bridge_block + writeback_block + aos_out_block + "\n" + marker + post
+    return pre + copy_out_block + writeback_block + aos_out_block + "\n" + marker + post
 
 
 # ---------------------------------------------------------------------------
@@ -1122,87 +1054,6 @@ def _dim_spec(shape: Sequence[str], dummy_set_lower: set[str] | None = None) -> 
     if dummy_set_lower is not None and _shape_references_non_dummy(shape, dummy_set_lower):
         return "(" + ",".join(":" for _ in shape) + ")"
     return f"({','.join(s if s != '?' else ':' for s in shape)})"
-
-
-def _is_default_logical(fortran_type: str) -> bool:
-    """True for a caller-visible LOGICAL declaration whose storage layout differs
-    from logical(c_bool) (default LOGICAL is 4 bytes) -- such kinds need a
-    cast-via-copy at the wrapper boundary so the SDFG sees 1-byte bool layout."""
-    s = fortran_type.strip().lower()
-    if s == "logical":
-        return True
-    if s.startswith("logical(") and "c_bool" not in s:
-        return True
-    return False
-
-
-class LogicalBridges(NamedTuple):
-    declarations: List[str]
-    copy_in: List[str]
-    copy_out: List[str]
-    name_override: Dict[str, str]
-
-
-def _build_logical_bridges(frozen: FrozenSignature, iface: OriginalInterface) -> LogicalBridges:
-    """Emit scratch buffers + entry/exit copies for a LOGICAL outer dummy the SDFG
-    sees as bool: the wrapper's 4-byte logical would corrupt a bool* read, so a
-    logical(c_bool) scratch bridges via Fortran's intrinsic kind-conversion.
-    Returns (decl_lines, copy_in_lines, copy_out_lines, name_override) -- the
-    latter maps sdfg_name to the scratch name the call site should pass instead.
-    Already-logical(c_bool) dummies need no bridge; bool intent(in) scalars are
-    bridged at the call site instead (see build_wrapper_tail)."""
-    decl_lines: List[str] = []
-    copy_in_lines: List[str] = []
-    copy_out_lines: List[str] = []
-    name_override: dict = {}
-
-    iface_by_name = {a.name: a for a in iface.args}
-    for fa in frozen.args:
-        if fa.dtype != "bool":
-            continue
-        oa = iface_by_name.get(fa.fortran_name)
-        if oa is None:
-            continue
-        if not _is_default_logical(oa.fortran_type):
-            continue
-        # Array dummy  --  explicit scratch buffer + element-wise cast.
-        if fa.rank > 0:
-            scratch = f"{fa.fortran_name}_cbool"
-            shape_dim = "(" + ",".join(":" for _ in range(fa.rank)) + ")"
-            decl_lines.append(f"    logical(c_bool), allocatable, target :: {scratch}{shape_dim}")
-            # A scalar intent(out)/inout LOGICAL is scalar on the caller side but
-            # the bridge lifts it to a length-1 Array on the SDFG (see
-            # descriptors.py) -- size(scalar) errors, so allocate to the arg's own
-            # extent and bridge through element (1).
-            if oa.rank == 0:
-                dims = ", ".join(fa.shape) if fa.shape else "1"
-                copy_in_lines.append(f"    allocate({scratch}({dims}))")
-                copy_in_lines.append(f"    {scratch}(1) = {oa.name}")
-                if oa.intent in ("out", "inout", ""):
-                    copy_out_lines.append(f"    {oa.name} = {scratch}(1)")
-            else:
-                shape_args = ", ".join(f"size({oa.name}, dim={d + 1})" for d in range(fa.rank))
-                copy_in_lines.append(f"    allocate({scratch}({shape_args}))")
-                copy_in_lines.append(f"    {scratch} = {oa.name}")
-                if oa.intent in ("out", "inout", ""):
-                    copy_out_lines.append(f"    {oa.name} = {scratch}")
-            copy_out_lines.append(f"    deallocate({scratch})")
-            name_override[fa.sdfg_name] = scratch
-        # Scalar bool dummy: C interface wants logical(c_bool), value, but the
-        # outer dummy is default logical (4 bytes) -- gfortran rejects the direct
-        # call ("passed LOGICAL(4) to LOGICAL(1)"), no implicit cast for pass-by-
-        # value bind(c). Fix mirrors the array path: cast into a local temp, pass that.
-        else:
-            scratch = f"{fa.fortran_name}_cbool"
-            decl_lines.append(f"    logical(c_bool) :: {scratch}")
-            copy_in_lines.append(f"    {scratch} = {oa.name}")
-            if oa.intent in ("out", "inout", ""):
-                # Symmetric copy-back; no deallocate -- stack temporary, not allocatable.
-                copy_out_lines.append(f"    {oa.name} = {scratch}")
-            name_override[fa.sdfg_name] = scratch
-            continue
-
-    return LogicalBridges(decl_lines, copy_in_lines, copy_out_lines, name_override)
 
 
 _OFFSET_SYM_RE = re.compile(r"^offset_(.+)_d(\d+)$")
@@ -1389,14 +1240,14 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
     def _rhs(name: str, dtype: str, is_dim: bool) -> str:
         if name in sources:
             alias = _module_value_expr(name, synth_members)
-            return f"int({alias}, c_int)" if dtype != "bool" else alias
+            return alias if dtype in LOGICAL_DTYPES else f"int({alias}, c_int)"
         return "1" if is_dim else _zero_literal(dtype)
 
     out: dict = {}
     # (a) unsourced scalar / symbol args
     for a in frozen.args:
         if a.kind in (FrozenArgKind.SCALAR, FrozenArgKind.SYMBOL) and a.sdfg_name not in declared:
-            out[a.sdfg_name] = (_fortran_c_value_type(a.dtype), _rhs(a.sdfg_name, a.dtype, False))
+            out[a.sdfg_name] = (fortran_c_type(a.dtype), _rhs(a.sdfg_name, a.dtype, False))
     # (b) bare-identifier shape symbols of any arg
     for a in frozen.args:
         for s in a.shape:
@@ -1409,7 +1260,7 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
 def _zero_literal(dtype: str) -> str:
     """Neutral fill literal for dtype -- .false. for LOGICAL (bare 0 warns as an
     INTEGER->LOGICAL extension), 0 otherwise (Fortran promotes it to real/complex)."""
-    return ".false." if dtype == "bool" else "0"
+    return ".false." if dtype in LOGICAL_DTYPES else "0"
 
 
 def _present(expr: str, is_pointer: bool) -> str:
@@ -1793,7 +1644,7 @@ def _build_symbol_assigns(
     flat_guard: dict = {}
     for entry in plan.entries:
         r = entry.recipe
-        is_ptr_local = bool(r.aliasable and r.source_logical_kind in (0, 1))
+        is_ptr_local = r.aliasable
         guard = _recipe_presence_guard(iface, r)
         for flat in r.flat_names:
             flat_shapes[flat] = r.shape_exprs

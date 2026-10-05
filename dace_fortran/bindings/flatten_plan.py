@@ -66,14 +66,6 @@ class FlattenRecipe:
     cap_symbol: SDFG runtime symbol carrying the cap.  Empty unless
         aos_alloc=True, else ``cap_<base>_<member>``.
         ``_build_symbol_assigns`` skips it (pack-in computes it directly).
-    source_logical_kind: N when the source member is Fortran
-        LOGICAL(KIND=N) (1/2/4/8), else 0.  SDFG storage stays bool (1
-        byte) regardless; drives a boundary bridge (wrapper-local
-        pointer declared at the source kind + a bool scratch +
-        per-element conversion) so a default LOGICAL slot isn't
-        clobbered by a 1-byte SDFG write (root cause of the "free():
-        invalid next size" glibc diagnostic in the ICON
-        velocity_tendencies e2e).
     """
 
     flat_names: Tuple[str, ...]
@@ -85,7 +77,6 @@ class FlattenRecipe:
     scratch_dtype: str = "float64"
     aos_alloc: bool = False
     cap_symbol: str = ""
-    source_logical_kind: int = 0
 
     # ----- JSON I/O ---------------------------------------------------
 

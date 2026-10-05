@@ -77,7 +77,7 @@ def test_fv3_warm_rain(tmp_path):
         r1=r1_out,
         tablew=np.zeros(_QS_LENGTH, dtype=np.float32, order="F"),
         desw=np.zeros(_QS_LENGTH, dtype=np.float32, order="F"),
-        tables_are_initialized=np.array([False]),
+        tables_are_initialized=np.array([0], dtype=np.uint32),
         **skw,
     )
 

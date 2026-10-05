@@ -227,4 +227,9 @@ fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t);
 /// two-branch present/absent idiom. Lets memref walks (traceToDecl, the view-alias peel) reach the source declare.
 mlir::Value presentBranchOfRuntimeOptional(fir::IfOp ifOp, mlir::Value result);
 
+/// The DaCe dtype name of a scalar element type, "" for a type with no DaCe dtype.  ``LOGICAL(KIND=k)`` is the
+/// unsigned integer of its width (``uint8`` .. ``uint64``): the SDFG works on the caller's LOGICAL storage, reads it as
+/// ``!= 0`` and writes 0 / 1 (flang's and gfortran's .FALSE. / .TRUE.).  MLIR's ``i1`` is ``bool``.
+std::string dtypeName(mlir::Type t);
+
 }  // namespace hlfir_bridge

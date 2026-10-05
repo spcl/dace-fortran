@@ -29,9 +29,8 @@ _DIFF_USE = [
 
 #: Driver's decl section (local ref state + wrapper INTERFACE) + body (clone -> DUT ->
 #: REF -> compare -> free), inserted after the last dummy declaration.  INTERFACE uses
-#: ICON's REAL types (no ``USE`` of the bindings stub ``.mod``); ``LOGICAL(x, kind=1)``
-#: casts to the C-bool 1-byte ABI (ICON's default LOGICAL is 4 bytes), resolved via
-#: ``set_acc_host_or_device`` first since ``lacc`` is OPTIONAL.
+#: ICON's REAL types (no ``USE`` of the bindings stub ``.mod``); ``lacc`` is OPTIONAL, so it
+#: is resolved via ``set_acc_host_or_device`` first.
 _DIFF_BLOCK = """\
     ! DACE DIFFERENTIAL: reference state (independent deep copy) + the SDFG
     ! wrapper interface.  ``solve_free_sfc_ref`` is the original body, renamed.
@@ -44,7 +43,7 @@ _DIFF_BLOCK = """\
       SUBROUTINE solve_free_sfc_dace_icon(patch_3d, ocean_state, p_ext_data, p_as, &
                                           p_oce_sfc, p_phys_param, timestep, &
                                           op_coeffs, solverCoeff_sp, ret_status, lacc)
-        USE iso_c_binding,          ONLY: c_int, c_bool
+        USE iso_c_binding,          ONLY: c_int
         USE mo_model_domain,        ONLY: t_patch_3d
         USE mo_ocean_types,         ONLY: t_hydro_ocean_state, t_operator_coeff, t_solverCoeff_singlePrecision
         USE mo_ext_data_types,      ONLY: t_external_data
@@ -60,12 +59,11 @@ _DIFF_BLOCK = """\
         TYPE(t_operator_coeff), INTENT(in), TARGET               :: op_coeffs
         TYPE(t_solverCoeff_singlePrecision), INTENT(in), TARGET  :: solverCoeff_sp
         INTEGER(c_int), INTENT(out)                              :: ret_status
-        LOGICAL(c_bool), INTENT(in)                              :: lacc
+        LOGICAL, INTENT(in)                                      :: lacc
       END SUBROUTINE solve_free_sfc_dace_icon
     END INTERFACE
 
-    ! ``lacc`` is OPTIONAL: resolve it the same way the original body does
-    ! before casting to the wrapper's 1-byte c_bool.
+    ! ``lacc`` is OPTIONAL: resolve it the same way the original body does.
     CALL set_acc_host_or_device(lzacc__dace, lacc)
 
     ! Deep-copy the mutable state so the two solves run independently.
@@ -78,7 +76,7 @@ _DIFF_BLOCK = """\
     ! DUT: the SDFG solve, in place on ocean_state (what ICON keeps).
     CALL solve_free_sfc_dace_icon(patch_3d, ocean_state, p_ext_data, p_as, p_oce_sfc, &
                                   p_phys_param, timestep, op_coeffs, solverCoeff_sp, &
-                                  ret_status, LOGICAL(lzacc__dace, kind=1))
+                                  ret_status, lzacc__dace)
 
     ! Park the DUT's a_veloc_v; hand the REF the pre-call values.
     CALL clone_field3(aveloc_dut__dace, p_phys_param%a_veloc_v)

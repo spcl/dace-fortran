@@ -1343,7 +1343,7 @@ class SDFGBuilder:
                 continue
             if v.rank == 0:
                 val = v.const_data[0]
-                is_int = v.dtype.startswith("int") or v.dtype == "bool"
+                is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
                 expr = str(int(round(val))) if is_int else repr(float(val))
                 if v.fortran_name in self.symbols:
                     symbol_inits.append((v.fortran_name, expr))
@@ -1373,7 +1373,7 @@ class SDFGBuilder:
             # itself.  (Identical for rank 1.)
             desc.transient = True
             arr = arr.reshape(shape, order="F")
-            is_int = v.dtype.startswith("int") or v.dtype == "bool"
+            is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
