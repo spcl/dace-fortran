@@ -1111,6 +1111,10 @@ class SDFGBuilder:
         # (and warning-silencing) semantics.  See ``_zero_init_unwritten_transients``.
         self._zero_init_unwritten_transients(sdfg)
         reject_unlowered_expressions(sdfg)
+        # Arrays private to one loop live on the stack (a VLA when their size is symbolic).
+        from dace_fortran.builder.loop_local_arrays import place_loop_local_arrays_on_stack
+
+        place_loop_local_arrays_on_stack(sdfg)
         # Validate the SDFG exactly as returned -- after every mutation
         # (post-gen passes, frozen-signature snapshot, auto-dim retype) --
         # so a caller never receives an unvalidated graph.

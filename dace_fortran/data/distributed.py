@@ -23,7 +23,7 @@ class FortranProcessGrid(ProcessGrid):
     (``is_subgrid=True``) ignore :attr:`parent_comm_symbol` -- their parent
     comm comes from ``parent_grid``, same as the stock class."""
 
-    parent_comm_symbol = Property(
+    parent_comm_symbol: Property[str | None] = Property(
         dtype=str,
         allow_none=True,
         default=None,
