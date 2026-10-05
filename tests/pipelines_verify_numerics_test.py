@@ -33,7 +33,8 @@ def scale_sdfg(name: str, factor: float = 2.0) -> dace.SDFG:
 def test_optimize_verifies_numerics():
     """A value-preserving pipeline run must pass the gate, and still parallelize."""
     sdfg = scale_sdfg("verify_ok")
-    a = np.random.rand(16)
+    rng = np.random.default_rng(0)
+    a = rng.random(16)
     inputs = {"A": a, "B": np.zeros(16)}
 
     optimize(sdfg, verify_inputs=inputs)
@@ -50,8 +51,10 @@ def test_verify_numerics_catches_a_changed_result():
     reference = scale_sdfg("verify_ref", factor=2.0)
     corrupted = scale_sdfg("verify_bad", factor=3.0)  # stands in for a miscompiling pipeline
 
+    rng = np.random.default_rng(1)
+
     with pytest.raises(AssertionError, match="changed the numerics"):
-        verify_numerics(reference, corrupted, {"A": np.random.rand(16), "B": np.zeros(16)})
+        verify_numerics(reference, corrupted, {"A": rng.random(16), "B": np.zeros(16)})
 
 
 def test_verify_numerics_is_bit_exact_not_approximate():
