@@ -7,27 +7,20 @@ Exercises the ``hlfir.*`` linalg ops that bypass the elemental path:
 Compared numerically against a gfortran/f2py-compiled reference on seeded random input.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "linalg_intrinsics.f90"
 
 
 def _f2py(src: Path, out_dir: Path, mod_name: str):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
     if str(out_dir) not in sys.path:
@@ -106,8 +99,6 @@ end module probe_mod
 
 def test_transpose_of_elemental(tmp_path):
     """Regression: transpose(<inline elementwise expr>) -- operand is an hlfir.expr from an inline elemental, not a named array.  Without materialiseElementalForLibcall, traceToDecl returns "", emit_libcall does ctx.sdfg.arrays[''], and the build raises KeyError: ''.  Pure isolation so a failure here means the elemental-source materialise regressed."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
     src_path = tmp_path / "transpose_of_elem.f90"
     src_path.write_text(_TRANSPOSE_OF_ELEMENTAL_SRC)
     mod = _f2py(src_path, tmp_path / "ref", "transpose_of_elem_ref")

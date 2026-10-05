@@ -8,7 +8,6 @@ right code survives/drops, then (if ``gfortran`` present) compiles it.
 """
 
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,14 +17,8 @@ import pytest
 from dace_fortran.fparser_inliner import inline_to_ast, inline_to_single_tu
 
 
-def _have_gfortran() -> bool:
-    return shutil.which("gfortran") is not None
-
-
 def _compiles(src_text: str) -> bool:
-    """True if ``src_text`` compiles standalone with gfortran (skips if absent)."""
-    if not _have_gfortran():
-        pytest.skip("gfortran not on PATH")
+    """True if ``src_text`` compiles standalone with gfortran (fails if absent)."""
     with TemporaryDirectory() as td:
         f = Path(td) / "single.f90"
         f.write_text(src_text)

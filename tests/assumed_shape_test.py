@@ -6,19 +6,16 @@ storage element (e.g. ``custom_array(-2)``), not caller-bound index 1.
 Ref: https://fortran-lang.discourse.group/t/6923
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import flang_binary, have_flang
+from _util import flang_binary
 
 from dace_fortran.builder import SDFGBuilder  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Two files (assumed-shape callee + custom-bounded driver) exercise the
 # multi-file driver (parse_files -> inline-all), the way ICON's cross-module kernels will.
@@ -60,10 +57,6 @@ def _hlfir(src: str, path: Path) -> Path:
 
 
 def _f2py_build(srcs: list[str], out_dir: Path, mod_name: str):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     combined = out_dir / f"{mod_name}.f90"
     combined.write_text("\n".join(srcs))

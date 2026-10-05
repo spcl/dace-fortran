@@ -28,12 +28,9 @@ from pathlib import Path
 import pytest
 
 from icon.atmosphere._atmo_harness import (
-    HAVE_FLANG,
-    HAVE_OPENMPI,
     KERNELS,
     SINGLE_TU_ARTIFACTS,
     extract_single_tu,
-    have_icon_atmo,
 )
 
 _HERE = Path(__file__).resolve().parent
@@ -44,15 +41,7 @@ _SOURCE = {k[0]: k[1] for k in KERNELS}
 #: kernel in both ``__LOOP_EXCHANGE`` variants.
 _CASES = SINGLE_TU_ARTIFACTS
 
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not (HAVE_FLANG and HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI"),
-    pytest.mark.skipif(
-        not have_icon_atmo(),
-        reason="icon-model atmosphere source not checked out; run "
-        "`git submodule update --init --recursive tests/icon/full/icon-model`",
-    ),
-]
+pytestmark = pytest.mark.long
 
 
 @pytest.mark.xdist_group("atmo_fparser")

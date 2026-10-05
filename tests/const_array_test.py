@@ -11,11 +11,8 @@ but NOT marked ``constant``; the bridge extracts that data like a parameter arra
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_readonly_data_array_is_constexpr(tmp_path):

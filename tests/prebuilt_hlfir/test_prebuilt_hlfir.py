@@ -10,24 +10,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
-from _util import have_flang
 from dace_fortran import build_sdfg_from_project
 
 _HERE = Path(__file__).resolve().parent
 _JACOBI_DIR = _HERE / "jacobi"
 _CSR_DIR = _HERE / "csr_spmv"
 _JACOBI_STUBS = [_JACOBI_DIR / "stubs" / "mpi_stub.f90", _JACOBI_DIR / "stubs" / "netcdf_stub.f90"]
-
-
-def _have(*tools: str) -> bool:
-    return all(shutil.which(t) is not None for t in tools)
-
-
-def _has_netcdf_fortran() -> bool:
-    pkg = shutil.which("pkg-config")
-    return pkg is not None and subprocess.run([pkg, "--exists", "netcdf-fortran"]).returncode == 0
 
 
 def _assert_inlined(sdfg, helper: str):
@@ -37,10 +26,6 @@ def _assert_inlined(sdfg, helper: str):
     )
 
 
-@pytest.mark.skipif(
-    not (have_flang() and _have("bear", "autoreconf", "automake", "mpif90", "nf-config") and _has_netcdf_fortran()),
-    reason="LLVM flang / bear / autotools / MPI / netcdf-fortran missing",
-)
 def test_jacobi_autotools_bear(tmp_path: Path):
     """Autotools + bear -- make -> compile_commands.json (ICON build shape); drives the one-call build_sdfg_from_project tier-3 entry point."""
     build = tmp_path / "build"
@@ -64,10 +49,6 @@ def test_jacobi_autotools_bear(tmp_path: Path):
         assert "mpi_" not in label, f"MPI reference leaked into SDFG: {node}"
 
 
-@pytest.mark.skipif(
-    not (_have("cmake") and have_flang()),
-    reason="cmake / LLVM flang missing",
-)
 def test_csr_spmv_cmake(tmp_path: Path):
     """cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -> compile_commands.json; structurally different project, no per-project plumbing needed."""
     build = tmp_path / "build"

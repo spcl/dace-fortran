@@ -17,11 +17,9 @@ never hit the bug, so the two buffer kinds are the discriminator.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ``h`` is a POINTER member so the section is passed by copy-in/out and the dummy is assumed-shape;
 # the buffer is ALLOCATABLE so its RHS box is a ``fir.load``, the shape the fix keys on.

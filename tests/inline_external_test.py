@@ -7,9 +7,8 @@ matches a gfortran/f2py reference numerically.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -20,8 +19,6 @@ from dace_fortran.external import (
     keep_external,
 )
 from dace_fortran.external_functions import ExternalFunction
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_inline_external_swaps_libnode_for_nested_sdfg(tmp_path):

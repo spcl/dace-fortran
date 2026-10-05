@@ -6,13 +6,12 @@ Two layers: **contract** (no toolchain) -- registry population + policy validati
 **e2e** (flang+gfortran) -- a bare ``ExternalFunction`` with no ``Arg`` list must produce
 the same ``ExternalCall`` as an explicit two-``Arg`` ``keep_external``."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 from dace_fortran.external import (
     Arg,
@@ -116,11 +115,6 @@ def test_apply_validates_duplicate_emit_name():
 # e2e -- the derive-from-HLFIR linchpin: a bare ExternalFunction lowers + runs
 # ---------------------------------------------------------------------------
 
-_e2e = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
-
 # Increments every element by 1.  ``bind(c, name="bar")`` -> stable C symbol.
 _BAR_F90 = """
 subroutine bar(a, n) bind(c, name="bar")
@@ -162,8 +156,7 @@ def _build_libbar(tmp_path: Path) -> Path:
     return libbar
 
 
-@pytest.mark.parametrize("_m", [pytest.param(None, marks=_e2e)])
-def test_bare_external_function_lowers_and_runs(tmp_path: Path, _m):
+def test_bare_external_function_lowers_and_runs(tmp_path: Path):
     """The linchpin: ``ExternalFunction("bar", library=...)`` with NO ``Arg`` list still
     lowers ``call bar(a, n)`` to a working ``ExternalCall`` -- ``emit_call`` derives the plan
     from the HLFIR call site (``a`` inout pointer, ``n`` referenced inline), matching the
@@ -202,8 +195,7 @@ def _external_call_node(tmp_path, libbar, register):
     return calls[0]
 
 
-@pytest.mark.parametrize("_m", [pytest.param(None, marks=_e2e)])
-def test_derived_node_matches_authored(tmp_path: Path, _m):
+def test_derived_node_matches_authored(tmp_path: Path):
     """Derive-from-HLFIR is byte-identical to hand-authored: a bare ``ExternalFunction``
     and the explicit ``keep_external(args=[...])`` produce the SAME ``c_decl``/``body`` --
     minimal registration is a drop-in for the verbose one."""

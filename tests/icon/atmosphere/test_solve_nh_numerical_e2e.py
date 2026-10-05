@@ -15,20 +15,14 @@ USE-renames of in-TU bodies, not undefined.
 @pytest.mark.long: builds the 3166-LoC dycore to an SDFG (minutes).
 """
 
-import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 from icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
+pytestmark = pytest.mark.long
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_nonhydro_inlined_single_tu.f90"

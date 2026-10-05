@@ -8,14 +8,12 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _N = 4
 

@@ -5,24 +5,16 @@ Flang lowers ``arr(..., nlev-1, ...)`` as ``arith.subi``+``fir.convert`` before
 subscript surfaces as ``?`` (``KeyError: '?'`` from the argslist resolver at
 call time). One pattern per test so a regression points at the exact arith op."""
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _f2py_ref(src: str, out_dir: Path, name: str):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.f90").write_text(src)
     subprocess.check_call(

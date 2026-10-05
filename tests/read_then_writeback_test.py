@@ -15,11 +15,8 @@ regression surfaces independently of Phases F/A/B/G.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_read_then_writeback_no_cycle(tmp_path: Path):

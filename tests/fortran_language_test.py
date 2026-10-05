@@ -1,11 +1,8 @@
 """Verbatim port of f2dace/dev:tests/fortran/fortran_language_test.py."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_real_kind_selector(tmp_path):

@@ -16,11 +16,9 @@ SDFG codegen.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, compile_to_hlfir, have_flang
+from _util import build_sdfg, compile_to_hlfir
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _PRELUDE = (
     "lower-fir-select-case,hlfir-inline-all,hlfir-fold-element-aliases,"

@@ -5,15 +5,11 @@
 
 from pathlib import Path
 
-import pytest
 
 import dace_fortran
-from _util import have_flang
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "qe_fft_probe.f90"
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_and_assert(entry: str, expected_node: str, tmp_path):

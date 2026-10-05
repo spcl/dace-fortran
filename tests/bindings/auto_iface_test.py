@@ -11,9 +11,8 @@ binding end-to-end.
 
 from pathlib import Path
 
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import (
     Member,
@@ -21,8 +20,6 @@ from dace_fortran.bindings.fortran_interface import (
     OriginalInterface,
     build_auto_interface,
 )
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _auto(src: str, tmp_path: Path, name: str, entry: str) -> OriginalInterface:

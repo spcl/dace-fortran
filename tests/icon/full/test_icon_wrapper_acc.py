@@ -18,7 +18,7 @@ from pathlib import Path
 import dace
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings.acc_transfers import (
@@ -315,8 +315,6 @@ def velocity_sdfg():
     cached = os.environ.get("DACE_FORTRAN_VELOCITY_SDFGZ")
     if cached:
         return dace.SDFG.from_file(cached)
-    if not have_flang():
-        pytest.skip("flang not on PATH and $DACE_FORTRAN_VELOCITY_SDFGZ unset")
     out = (Path(dace.Config.get("default_build_folder")) / "_acc_residency_velocity").resolve()
     out.mkdir(parents=True, exist_ok=True)
     return build_sdfg(
@@ -397,7 +395,6 @@ def _compile(tmp_path: Path, compiler: str, extra: list) -> None:
     )
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_staged_wrapper_compiles_without_openacc(tmp_path):
     _compile(tmp_path, "gfortran", ["-ffree-line-length-none", "-Werror"])
 

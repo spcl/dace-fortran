@@ -248,7 +248,6 @@ def test_cli(tmp_path):
     assert json.loads(out.read_text())["args"]["b_copyin"]["clause"] == "COPYIN"
 
 
-@pytest.mark.skipif(not VELOCITY.is_file(), reason="ACC-annotated velocity twin not present")
 def test_velocity_tendencies_classification():
     payload = extract_acc_residency(VELOCITY, "velocity_tendencies")
     device = {a for a, i in payload["args"].items() if i["residency"] == "device"}

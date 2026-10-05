@@ -11,19 +11,15 @@ kernel compiles through both the bridge and f2py, compared to rtol=1e-12.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _LOOPNESTS_DIR = Path(__file__).parent
 
 
 def _src(name: str) -> str:
     p = _LOOPNESTS_DIR / f"{name}.f90"
-    if not p.is_file():
-        pytest.skip(f"missing kernel source: {p}")
     return p.read_text()
 
 

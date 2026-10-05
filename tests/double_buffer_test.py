@@ -8,9 +8,7 @@ dynamic-shape/descriptor-marshal case is covered separately by external_aos_test
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def test_dbuf_split_simple(tmp_path):

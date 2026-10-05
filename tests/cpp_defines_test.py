@@ -8,12 +8,9 @@ config explicitly; the source's #ifdef branch selection proves cpp ran before HL
 
 import json
 
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.emit_hlfir import parse_compile_commands
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_parse_compile_commands_cmake_command_string(tmp_path):

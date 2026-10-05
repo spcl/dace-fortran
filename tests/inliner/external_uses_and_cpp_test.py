@@ -10,20 +10,14 @@
    unresolved and reachability pruning drops procedures that referenced it.
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
 
-from _util import have_flang
 from dace_fortran.fparser_inliner import cpp_expand_sources, inline_to_ast, inline_to_single_tu
 from dace_fortran.preprocess import merge_used_modules
-
-
-def _have_gfortran() -> bool:
-    return shutil.which("gfortran") is not None
 
 
 def _gfortran_compiles(src_text: str) -> bool:
@@ -99,10 +93,7 @@ def test_external_use_reached_does_not_crash():
 # expand_cpp -- the C-preprocessor pre-pass (needs flang)
 # ---------------------------------------------------------------------------
 
-pytestmark_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
-
-@pytestmark_flang
 def test_cpp_expand_sources_resolves_include_and_macro(tmp_path):
     """``cpp_expand_sources`` expands a cpp #include + #define macro into pure
     Fortran (no # directives left)."""
@@ -115,7 +106,6 @@ def test_cpp_expand_sources_resolves_include_and_macro(tmp_path):
     assert "real(8)" in text.lower()
 
 
-@pytestmark_flang
 def test_inline_with_cpp_include(tmp_path):
     """End-to-end: a source with a cpp #include inlines once expand_cpp=True
     resolves it (would raise otherwise)."""
@@ -185,7 +175,6 @@ def test_namelist_fparser_prunes_consistently():
     assert "unused_nml" not in txt, "an all-pruned namelist group should be dropped"
 
 
-@pytest.mark.skipif(not _have_gfortran(), reason="gfortran not on PATH")
 def test_namelist_both_engines_compile(tmp_path):
     """Both engines produce compilable Fortran: regex keeps the whole module
     (every var declared); fparser keeps a consistent, pruned namelist."""

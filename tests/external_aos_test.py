@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -33,8 +33,6 @@ from dace_fortran.external_functions import ExternalFunction
 _VELOCITY_FULL = Path(
     os.environ.get("VELOCITY_FULL_F90", str(Path(__file__).resolve().parent / "icon" / "full" / "velocity_full.f90"))
 )
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_c_so(out_dir: Path, name: str, csrc: str) -> Path:
@@ -291,7 +289,6 @@ end module
         clear_external_registry()
 
 
-@pytest.mark.skipif(not _VELOCITY_FULL.is_file(), reason="full velocity fake f90 not present (set VELOCITY_FULL_F90)")
 def test_full_velocity_advection_external_call(tmp_path):
     """Add an external call to the FULL ``mo_velocity_advection`` fake f90 and
     confirm it builds and the call reaches a real pointer-contiguous prognostic

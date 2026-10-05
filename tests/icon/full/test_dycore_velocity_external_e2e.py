@@ -18,15 +18,13 @@ has no marshalling group".  Flips green when v2 box/allocatable expansion lands.
 
 import ctypes
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 import dace
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
@@ -46,10 +44,6 @@ from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_reg
 _O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
 _O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 _HERE = Path(__file__).resolve().parent
 _VELOCITY_PATH = _HERE / "velocity_full.f90"

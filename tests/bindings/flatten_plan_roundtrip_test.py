@@ -5,13 +5,10 @@ structurally correct hlfir.flatten_plan attribute that the bridge decodes into F
 import subprocess
 from pathlib import Path
 
-import pytest
 
-from _util import flang_binary, have_flang
+from _util import flang_binary
 from dace_fortran.build_bridge import hb
 from dace_fortran.bindings import FlattenPlan
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _plan_from_fortran(src: str, tmp_path: Path) -> FlattenPlan:

@@ -1,11 +1,8 @@
 """Verbatim port of f2dace/dev:tests/fortran/ranges_test.py."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_multiple_ranges_all(tmp_path):

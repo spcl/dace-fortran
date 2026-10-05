@@ -8,19 +8,15 @@ array/function bases, so the float exponent survives into a tasklet, exactly
 the case this pass exists to fix.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 import dace
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_pass_retypes_integer_valued_float_exponents():
@@ -66,10 +62,6 @@ end module kern_mod
 
 
 def _f2py(src_text: str, out_dir: Path, mod: str):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{mod}.f90").write_text(src_text)
     subprocess.check_call(

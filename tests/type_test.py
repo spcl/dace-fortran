@@ -3,9 +3,7 @@
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_basic_type(tmp_path):

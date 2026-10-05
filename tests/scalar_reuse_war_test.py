@@ -20,12 +20,10 @@ Checked e2e against an f2py-compiled gfortran reference: bugged = diverges, fixe
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from _helpers import f2py
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HEAD = "MODULE kernel_mod\nCONTAINS\n"
 _TAIL = "END MODULE kernel_mod\n"

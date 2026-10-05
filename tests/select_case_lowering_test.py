@@ -12,11 +12,8 @@ so the inliner actually clones the lowered CFG (the original segfault path).
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_select_case_point_in_inlined_callee(tmp_path: Path):

@@ -31,20 +31,12 @@ Bit-exactness holds because the harness pins ``-ffp-contract=off`` on both sides
 dot products and round ~1 ulp off the reference).
 """
 
-import shutil
-
 import pytest
 
-from _util import have_flang
 from icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = __import__("pathlib").Path(__file__).resolve().parent
-
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 
 @pytest.mark.xdist_group("atmo_velocity_fparser")

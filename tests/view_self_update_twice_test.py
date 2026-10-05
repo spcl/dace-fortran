@@ -9,12 +9,10 @@ an interstate edge). E2e against an f2py-compiled reference.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from _helpers import f2py
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _DRIVER_PROLOGUE_HEAD = """
 MODULE kernel_mod

@@ -10,23 +10,17 @@ site. ``run_kernel_e2e`` drives the DUT (auto-generated ``bind(c)`` binding) and
 buffer element-for-element. Build detail shared verbatim with
 :mod:`test_velocity_numerical_e2e`; only the ``integration`` marker differs."""
 
-import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "velocity_advection_inlined_single_tu.f90"
 _ENTRY = "mo_velocity_advection::velocity_tendencies"
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
+pytestmark = pytest.mark.integration
 
 
 @pytest.mark.xdist_group("atmo_velocity_integration")

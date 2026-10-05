@@ -11,11 +11,8 @@ Two rules that must hold globally (the binding/codegen depend on them):
 
 from pathlib import Path
 
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _dtypes(src: str, tmp_path: Path, entry: str) -> dict:

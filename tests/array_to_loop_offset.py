@@ -4,11 +4,8 @@ HLFIR handles offset normalisation uniformly via ``offset_<arr>_d<i>`` symbols (
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_arr2loop_without_offset(tmp_path):

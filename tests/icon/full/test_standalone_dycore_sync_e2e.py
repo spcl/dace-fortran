@@ -16,15 +16,13 @@ marshalling) and ``test_dycore_struct_ext_e2e.py`` (small struct-external siblin
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import dace
 import numpy as np
-import pytest
 
-from _util import build_sdfg, gfortran_compile_so, have_flang
+from _util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
@@ -38,10 +36,6 @@ from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry,
 _O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
 _O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # "original" sync_patch_array_noop has no bind(c) (dycore calls it via the regular
 # Fortran interface); the companion sync_patch_array_noop_c IS bind(c) and rebuilds the

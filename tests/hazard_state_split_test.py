@@ -12,11 +12,8 @@ produces a grossly wrong result, so exact equality is the right assertion.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def _run(src: str, entry: str, tmp_path: Path, **arrays):

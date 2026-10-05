@@ -11,11 +11,7 @@ fir.address_of and has component-attribute hlfir.designate uses, synthesise one 
 VarInfo per unique component referenced, as a TRANSIENT (module globals are internal state).
 """
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_module_level_struct_field_summed(tmp_path):

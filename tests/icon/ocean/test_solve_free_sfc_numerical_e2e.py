@@ -13,22 +13,14 @@ so both sides read identical state). ``inject_use_mpi`` lets the inlined
 ``@pytest.mark.long``: builds the full driver to an SDFG (minutes).
 """
 
-import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 from icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
-from icon.ocean._ocean_harness import have_icon_ocean
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-    pytest.mark.skipif(not have_icon_ocean(), reason="icon-model ocean source not checked out"),
-]
+pytestmark = pytest.mark.long
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_free_sfc_single_tu.f90"

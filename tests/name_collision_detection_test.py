@@ -9,11 +9,7 @@ SYMBOL on collision; (2) RuntimeError at builder-init if the three role-keyed
 dicts aren't disjoint, caught at extract time instead of 200 states later.
 """
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_inlined_callee_scalar_shadowing_outer_array(tmp_path):

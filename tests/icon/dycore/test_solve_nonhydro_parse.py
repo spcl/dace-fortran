@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 
 _ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
 _ENTRY_MODULE = "mo_solve_nonhydro"  # the defining module
@@ -31,7 +30,7 @@ _ENTRY_DEF_RE = re.compile(rf"func\.func\s+(?!private\b)@(?:_QM{_ENTRY_MODULE}[P
 def _resolve_compile_commands() -> Path | None:
     """Find a built ICON compile_commands.json: ICON_DYCORE_CC env var first, else the
     in-test build dir tests/icon/dycore/.icon_build/compile_commands.json. None means
-    no DB reachable -- skipif below surfaces the setup_icon_dycore.sh pointer."""
+    no DB reachable -- the test then fails with the setup_icon_dycore.sh pointer."""
     env = os.environ.get("ICON_DYCORE_CC")
     if env and Path(env).is_file():
         return Path(env)
@@ -49,11 +48,7 @@ _SETUP_HINT = (
 )
 
 # The heavy-icon CI lane generates compile_commands.json (setup_icon_dycore.sh) before its run.
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(_resolve_compile_commands() is None, reason=_SETUP_HINT),
-]
+pytestmark = pytest.mark.long
 
 
 def test_solve_nonhydro_emits_hlfir():
@@ -61,10 +56,10 @@ def test_solve_nonhydro_emits_hlfir():
     flags from compile_commands.json, with mpi/netcdf stubs standing in for unreadable .mod."""
     # Re-resolve at run time (not collection time): a long xdist sweep can sit queued
     # while a disk-cleanup deletes _icon_build, turning a stale resolution into a hard
-    # FileNotFoundError; resolve again and skip cleanly instead.
+    # FileNotFoundError; resolve again and fail with the setup hint instead.
     cc = _resolve_compile_commands()
     if cc is None:
-        pytest.skip(_SETUP_HINT)
+        raise FileNotFoundError(_SETUP_HINT)
     from dace_fortran.emit_hlfir import emit
 
     stubs = [_STUBS_DIR / "mpi_stub.f90", _STUBS_DIR / "netcdf_stub.f90"]

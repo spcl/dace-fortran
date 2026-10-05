@@ -20,9 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ``use mpi``-style runtime handles: non-``parameter`` module integers, so the
 # bridge traces the op argument to its NAME (``mpi_prod`` / ``mpi_maxloc`` / ...)

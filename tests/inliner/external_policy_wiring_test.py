@@ -215,7 +215,6 @@ end module mo_wrap
         assert _gfortran_compiles(merged), "stubbed TU with an interface-in-spec must compile"
 
 
-@pytest.mark.skipif(not _have_gfortran(), reason="gfortran not on PATH")
 def test_regex_merge_stubbed_tu_compiles(tmp_path):
     """The stubbed single-TU is still valid Fortran: an empty-bodied ``halo_exchange`` with its dummy argument declared compiles standalone."""
     _write_halo(tmp_path)

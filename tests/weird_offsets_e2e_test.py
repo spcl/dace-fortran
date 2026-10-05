@@ -13,11 +13,8 @@ bounds ``a(10:,20:)`` -- previously unhandled, offsets silently lost -> OOB).
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def _e2e(src: str, entry: str, tmp_path: Path, sdfg_kw: dict, ref_args: tuple):

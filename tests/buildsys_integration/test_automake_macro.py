@@ -2,24 +2,13 @@
 aclocal -> autoconf -> automake -> configure -> make, asserts the preprocess rule fires.
 Skipped when autoconf/automake/aclocal aren't on PATH."""
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
-_HAVE_AUTOCONF = shutil.which("autoconf") is not None
-_HAVE_AUTOMAKE = shutil.which("automake") is not None
-_HAVE_ACLOCAL = shutil.which("aclocal") is not None
-_HAVE_MAKE = shutil.which("make") is not None
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _M4_DIR = _REPO_ROOT / "autotools"
-
-pytestmark = pytest.mark.skipif(
-    not (_HAVE_AUTOCONF and _HAVE_AUTOMAKE and _HAVE_ACLOCAL and _HAVE_MAKE),
-    reason="autoconf / automake / aclocal / make required",
-)
 
 
 def _write_project(tmp_path: Path) -> Path:

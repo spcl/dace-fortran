@@ -35,11 +35,8 @@ self-contained -- only the ``intent(out)`` result (and any scalar
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def _build(src: str, tmp: Path, entry: str = "main"):

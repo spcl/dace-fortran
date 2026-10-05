@@ -7,11 +7,8 @@ INT_MIN at -O0 regardless of intent. Fix: ``dispatch.cpp::identityForType`` now 
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_minval_int32_whole_array(tmp_path):

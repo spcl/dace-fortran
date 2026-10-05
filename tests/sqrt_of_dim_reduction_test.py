@@ -4,11 +4,8 @@ Was broken: materialiseElementalToTransient's walk of the SQRT elemental hit hlf
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_minval_of_sqrt_of_sum_dim(tmp_path):

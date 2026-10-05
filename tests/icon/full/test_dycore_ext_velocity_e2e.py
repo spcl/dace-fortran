@@ -22,13 +22,11 @@ the two sides agree by construction without an intermediate shim.
 """
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, gfortran_compile_so, have_flang
+from _util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     OriginalArg,
     OriginalInterface,
@@ -36,10 +34,6 @@ from dace_fortran.bindings import (
 )
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 _INNER_SRC = """
 subroutine inner_axpy(n, a, x, y)

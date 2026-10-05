@@ -9,9 +9,7 @@ kernel, each isolating one pattern as a fast regression guard independent of the
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_local_allocatable_section_bound(tmp_path):

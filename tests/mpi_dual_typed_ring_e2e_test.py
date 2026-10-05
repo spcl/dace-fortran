@@ -34,16 +34,14 @@ that breaks mpi4py's auto-init under mpirun)::
         tests/mpi_dual_typed_ring_e2e_test.py
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg, have_flang
+from _util import build_on_root, build_sdfg
 
-pytestmark = [pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")]
 
 # Dual-typed nonblocking ring, per-request MPI_Wait (distinct request scalars
 # r1..r4 -> no request-array collapse).  MPI entry points are EXTERNAL with
@@ -138,8 +136,7 @@ def test_dual_typed_nonblocking_ring(tmp_path: Path):
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
-    if comm.Get_size() < 2:
-        pytest.skip("dual-typed MPI ring needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
+    assert comm.Get_size() >= 2, "dual-typed MPI ring needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)"
 
     sdfg = _build_ring(comm, tmp_path, _DUAL_RING_WAIT, "dualring_mod::dualring", "dualring")
     rbuf_dp, rbuf_sp, expected = _drive_ring(comm, sdfg, dual=True)
@@ -189,8 +186,7 @@ def test_mpi_waitall_ring_delivers(tmp_path: Path):
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
-    if comm.Get_size() < 2:
-        pytest.skip("MPI_Waitall ring needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
+    assert comm.Get_size() >= 2, "MPI_Waitall ring needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)"
 
     sdfg = _build_ring(comm, tmp_path, _WAITALL_RING, "waitall_mod::waitall_ring", "waitall")
     rbuf, _, expected = _drive_ring(comm, sdfg, dual=False)
@@ -242,7 +238,6 @@ def _gfortran_compiles(src: str, tmp: Path, name: str, *, prelude: str = "") -> 
     return r.returncode == 0, r.stderr
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_dual_typed_ref_typestar_is_sound(tmp_path: Path):
     """A ``TYPE(*)`` interface is the sound fix for solve_nh's dual-typed MPI
     calls -- necessary AND sufficient, so -fallow-argument-mismatch is never

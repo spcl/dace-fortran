@@ -7,12 +7,9 @@ f2py reference compiled from the same source (``feedback_e2e_numerical``).
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from _helpers import f2py, sdfg_call_args
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_and_run(tmp_path, *, src: str, name: str, entry: str, int_args=None):

@@ -5,21 +5,15 @@ HLFIR call site and lowers to a CPP tasklet calling ``extern "C" foo``, no re-au
 signature. SDFG ``.so`` links ``libfoo.so`` via rpath (no LD_PRELOAD). Contract: target must
 be ``bind(c)`` -- the only portable way to call Fortran from generated C++."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.external import ExternalCall, apply_external_functions, clear_external_registry
 from dace_fortran.external_functions import ExternalFunction
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # Separately-compiled external function: increments a whole array by 1.
 # ``bind(c, name="foo")`` -> stable, unmangled C symbol callable from

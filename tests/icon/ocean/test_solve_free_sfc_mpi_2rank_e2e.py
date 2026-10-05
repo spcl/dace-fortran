@@ -22,23 +22,18 @@ The exchange pairs rank r with rank 1-r, so this runs at exactly 2 ranks.
 """
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_on_root, have_flang
+from _util import build_on_root
 from icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
-from icon.ocean._ocean_harness import have_icon_ocean
 from icon.ocean._ocean_e2e import build_dut_and_ref, synth_call_inputs, _invoke
 
 pytestmark = [
     pytest.mark.long,
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
-    pytest.mark.skipif(not have_icon_ocean(), reason="icon-model ocean source not checked out"),
 ]
 
 _HERE = Path(__file__).resolve().parent

@@ -6,21 +6,16 @@ inputs, and asserts OUTPUT arrays match elementwise. Regression gate for
 ``hlfir-lift-aos-pointer-records``.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from _util import have_flang  # noqa: E402
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
@@ -28,10 +23,6 @@ def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
 
     ``kind_map`` writes a ``.f2py_f2cmap`` for symbolic kind aliases (``wp``, ``JPRB``) f2py can't resolve itself.
     """
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not on PATH (f2py reference build)")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not on PATH (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     if kind_map:
         # f2py reads .f2py_f2cmap from cwd; maps Fortran TypeName -> {kind_alias: ctype}.

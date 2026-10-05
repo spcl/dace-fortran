@@ -6,13 +6,10 @@ textual expression when they disagreed on count (e.g. the MIN/MAX cmp+select pat
 """
 
 import numpy as np
-import pytest
 
 from dace.sdfg import nodes as nd
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _tasklet_for(sdfg, code_fragment: str):

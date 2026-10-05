@@ -25,11 +25,7 @@ through ``replaceStructArgJagged``'s ``maxExtent`` -> column-index
 clamping).
 """
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_jagged_scalar_struct_max_extent_packing(tmp_path):

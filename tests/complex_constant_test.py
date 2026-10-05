@@ -3,11 +3,8 @@ of a complex constant lowers to a mapped fill, not a scalar write; (2) the rende
 confused with a real scalar/loop iterator literally named `j` (spurious _in_j connector)."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_complex_2d_zero_fill(tmp_path):

@@ -7,11 +7,8 @@ works for the whole-array shape Flang emits without section slicing.  Dynamic se
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_any_whole_array(tmp_path: Path):

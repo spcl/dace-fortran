@@ -25,7 +25,6 @@ into adjacent 2-rank pairs. Skipped at odd/<2 rank count.
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -33,7 +32,7 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_on_root, have_flang
+from _util import build_on_root
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import build_sdfg
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
@@ -45,11 +44,7 @@ from icon.ocean._ocean_e2e import (
     synth_call_inputs,
 )
 
-pytestmark = [
-    pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
-]
+pytestmark = pytest.mark.mpi
 
 _HERE = Path(__file__).resolve().parent
 _ENTRY = "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar"
@@ -189,8 +184,7 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
 
     world = MPI.COMM_WORLD
     rank, size = world.Get_rank(), world.Get_size()
-    if size < 2 or size % 2 != 0:
-        pytest.skip("needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)")
+    assert size >= 2 and size % 2 == 0, "needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)"
     pair = world.Split(color=rank // 2, key=rank)
 
     # Pin every rank to rank 0's tmp_path so the .so artefacts are shared.

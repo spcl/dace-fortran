@@ -8,11 +8,8 @@ index pass-through. NOT yet supported: bitwise IAND/IOR/IEOR/ISHFT in a subscrip
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_mod_in_array_index(tmp_path):

@@ -6,11 +6,8 @@ PARAMETER and function-scope globals stay untouched (caller can't bind the latte
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_module_global_read_only_surfaces_as_kwarg(tmp_path):

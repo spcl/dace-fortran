@@ -9,14 +9,13 @@ built to an SDFG via both engines and checked against a gfortran reference on
 Park-Miller-seeded inputs.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.preprocess import MergeEngine, merge_used_modules
@@ -25,10 +24,6 @@ _HERE = Path(__file__).parent
 _KERNELS = _HERE / "lulesh_comp_kernels.f90"
 _DRIVER = _HERE / "lulesh.f90"
 _ENTRY = "calcelemvolumederivative"
-
-
-def _have(tool: str) -> bool:
-    return shutil.which(tool) is not None
 
 
 def _park_miller(seed: int, n: int) -> np.ndarray:
@@ -120,12 +115,9 @@ def _f2py_reference(tu_text: str, out_dir: Path, mod: str):
     return __import__(mod)
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 @pytest.mark.parametrize("engine", list(MergeEngine), ids=lambda e: e.value)
 def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: MergeEngine):
     """SDFG of the inlined kernel matches the gfortran reference element-wise."""
-    if not (_have("gfortran") and _have("meson")):
-        pytest.skip("gfortran + meson needed for the f2py reference")
 
     import re
 

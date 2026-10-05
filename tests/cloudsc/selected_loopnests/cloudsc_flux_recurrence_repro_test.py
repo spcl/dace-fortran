@@ -22,17 +22,14 @@ subroutine, crackfortran-wrappable); SDFG is built through the full
 default pipeline (inline-all must fire for the slice path).
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 module cloudsc_mod
@@ -80,10 +77,6 @@ end module cloudsc_mod
 
 
 def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{mod_name}.f90").write_text(src_text)
     subprocess.check_call(

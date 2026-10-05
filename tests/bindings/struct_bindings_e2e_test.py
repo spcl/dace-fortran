@@ -6,25 +6,18 @@ gfortran-compiled reference. Both paths use gfortran+ctypes, not f2py: f2py's cr
 can't parse a ``type(t_fields)`` dummy (maps to 'void', crashes lookup)."""
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalInterface,
     emit_bindings,
 )
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 
 def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):

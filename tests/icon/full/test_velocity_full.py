@@ -12,17 +12,14 @@ Flow: build SDFG, compile reference .so, init buffers once, snapshot for SDFG, r
 on one copy + SDFG on the other, compare outputs."""
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _DRIVER_PATH = _HERE / "velocity_full.f90"
@@ -31,8 +28,6 @@ _CALLER_PATH = _HERE / "velocity_full_caller.f90"
 
 def _compile_caller_so(out_dir: Path) -> ctypes.CDLL:
     """gfortran -shared -fPIC compile driver + caller into a .so."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libvelocity_caller.so"
     # cwd=out_dir keeps gfortran from picking up a stale .mod a prior flang run left in repo root.

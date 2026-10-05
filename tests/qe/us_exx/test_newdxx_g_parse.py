@@ -38,10 +38,9 @@ See ``newdxx_g_caller.f90`` for the C-callable driver harness.
 
 from pathlib import Path
 
-import pytest
 
 import dace_fortran
-from _util import flang_binary, flang_intrinsic_modules_path, have_flang
+from _util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "ast_v1_newdxx.f90"
@@ -54,7 +53,6 @@ _NNR = 4
 _NGMS = 4
 _NKB = 2
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # C-callable driver that initialises the QE module state (shared with the
 # gfortran reference via ``init_newdxx_g_state_c``), then dispatches into the
@@ -166,11 +164,7 @@ def _compile_reference(tmp_path):
     The fixture compiles verbatim (no ``-fallow-argument-mismatch`` needed).
     """
     import ctypes
-    import shutil
     import subprocess
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required for the reference build")
 
     src_path = tmp_path / "qe_ref.f90"
     src_path.write_text(_SRC.read_text())

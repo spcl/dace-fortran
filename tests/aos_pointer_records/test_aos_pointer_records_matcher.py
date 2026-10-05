@@ -5,15 +5,11 @@ AoS-of-pointer-records pattern emits ``hlfir.aos_ptr_records.<aos_decl>``, ahead
 from pathlib import Path
 import sys
 
-import pytest
 
 from dace_fortran.build import make_builder
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from _util import have_flang  # noqa: E402
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _post_pass_module(probe_name: str, entry: str, tmp_path):

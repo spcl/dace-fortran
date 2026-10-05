@@ -14,11 +14,9 @@ Pinned: (1) build + validate, (2) numerics vs a numpy reference.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 subroutine probe_sum(deeq, nh, becpr, nhm, nt, ia, m, fac, w1)

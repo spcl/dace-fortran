@@ -6,11 +6,9 @@ falling to the ``"?"`` sentinel and producing a SyntaxError in DaCe's
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ``a(10:)`` -> ``fir.shift %c10`` shape operand; ``ubound(a,1)`` lowers to
 # ``box_dims#0(lb) + box_dims#1(extent) - 1`` -- lb must resolve to ``offset_a_d0``, not ``?``.

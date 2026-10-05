@@ -7,11 +7,8 @@ such site for a leaked bare struct base.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_module_struct_field_read_in_tasklet(tmp_path):

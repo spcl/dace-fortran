@@ -9,21 +9,14 @@ degenerate in-bounds mesh for veloc_adv, whose composite indices exceed a random
 mesh's bounds; coriolis_pv/ppm_vflux run on the random mesh directly.
 """
 
-import shutil
-
 import pytest
 
-from _util import have_flang
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = __import__("pathlib").Path(__file__).resolve().parent
 
-pytestmark = [
-    # NOT a `long` test: builds the checked-in extracted single-TU kernels
-    # (no ICON-from-source), so it belongs in the fast lane.
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
+# NOT a `long` test: builds the checked-in extracted single-TU kernels (no ICON-from-source), so it belongs in the fast lane.
+
 
 # key, single-TU file, entry, scalar-dummy overrides, int_fill, module_seeds.
 # int_fill=None -> random in-bounds [1,n] mesh; an int pins every connectivity/

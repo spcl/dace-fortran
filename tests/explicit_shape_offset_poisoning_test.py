@@ -10,11 +10,9 @@ bound is provably 1). Pins: every offset_a_d* == 1, kernel matches f2py ref."""
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Mirrors the cloudsc trigger: explicit-shape local 3-D array, PARAMETER
 # last extent, written with a constant PARAMETER 3rd index in one loop

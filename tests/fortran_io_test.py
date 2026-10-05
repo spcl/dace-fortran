@@ -3,21 +3,16 @@
 
 Each test writes arrays through a ``Write`` node (the shipped iso_c_binding
 Fortran wrappers perform the transfer) and reads them back through a ``Read``
-node, asserting the values survive the file round-trip.  Skips when no Fortran
-compiler is available, since the wrappers must be compiled + linked.
+node, asserting the values survive the file round-trip.  Needs a Fortran
+compiler, since the wrappers must be compiled + linked.
 """
 
-import shutil
-
 import numpy as np
-import pytest
 
 import dace
 from dace_fortran.libraries.fortran_io.nodes.namelist import NamelistRead
 from dace_fortran.libraries.fortran_io.nodes.read import Read
 from dace_fortran.libraries.fortran_io.nodes.write import Write
-
-pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not available")
 
 
 def _write_sdfg(path: str, shapes, dtype, tag: str = "") -> dace.SDFG:

@@ -14,13 +14,11 @@ self-recursive callee and the bridge has no call fallback; a future pre-pass rej
 recursion cleanly is better than silently emitting ``?``."""
 
 import numpy as np
-import pytest
 
-from _util import f2py_compile, have_flang
+from _util import f2py_compile
 
 from dace_fortran import build_sdfg_from_files
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # Pattern A -- array fn return used inside an arithmetic expression.

@@ -5,11 +5,8 @@ subroutine directly (cross-subroutine PROGRAM lowering isn't implemented yet), s
 port targets ``while_test_function`` directly."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_while(tmp_path):

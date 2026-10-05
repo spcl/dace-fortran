@@ -5,11 +5,9 @@ combined array (jagged case) before SDFG generation sees it."""
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang, run_passes_dump
+from _util import build_sdfg, run_passes_dump
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _SRC = (_HERE / "complex_struct.f90").read_text()

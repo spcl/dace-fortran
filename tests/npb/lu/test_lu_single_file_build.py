@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
@@ -20,10 +19,7 @@ _ENTRY = "lu::dolu"
 _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 
 # The LU builds are multi-GB each: one at a time, on one xdist worker.
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.xdist_group("npb_lu"),
-]
+pytestmark = pytest.mark.xdist_group("npb_lu")
 
 
 # Builds and compiles the whole NPB LU: ~2-3 min here, longer under coverage, past the lanes' 300 s default.

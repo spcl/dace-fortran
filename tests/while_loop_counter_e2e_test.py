@@ -15,11 +15,8 @@ test was written suggests the counter doesn't iterate correctly.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_do_loop_with_early_return_counts_iterations(tmp_path):

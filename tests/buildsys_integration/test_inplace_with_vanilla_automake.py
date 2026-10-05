@@ -1,17 +1,10 @@
 """End-to-end proof that ``preprocess_cli --inplace`` needs no build-system glue: stage a vanilla automake Fortran project (no dace-fortran awareness), rewrite sources in place, run the user's normal autotools chain, and confirm a real ``libfoo.so`` loads and exports the rewritten kernel."""
 
 import ctypes
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
-_NEEDED = ("gfortran", "autoreconf", "aclocal", "automake", "autoconf", "libtoolize", "make")
-_HAVE_TOOLCHAIN = all(shutil.which(t) is not None for t in _NEEDED)
-
-pytestmark = pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason=f"missing one of: {', '.join(_NEEDED)}")
 
 # Vanilla project sources -- no dace-fortran-specific anything.
 _CONFIGURE_AC = """\

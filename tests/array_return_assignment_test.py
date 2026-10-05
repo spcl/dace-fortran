@@ -4,13 +4,11 @@ Once emitted the bridge's unresolved-expression ``?`` placeholder and failed to 
 """
 
 import numpy as np
-import pytest
 
-from _util import f2py_compile, have_flang
+from _util import f2py_compile
 
 from dace_fortran import build_sdfg_from_files
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 module m_array_return

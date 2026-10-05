@@ -2,13 +2,11 @@
 ``if (<cond>) then ... end if`` followed by ``if (<other-cond>) return`` silently drops the IF body's writes."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 import dace.data
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """\
 module m

@@ -16,7 +16,6 @@ bridge routes to the real-MPI ``.so``); per-element comparison (1-ULP + bit-exac
 Skipped under an odd or <2 rank count so single-rank ``pytest tests/`` doesn't trip."""
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,16 +23,12 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg, have_flang
+from _util import build_on_root, build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 
-pytestmark = [
-    pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
-]
+pytestmark = pytest.mark.mpi
 
 # FP-conservative flags across every build layer so SDFG + gfortran match bit-for-bit.
 _O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
@@ -206,8 +201,7 @@ def test_ocean_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # symmetric 2-rank swap on a 2-rank sub-communicator so any even rank count works --
     # CI runs -n 4: COMM_WORLD splits into adjacent pairs {0,1},{2,3},... each doing an
     # independent exchange; also proves the comm is correctly scoped (no cross-pair leak).
-    if size < 2 or size % 2 != 0:
-        pytest.skip("needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)")
+    assert size >= 2 and size % 2 == 0, "needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)"
     pair = comm.Split(color=rank // 2, key=rank)
     partner_world = rank ^ 1  # the other world rank sharing this pair
 

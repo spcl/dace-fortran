@@ -9,18 +9,13 @@ contract:
                             PASSES all_defaults rewrite_external)
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
-_HAVE_CMAKE = shutil.which("cmake") is not None
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CMAKE_MODULE_DIR = _REPO_ROOT / "cmake"
-
-pytestmark = pytest.mark.skipif(not _HAVE_CMAKE, reason="cmake not on PATH")
 
 
 def _write_project(tmp_path: Path) -> Path:

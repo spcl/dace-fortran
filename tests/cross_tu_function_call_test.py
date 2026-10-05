@@ -15,11 +15,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import have_flang
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.preprocess import MergeEngine
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HELPER = """
 module mo_clamp

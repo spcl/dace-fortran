@@ -6,9 +6,8 @@ always sees ``x = 0`` regardless of the caller's value. Same root cause as LU's 
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 _SRC = """\
 module m
@@ -31,8 +30,6 @@ contains
   end subroutine call_doublex
 end module mdriver
 """
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_module_scalar_input_survives_sccp(tmp_path):

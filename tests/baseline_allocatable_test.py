@@ -20,11 +20,8 @@ no runtime ``ALLOCATED`` checks are inserted by the bridge.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_allocate_then_element_writes(tmp_path: Path):

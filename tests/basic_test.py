@@ -3,11 +3,8 @@ validate against a numpy reference (E2E-numerical rule) plus structural assertio
 against silent SDFG-shape regressions."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_elementwise_loop(tmp_path):

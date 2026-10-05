@@ -8,7 +8,6 @@ Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used to
 import numpy as np
 import pytest
 
-from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files
 
 from ._graupel_harness import (
@@ -27,7 +26,6 @@ from ._graupel_harness import (
     zero_outputs,
 )
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 RTOL = 1e-10
 ATOL = 1e-14

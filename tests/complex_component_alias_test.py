@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import dace
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +79,6 @@ def test_dace_component_rmw_runtime_ind(ind, expect):
 # Tier 2 -- the Fortran seq-assoc pattern end-to-end through the bridge.
 # ---------------------------------------------------------------------------
 
-_needs_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
-
 
 def _run_seq_assoc(tmp_path, ind, src_decls, call):
     """Build + run a ``REAL(2,N)`` dummy bound to a COMPLEX element kernel; ``ind``
@@ -117,7 +115,6 @@ end subroutine fill
     return z
 
 
-@_needs_flang
 def test_seq_assoc_imag_component(tmp_path):
     """``ind=2`` -> imaginary part of each ``z`` element gets +1, real unchanged."""
     z = _run_seq_assoc(tmp_path, 2, "complex(8), intent(inout) :: z(n)", "call fill(n, z(1))")
@@ -125,7 +122,6 @@ def test_seq_assoc_imag_component(tmp_path):
     assert [zz.imag for zz in z] == [3, 5, 7, 9]
 
 
-@_needs_flang
 def test_seq_assoc_real_component(tmp_path):
     """``ind=1`` -> real part of each ``z`` element gets +1, imag unchanged."""
     z = _run_seq_assoc(tmp_path, 1, "complex(8), intent(inout) :: z(n)", "call fill(n, z(1))")
@@ -164,7 +160,6 @@ end subroutine fill
     return z
 
 
-@_needs_flang
 def test_seq_assoc_whole_zero(tmp_path):
     """``qg = 0`` zeros BOTH components of every element; lowers as a memset of the
     COMPLEX view, written back to the aliased source slab."""
@@ -173,7 +168,6 @@ def test_seq_assoc_whole_zero(tmp_path):
     assert [zz.imag for zz in z] == [0, 0, 0, 0]
 
 
-@_needs_flang
 def test_seq_assoc_rhs_reads_other_array(tmp_path):
     """Component RMW rhs references an ORDINARY array + literal alongside the ``qg``
     self-read: exercises per-occurrence connector wiring for non-``qg`` reads inside the
@@ -214,7 +208,6 @@ end subroutine fill
     assert [zz.imag for zz in z] == [2, 4, 6, 8]
 
 
-@_needs_flang
 def test_seq_assoc_zero_then_set_components(tmp_path):
     """``qg = 0`` then per-element ``qg(1,ig)=3``/``qg(2,ig)=4``: the memset and the
     component RMW writes compose -- every element ends at ``3 + 4j``."""

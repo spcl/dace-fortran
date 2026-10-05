@@ -32,10 +32,9 @@ import numpy as np
 import pytest
 
 from _helpers import f2py
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from hazard_scan import scan
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 HEAD = """
 MODULE kernel_mod

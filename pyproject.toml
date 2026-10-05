@@ -45,8 +45,8 @@ testing = [
     "coverage",
     # The bridge is a nanobind extension, built by CMake on first use.
     "nanobind",
-    # numpy's f2py uses meson as its build backend on Python >= 3.12; the numerical-reference builds skip
-    # without it (``meson not available``). meson also configures the icon-model build.
+    # numpy's f2py uses meson as its build backend on Python >= 3.12; the numerical-reference builds need it
+    # (a missing meson fails them). meson also configures the icon-model build.
     "meson",
     "ninja",
 ]

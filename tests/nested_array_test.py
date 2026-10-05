@@ -1,11 +1,8 @@
 """Verbatim port of f2dace/dev:tests/fortran/nested_array_test.py."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_nested_array_access(tmp_path):

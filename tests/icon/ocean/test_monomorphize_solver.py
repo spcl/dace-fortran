@@ -18,16 +18,9 @@ import pytest
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
-from icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, have_icon_solver, parse_program
+from icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, parse_program
 
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(
-        not have_icon_solver(),
-        reason="icon-model ocean source not checked out; run "
-        "`git submodule update --init --recursive tests/icon/full/icon-model`",
-    ),
-]
+pytestmark = pytest.mark.long
 
 _BACKEND_ARMS = {
     "t_ocean_solve_gmres",

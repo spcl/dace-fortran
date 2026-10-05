@@ -14,11 +14,8 @@ sequential writes cascade the first value into every slot.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_scatter_self_alias_rotate(tmp_path: Path):

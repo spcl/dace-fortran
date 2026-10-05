@@ -414,14 +414,9 @@ def test_merge_passthrough_for_self_contained_source(tmp_path):
 
 
 def _gfortran_compiles(text: str) -> bool:
-    import shutil
     import subprocess
     from tempfile import TemporaryDirectory
 
-    if not shutil.which("gfortran"):
-        import pytest
-
-        pytest.skip("gfortran not on PATH")
     with TemporaryDirectory() as td:
         f = Path(td) / "m.f90"
         f.write_text(text)

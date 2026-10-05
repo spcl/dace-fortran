@@ -9,11 +9,9 @@ Each checks a closed form so a wrong companion shape shows up as a numeric misma
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # Local runtime-sized AoS with SCALAR members -> per-member SoA companions (non-concat

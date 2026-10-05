@@ -14,11 +14,6 @@ and compares to a plain-gfortran reference.
 
 from pathlib import Path
 
-import pytest
-
-from _util import have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # --- READ: out(:) += becxx(1)%k(:, jb), via an inlined callee ---------------
 _SRC_READ = """
@@ -162,12 +157,8 @@ def test_read_aos_module_global_e2e(tmp_path):
     """Module-global AoS component read through an inlined callee: binding packs
     AoS->SoA into ``becxx_k`` and must match the gfortran reference."""
     import ctypes
-    import shutil
 
     import numpy as np
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required")
 
     builder, _sdfg, so_path, binding = _build_module(_SRC_READ, "read_aos", _ENTRY_READ, tmp_path)
 
@@ -277,12 +268,8 @@ def test_write_aos_module_global_e2e(tmp_path):
     """Module-global AoS component WRITTEN by the kernel: binding adds the SoA->AoS
     copy-OUT loop; host ``becxx(1)%k`` must hold the kernel's result."""
     import ctypes
-    import shutil
 
     import numpy as np
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required")
 
     builder, _sdfg, so_path, binding = _build_module(_SRC_WRITE, "write_aos", _ENTRY_WRITE, tmp_path)
 
@@ -380,12 +367,8 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     """Module-global allocatable the kernel ALLOCATEs itself: binding flags
     ``global_alloc_inside``, skips copy-in, writes the result back on exit."""
     import ctypes
-    import shutil
 
     import numpy as np
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required")
 
     builder, _sdfg, so_path, binding = _build_module(_SRC_ALLOC, "make_g", _ENTRY_ALLOC, tmp_path)
 
@@ -482,12 +465,8 @@ def test_allocated_module_global_presence_e2e(tmp_path):
     """Kernel branches on ``ALLOCATED(gbuf)``: binding sources ``gbuf_allocated`` from
     ``allocated(gbuf__mod)``; an unallocated host drives the ``else`` branch (``r=-1``)."""
     import ctypes
-    import shutil
 
     import numpy as np
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required")
 
     builder, _sdfg, so_path, binding = _build_module(
         _SRC_ALLOC_PRESENT, "sum_if_present", _ENTRY_ALLOC_PRESENT, tmp_path
@@ -599,12 +578,8 @@ def test_associated_pointer_module_global_presence_e2e(tmp_path):
     """Kernel branches on ``ASSOCIATED(gptr)``: binding sources ``gptr_allocated`` from
     ``associated(gptr__mod)``; an unassociated host drives the ``else`` branch (``r=-2``)."""
     import ctypes
-    import shutil
 
     import numpy as np
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required")
 
     builder, _sdfg, so_path, binding = _build_module(_SRC_ASSOC_PRESENT, "sum_if_assoc", _ENTRY_ASSOC_PRESENT, tmp_path)
 

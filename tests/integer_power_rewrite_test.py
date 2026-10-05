@@ -127,10 +127,7 @@ def test_eval_equivalent(expr: str):
 def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
     """``(t(i) - k)**2.0`` (parenthesised base in a quotient) plus ``s**3.0`` must stay
     numerically identical after the rewrite: bridge build vs gfortran reference."""
-    from _util import build_sdfg, f2py_compile, have_flang
-
-    if not have_flang():
-        pytest.skip("no LLVM flang on PATH")
+    from _util import build_sdfg, f2py_compile
 
     src = """
 module pw_mod

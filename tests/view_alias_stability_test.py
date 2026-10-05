@@ -6,11 +6,7 @@ Locks down the pipeline: asAssumedShapeAlias returns null on rank mismatch, extr
 view_alias VarInfo, descriptors.py synthesises column-major strides, access.py wires the source ->
 view edge -- none of these steps may crash on the patterns below."""
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _builds(tmp_path, src, name, entry):

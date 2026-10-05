@@ -14,9 +14,7 @@ Each kernel checked against an f2py reference on several inputs.
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def _run(tmp_path, src, cases, argnames):

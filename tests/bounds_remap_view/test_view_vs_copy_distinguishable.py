@@ -23,11 +23,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
 
-from _util import flang_binary, flang_intrinsic_modules_path, have_flang
+from _util import flang_binary, flang_intrinsic_modules_path
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 

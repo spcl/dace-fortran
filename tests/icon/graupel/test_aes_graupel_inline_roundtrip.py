@@ -3,9 +3,6 @@
 Previously surfaced a codegen gap: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) was sized from unbound extent symbols defaulting to 1, overflowing the heap.  Fixed by ``fir.box_dims -> <name>_d<dim>`` extent resolution.  Inlining itself is asserted unconditionally up front so an inliner regression surfaces as a hard failure independent of the numerical compare.
 """
 
-import pytest
-
-from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files, inline_to_single_tu
 
 from ._graupel_harness import (
@@ -24,7 +21,6 @@ from ._graupel_harness import (
     zero_outputs,
 )
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SOURCES = [ORIGINAL_SOURCE, *DEP_SOURCES]
 

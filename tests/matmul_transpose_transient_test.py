@@ -15,11 +15,8 @@ the transpose flag threaded through -- no transposed-matrix materialisation.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_matmul_transpose_whole_assign_into_array_temp(tmp_path):

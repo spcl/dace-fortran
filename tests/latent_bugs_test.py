@@ -9,11 +9,8 @@ assert via np.isnan/np.isinf + sign rather than equality."""
 
 import math
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 # ---------------------------------------------------------------------------

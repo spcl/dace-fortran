@@ -24,11 +24,8 @@ Fix: keep float scalars as plain scalars even in branch conditions; only integer
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_max_complex_expr_in_branch_to_scalar(tmp_path: Path):

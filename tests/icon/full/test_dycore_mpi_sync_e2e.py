@@ -16,7 +16,6 @@ Skipped under an odd rank count or fewer than 2 ranks (default single-rank ``pyt
 doesn't trip it)."""
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,16 +23,12 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg, have_flang
+from _util import build_on_root, build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 
-pytestmark = [
-    pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
-]
+pytestmark = pytest.mark.mpi
 
 # Matching FP-conservative flags across every build layer so SDFG+gfortran arithmetic match
 # bit-for-bit (same convention as the standalone single-rank dycore test).
@@ -212,8 +207,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # Symmetric 2-rank swap on a 2-rank sub-communicator so the test runs (not skips) at any
     # even rank count -- CI's -n 4 splits COMM_WORLD into pairs {0,1},{2,3},... Also proves
     # the communicator is correctly scoped (no cross-pair leak).
-    if size < 2 or size % 2 != 0:
-        pytest.skip("needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)")
+    assert size >= 2 and size % 2 == 0, "needs an even rank count >= 2 (mpirun --oversubscribe -n 2 / -n 4 ...)"
     pair = comm.Split(color=rank // 2, key=rank)
     partner_world = rank ^ 1  # the other world rank sharing this pair
 

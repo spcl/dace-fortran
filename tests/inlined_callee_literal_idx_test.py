@@ -14,11 +14,9 @@ only matches a direct ``arith.constant``; documents the gap as a regression gate
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 module mo_callee

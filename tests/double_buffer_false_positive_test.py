@@ -9,11 +9,7 @@ runtime args, computed expressions, or constants. Positive cases live in
 ``tests/icon/dycore/test_solve_nonhydro_parse.py`` must keep passing.
 """
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_no_split_for_runtime_arg_index(tmp_path):

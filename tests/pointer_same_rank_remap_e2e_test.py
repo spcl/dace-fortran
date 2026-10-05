@@ -6,11 +6,8 @@ Pattern documented at ``MarkBoundsRemapViews.cpp`` for QE's ``addusxx_g``
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_pointer_same_rank_column_remap_writes_to_correct_column(tmp_path):

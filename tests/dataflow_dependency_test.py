@@ -6,25 +6,17 @@ writer-before-reader, WAR=reader-before-overwrite, WAW=later-write-wins, RAR=
 no ordering needed. Each test compares the built SDFG against an f2py
 reference at strict tolerance."""
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _f2py(src_text: str, out_dir: Path, mod_name: str):
     """f2py-compile inline ``src_text`` with strict FP flags."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{mod_name}.f90"
     src.write_text(src_text)

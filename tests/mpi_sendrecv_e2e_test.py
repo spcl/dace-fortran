@@ -7,12 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg, have_flang
+from _util import build_on_root, build_sdfg
 
-pytestmark = [
-    pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-]
+pytestmark = pytest.mark.mpi
 
 _RING = """
 module ring_mod
@@ -49,8 +46,7 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    if size < 2:
-        pytest.skip("MPI Send/Recv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
+    assert size >= 2, "MPI Send/Recv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)"
 
     # Build on rank 0 only; distributed_compile shares the artifact (avoids per-rank build races/hangs).
     def _build_ring():
@@ -104,8 +100,7 @@ def test_nonblocking_ring_numeric(tmp_path: Path):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    if size < 2:
-        pytest.skip("MPI Isend/Irecv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
+    assert size >= 2, "MPI Isend/Irecv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)"
 
     def _build_nbring():
         s = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring_mod::nbring").build()

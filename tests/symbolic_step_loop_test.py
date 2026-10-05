@@ -10,11 +10,8 @@ iterations under ``uid <= bound``, matching Fortran's trip-count formula.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, flang_binary, flang_intrinsic_modules_path, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile, flang_binary, flang_intrinsic_modules_path
 
 
 def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, mod_name: str = "kern"):

@@ -52,13 +52,12 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import flang_binary, flang_intrinsic_modules_path, have_flang
+from _util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "ast_v1_h_psi.f90"
 _ENTRY = "h_psi_module::h_psi"
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _FFT_INTERFACES_EMPTY_RE = re.compile(
     r"MODULE fft_interfaces\s*\n"
@@ -302,11 +301,7 @@ def _compile_reference(tmp_path):
     never executes on the no-op path.
     """
     import ctypes
-    import shutil
     import subprocess
-
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required for the reference build")
 
     src = _preprocess(_SRC.read_text())
     src_path = tmp_path / "qe_ref.f90"

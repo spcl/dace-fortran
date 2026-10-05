@@ -17,12 +17,10 @@ array lower bounds, the config-module globals seeded on both sides, and the non-
 column without which the kernel's automatic transients stay uninitialised.
 """
 
-import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import have_flang
 from icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
@@ -34,11 +32,7 @@ _ATMO = Path(__file__).resolve().parents[1] / "icon" / "atmosphere"
 # other variant.
 _SEEDS = {True: 1001, False: 1002}
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
+pytestmark = pytest.mark.e2e
 
 
 def run_variant(seed: int, tu_name: str):

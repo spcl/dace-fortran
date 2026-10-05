@@ -4,11 +4,7 @@ Only the short ones so far; allocate-based/PROGRAM-wrapper cases wait on matchin
 """
 
 import numpy as np
-import pytest
 
-from _util import have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # tests/fortran/fortran_loops_test.py  --  simplest nested-loop case.

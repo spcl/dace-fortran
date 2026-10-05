@@ -17,12 +17,11 @@ inner velocity ``.so`` + the full deep-copy-all differential run.
 """
 
 import re
-import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim, scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.build import make_builder
@@ -36,14 +35,8 @@ from dace_fortran.external import (
     clear_external_registry,
     keep_external,
 )
-from dace_fortran.flang_codebase import find_openmpi_include
 
-pytestmark = [
-    pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-    pytest.mark.skipif(find_openmpi_include() is None, reason="OpenMPI headers not found"),
-]
+pytestmark = pytest.mark.long
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_nonhydro_inlined_single_tu.f90"

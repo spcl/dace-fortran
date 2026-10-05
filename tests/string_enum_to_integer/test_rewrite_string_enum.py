@@ -9,11 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from _util import flang_binary, flang_intrinsic_modules_path, have_flang
+from _util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import rewrite_string_enum_to_integer
 
 _HERE = Path(__file__).resolve().parent
-_HAVE_FLANG = have_flang()
 
 
 def _read(name: str) -> str:
@@ -175,7 +174,6 @@ def test_idempotent():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_FLANG, reason="no LLVM flang on PATH")
 @pytest.mark.parametrize(
     "probe",
     [

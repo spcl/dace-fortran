@@ -10,11 +10,8 @@ double-buffer-accessed AoR struct. L_D compound: jagged + AoR + double-buffer (I
 prog struct shape).
 """
 
-import pytest
+from _util import build_sdfg
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # -----------------------------------------------------------------
 # L_A -- jagged AoR (records with heterogeneous-extent members)

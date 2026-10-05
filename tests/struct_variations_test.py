@@ -34,11 +34,8 @@ Still pending (xfail / TODO):
     designate-chain rewriting.
 """
 
-import pytest
+from _util import build_sdfg
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------
 # Module-level: scalar struct of struct of scalars

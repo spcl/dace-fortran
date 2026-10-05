@@ -26,11 +26,9 @@ Companion doc: bug4_module_array_lbound.md
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Minimal QE eigts shape: deferred-shape module allocatable, caller allocates
 # with lbound -nmax, kernel reads through an indirect (Miller-style) index.

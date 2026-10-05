@@ -6,18 +6,16 @@ Each kernel: ``..._builds`` (bridge parses -> valid SDFG) and ``..._numerical``
 (matches gfortran/f2py reference at KLON=KLEV=32, NCLV=5, seeded RNG inputs).
 
 Sources are the clean cloudsc_*.f90 variants (no BIND(C)/ISO_C_BINDING/
-SYSTEM_CLOCK) that both the bridge and f2py consume directly. Skips if the
+SYSTEM_CLOCK) that both the bridge and f2py consume directly. Fails if the
 artifacts dir is missing.
 """
 
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _LOOPNESTS_DIR = Path(__file__).parent
 
@@ -30,8 +28,6 @@ def _kernel_source(name: str) -> str:
     bare-LOGICAL guard on an INTEGER(KIND=4) declared var.
     """
     src = _LOOPNESTS_DIR / f"cloudsc_{name}.f90"
-    if not src.is_file():
-        pytest.skip(f"missing kernel source: {src}")
     return src.read_text()
 
 

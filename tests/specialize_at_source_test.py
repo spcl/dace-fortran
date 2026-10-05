@@ -5,13 +5,11 @@ wrapper at the source level lets ``const_eval`` + ``prune_branches`` fold the la
 single ordinary rebind.
 """
 
-import pytest
-
 from dace_fortran.inliner.ast_desugaring import optimizations, pruning
 from dace_fortran.inliner.ast_desugaring.specialize_at_source import inline_named_functions, inline_named_subprograms
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 _LADDER_SRC = """
 module mo_comm
@@ -329,7 +327,6 @@ def test_function_result_inline_folds_ladder():
     assert "exchange_data_r3d" in caller.lower()
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_function_result_inline_lowers(tmp_path):
     """The function-inlined single-field path lowers to an SDFG."""
     prog = parse_program(_FUNC_SRC)
@@ -341,7 +338,6 @@ def test_function_result_inline_lowers(tmp_path):
     assert sdfg.number_of_nodes() >= 1
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_two_level_chain_with_optionals_lowers(tmp_path):
     """The flattened mult chain lowers to an SDFG (single-source rebind)."""
     prog, _ = _inline_and_fold(_MULT_SRC, ["sync_mult_f3din", "sync_mult_mixprec"])
@@ -349,7 +345,6 @@ def test_two_level_chain_with_optionals_lowers(tmp_path):
     assert sdfg.number_of_nodes() >= 1
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_inlined_ladder_lowers_to_sdfg(tmp_path):
     """End-to-end: the inlined+folded source lowers to an SDFG (the raw ladder does not -- rejected as an interleaved rebind)."""
     prog, _ = _inline_and_fold(_LADDER_SRC, ["sync_patch_array"])
@@ -416,7 +411,6 @@ def test_forwarded_caller_optional_keeps_present_guard():
     assert "IF (.TRUE.)" not in outer.replace(" ", "")
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
     """End-to-end: optional omitted at the ROOT, both inlining levels fold to ``start_level = 1``
     so every element is written. A ``.TRUE.`` misfold at the ``outer->inner`` boundary would

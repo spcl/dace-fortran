@@ -88,17 +88,12 @@ def _make_params() -> List:
     """Build the ``pytest.param(...)`` list for the discovered set."""
     found = discover_fortran_compilers()
     if not found:
-        return [
-            pytest.param(
-                ("gfortran", "gfortran"),
-                id="gfortran",
-                marks=[pytest.mark.skip(reason="no Fortran compiler found on the host")],
-            )
-        ]
+        # No compiler on the host: keep the gfortran param so its test fails loudly.
+        return [pytest.param(("gfortran", "gfortran"), id="gfortran")]
     return [pytest.param((name, str(path)), id=name) for name, path in found.items()]
 
 
-#: (name, executable_path) tuples for @pytest.mark.parametrize("fc", FORTRAN_COMPILERS); no-compiler-available is handled via per-param skip marks.
+#: (name, executable_path) tuples for @pytest.mark.parametrize("fc", FORTRAN_COMPILERS); with no compiler found the gfortran param stays and its test fails.
 FORTRAN_COMPILERS = _make_params()
 
 

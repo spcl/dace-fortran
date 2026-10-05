@@ -5,11 +5,8 @@ transient dies at end-of-scope. Reallocation and COMMON/module allocatables not 
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_alloc_then_whole_array_copy(tmp_path: Path):

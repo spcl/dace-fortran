@@ -4,12 +4,11 @@ keeps Sedimentation/Autoconv/Melt/Freeze (4.2-4.4). Pass -> bug in 4.5; fail -> 
 from pathlib import Path
 import numpy as np
 import pytest
-from _util import f2py_compile, have_flang
+from _util import f2py_compile
 from cloudsc.full._registries import CLOUDSC_F90FLAGS
 from cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module")

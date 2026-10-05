@@ -21,20 +21,14 @@ first-arm-baked contract.
 Companion doc: bug2_char_flatten_sibling_checks.md
 """
 
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # Minimal QE ``addusxx_g`` shape: character dispatch computed into logicals,
 # one COMBINED input-validation IF across all arms (guarded by ``errore``,

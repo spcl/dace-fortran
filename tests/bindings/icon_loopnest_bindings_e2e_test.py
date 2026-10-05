@@ -34,15 +34,13 @@ separately; the loopnest carve-outs are the tractable flat surface.
 
 import ctypes
 import re
-import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg, have_flang
+from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -51,10 +49,6 @@ from dace_fortran.bindings import (
     emit_bindings,
 )
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 _LOOPNESTS_DIR = Path(__file__).resolve().parent.parent / "icon" / "selected_loopnests"
 _LOOPNEST = _LOOPNESTS_DIR / "icon_loopnest_2.f90"

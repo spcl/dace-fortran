@@ -7,17 +7,14 @@ derived-type struct, nine POINTER(:,:) members).
 """
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = Path(__file__).parent / "ppm_vflux_single_tu.f90"
 _ENTRY = "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onblock"
@@ -96,7 +93,6 @@ end subroutine run_ppm_ref
 """
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_ppm_vflux_numerical_e2e_via_binding(tmp_path):
     """Random inputs through the generated binding (``ppmcoeffs`` struct) must match a
     plain-gfortran reference calling the original kernel with the same struct."""

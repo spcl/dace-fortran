@@ -17,11 +17,9 @@ rebind store itself is dropped at emit (emit_scalar_assign early return).
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Module-global TARGET derived-type object (mirrors ICON's mo_ocean_physics_types::v_params)
 # with a POINTER array member, rebound by a local pointer. out0 = g%arr(1) reads directly (so

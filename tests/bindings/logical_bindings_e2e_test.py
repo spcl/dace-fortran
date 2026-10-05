@@ -2,7 +2,6 @@
 Covers rank-1/2/3 default LOGICAL, LOGICAL(KIND=1/4/8), c_bool pass-through, and scalar LOGICAL."""
 
 import ctypes
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,19 +9,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
-
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-    pytest.mark.skipif(shutil.which("meson") is None, reason="meson not available (f2py)"),
-]
 
 
 def _module_wrap(free_subroutine_src: str, module_name: str) -> str:

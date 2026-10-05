@@ -10,11 +10,9 @@ elementals.cpp). Companion arg name/shape unconfirmed pending a bridge build.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Two inlining levels needed: ``mid`` passes a per-block 2-D SECTION of the WHOLE
 # 3-D member to ``worker``, so after inlining the section's base is an inlined

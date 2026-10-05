@@ -12,11 +12,8 @@ assigned to fp64 widens through convert (wrap must not block it); fp64 constants
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fp32_constant_wrapped_in_dace_float32(tmp_path):

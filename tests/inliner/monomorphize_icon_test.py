@@ -34,12 +34,6 @@ pytestmark = pytest.mark.long
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(Path(__file__).resolve().parents[1] / "icon" / "full" / "icon-model")))
 _SOLVER = _ICON_SRC / "src" / "ocean" / "math"
 
-if not (_SOLVER / "mo_ocean_solve_backend.f90").is_file():
-    pytest.skip(
-        "icon-model submodule not checked out (run `git submodule update --init tests/icon/full/icon-model`)",
-        allow_module_level=True,
-    )
-
 _CPP = re.compile(r"^\s*#")
 
 # real-ICON monomorphisation spec: backend is a runtime-allocated ladder;

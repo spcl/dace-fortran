@@ -12,11 +12,8 @@ assign-dispatch site -- exercised by test_count_into_logical_destination_builds.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_count_full_array_comparison(tmp_path: Path):

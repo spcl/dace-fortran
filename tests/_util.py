@@ -1,4 +1,4 @@
-"""HLFIR frontend test helpers: compile inline Fortran to ``.hlfir`` via LLVM flang, build SDFGs.  ``have_flang()`` reports availability so callers can skip collection; ``flang_binary()`` returns the resolved driver for any supported LLVM major."""
+"""HLFIR frontend test helpers: compile inline Fortran to ``.hlfir`` via LLVM flang, build SDFGs.  ``have_flang()`` reports availability; ``flang_binary()`` returns the resolved driver for any supported LLVM major."""
 
 import os
 import re
@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from dace_fortran.llvm_toolchain import flang_names, intrinsic_modules_path
 from dace_fortran.preprocess import MergeEngine
@@ -102,14 +101,14 @@ def have_flang() -> bool:
 
 
 def flang_binary() -> str:
-    """Resolved LLVM-flang path, skipping the test when no supported major is installed.
+    """Resolved LLVM-flang path; raises FileNotFoundError when no supported major is installed.
 
     Every test that spawns flang goes through this rather than a literal binary name:
     the naming scheme differs per distribution and per LLVM major, so a hardcoded
     ``flang-new-21`` fails on an install that ships only ``flang-22``.
     """
     if _FLANG is None:
-        pytest.skip(f"no LLVM flang on PATH (tried {', '.join(_FLANG_NAMES)})")
+        raise FileNotFoundError(f"no LLVM flang on PATH (tried {', '.join(_FLANG_NAMES)})")
     return _FLANG
 
 
@@ -139,15 +138,11 @@ def f2py_compile(
     extra_f90flags: str | None = None,
     only: tuple[str, ...] | None = None,
 ):
-    """Build Fortran source via gfortran/f2py, return the compiled module.  Skips (pytest.skip) when gfortran/meson missing, so callers can call unconditionally.
+    """Build Fortran source via gfortran/f2py, return the compiled module.  Fails when gfortran/meson are missing.
 
     ``only``: subroutine names to expose -- dodges crackfortran's ``KeyError`` on derived-type dummies in unexposed inner subroutines.
     Policy: e2e tests compare against this non-transformed reference, never hand-tuned literal expectations.
     """
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     src_text = src if not isinstance(src, Path) else None
     if src_text is not None:

@@ -8,11 +8,8 @@ contributing a procedure to main (inline-all collapses all into one HLFIR).
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_single_module_use(tmp_path):

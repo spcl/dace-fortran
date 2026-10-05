@@ -9,12 +9,9 @@ an f2py-compiled reference.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from _helpers import f2py
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _run(tmp_path, name: str, src: str, *, expected: int, n: int):

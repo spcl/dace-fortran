@@ -7,13 +7,11 @@ e2e -- build+link+ctypes-call the shim, compare against a gfortran reference.
 
 import ctypes
 import re
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, gfortran_compile_so, have_flang
+from _util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -23,10 +21,6 @@ from dace_fortran.bindings import (
     emit_bind_c_shim,
 )
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # ---------------------------------------------------------------------------
 #  Emitter structural checks (text-only -- no compile, no link).

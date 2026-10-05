@@ -4,14 +4,12 @@ Complements ``cloudsc_flux_bindings_e2e_test`` / ``struct_bindings_e2e_test``.
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg, have_flang
+from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -19,11 +17,6 @@ from dace_fortran.bindings import (
     OriginalInterface,
     emit_bindings,
 )
-
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 
 def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):

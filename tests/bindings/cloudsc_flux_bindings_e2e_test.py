@@ -10,14 +10,12 @@ emitter's symbol-population path (size/lbound into SDFG free symbols).
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import FLANG_PORTABLE_FFLAGS, build_sdfg, have_flang
+from _util import FLANG_PORTABLE_FFLAGS, build_sdfg
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -26,10 +24,6 @@ from dace_fortran.bindings import (
     emit_bindings,
 )
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # Loop-carried flux recurrence from cloudsc.F90 Section-8 (see cloudsc_flux_recurrence_repro):
 # PFSQLF(JK+1)=PFSQLF(JK) then accumulate; cross-array PFSQRF<-PFSQLF(JK).

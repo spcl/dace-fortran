@@ -9,11 +9,8 @@ struct (reusing gate #11's leadsToComponentDesignate), and the libcall operand-s
 the whole-member read as the element slice diag_pvd_x[(i-1), 0:3] instead of the whole multi-dim
 companion (which 1-D-only dot_product rejects)."""
 
-import pytest
+from _util import build_sdfg
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """\
 module m

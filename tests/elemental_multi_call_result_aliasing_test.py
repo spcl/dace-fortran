@@ -10,11 +10,8 @@ aliased onto one zpow_res scalar, so pow(ztp1,2) got overwritten by pow(zlambda,
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_two_calls_distinct_args(tmp_path: Path):

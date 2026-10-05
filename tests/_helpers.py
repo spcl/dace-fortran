@@ -1,6 +1,5 @@
 """Shared helpers for verbatim ports from ``f2dace/dev:tests/fortran/`` -- reference build, arg routing, strict-xfail marker."""
 
-import shutil
 import subprocess
 import sys
 import time
@@ -88,13 +87,9 @@ def f2py_build_and_import(src_file, *, out_dir, mod_name, only=None, extra_args=
 
 
 def f2py(src_text: str, out_dir: Path, mod_name: str):
-    """Compile ``src_text`` via ``numpy.f2py`` and return the imported module.  Skips
+    """Compile ``src_text`` via ``numpy.f2py`` and return the imported module.  Fails
     if gfortran/meson missing; retries on transient resource-exhaustion (see
     ``_F2PY_BUILD_ATTEMPTS``)."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     src_file = out_dir / f"{mod_name}.f90"
     src_file.write_text(src_text)

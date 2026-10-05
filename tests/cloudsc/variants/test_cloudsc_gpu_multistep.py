@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import f2py_compile, have_flang
+from _util import f2py_compile
 from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
 from cloudsc.variants._harness import extract_variant_tu, mismatch_report, run_cloudsc_gpu
 
@@ -19,8 +19,6 @@ NAME = "cloudsc_gpu_multistep"
 # Integrated in place across substeps; each leg needs its own copy from the shared initial
 # state so both start identical.
 PROGNOSTIC_STATE = ("PT", "PQ", "PA", "PCLV")
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module")

@@ -3,15 +3,11 @@
 from pathlib import Path
 import sys
 
-import pytest
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from _util import have_flang  # noqa: E402
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_norm2_whole_array_recognised(tmp_path):

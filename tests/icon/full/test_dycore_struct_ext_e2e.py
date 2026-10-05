@@ -15,13 +15,11 @@ of inner+outer+a bind(c) driver sharing the same C ABI.
 """
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, gfortran_compile_so, have_flang
+from _util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -31,10 +29,6 @@ from dace_fortran.bindings import (
 )
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # state_t: two static-shape array members -- smallest struct exercising the bind_c shim's
 # 2 per-member C-ABI slots and the marshal expansion's 2 SoA flats.

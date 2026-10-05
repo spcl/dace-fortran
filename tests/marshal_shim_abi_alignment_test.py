@@ -10,14 +10,12 @@ Build-only, no gfortran link/run."""
 
 import re
 
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, ExternalCall, Intent, clear_external_registry, keep_external
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # The shared UNION type text, identical on both sides.  ``t_patch`` carries one
 # member of every class the real ICON type mixes.

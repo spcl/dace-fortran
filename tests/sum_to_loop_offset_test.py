@@ -5,11 +5,8 @@ lower as SUM intrinsic calls with offsets handled by the memlet machinery.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_sum2loop_1d_without_offset(tmp_path):

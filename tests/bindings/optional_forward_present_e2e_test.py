@@ -4,20 +4,14 @@ optional still got the absent branch). Pins both the emitted .f90 plumbing and n
 untransformed gfortran reference."""
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, gfortran_compile_so, have_flang
+from _util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 _KERNEL = """
 module opt_scale_mod

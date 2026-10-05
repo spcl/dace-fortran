@@ -21,11 +21,8 @@ FUNCTION-RESULT section dummy.
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_pointer_member_array_indexed_by_local(tmp_path):

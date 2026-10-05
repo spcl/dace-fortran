@@ -8,11 +8,8 @@ Fix (dispatch.cpp Mode-C routing): any reduction op whose first operand is an hl
 through buildElementalAnyAllReduce, not just hlfir.any/hlfir.all."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_sum_of_pow(tmp_path):

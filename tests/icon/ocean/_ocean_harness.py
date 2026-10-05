@@ -18,8 +18,6 @@ import sys
 from pathlib import Path
 
 from dace_fortran.external_functions import ExternalFunction
-from dace_fortran.flang_codebase import find_openmpi_include
-from dace_fortran.llvm_toolchain import find_flang
 
 from icon._halo_modes import halo_config
 
@@ -28,15 +26,6 @@ _HERE = Path(__file__).resolve().parent
 #: the atmosphere velocity test).  ``ICON_SRC`` overrides it.
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE.parent / "full" / "icon-model")))
 SRC = _ICON_SRC / "src"
-
-HAVE_FLANG = find_flang() is not None
-HAVE_OPENMPI = find_openmpi_include() is not None
-
-
-def have_icon_ocean() -> bool:
-    """True when EVERY ocean kernel source in :data:`KERNELS` is checked out (a partial
-    checkout must skip, not fail, the missing kernel's extraction)."""
-    return all((SRC / source).is_file() for _, source, *_ in KERNELS)
 
 
 def ocean_search_dirs() -> list:

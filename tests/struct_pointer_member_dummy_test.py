@@ -9,11 +9,9 @@ FlattenStructs.cpp:2199, the flat companion ``h_data`` was synthesised without
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 module mo_holder

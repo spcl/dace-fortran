@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # WHERE lowers to hlfir.where; no pipeline pass rewrites it, so it reaches buildAST and must trigger the compute-drop guard.
 _WHERE_KERNEL = """

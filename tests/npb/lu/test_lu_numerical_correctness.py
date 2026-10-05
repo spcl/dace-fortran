@@ -19,7 +19,6 @@ for the minimal reproducer.
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -27,7 +26,6 @@ import dace.data as dace_data
 import numpy as np
 import pytest
 
-from _util import have_flang
 from dace_fortran import build_sdfg_from_files
 
 _HERE = Path(__file__).resolve().parent
@@ -44,16 +42,11 @@ _OMEGA = 1.2
 _TOLRSD = 1.0e-08
 
 # The LU builds are multi-GB each: one at a time, on one xdist worker.
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.xdist_group("npb_lu"),
-]
+pytestmark = pytest.mark.xdist_group("npb_lu")
 
 
 def _compile_reference(tmp_path):
     """gfortran-compile the LU sources into a ``.so``; returns ``(init, run, get_rsdnm)`` ctypes-bound callables."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran required for the reference build")
 
     libpath = tmp_path / "liblu_ref.so"
     subprocess.check_call(

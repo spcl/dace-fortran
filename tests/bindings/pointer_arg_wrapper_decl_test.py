@@ -9,18 +9,9 @@ plain ``target`` and gfortran rejected the fold. Builds + gfortran-links a
 synthetic kernel via ``build_fortran_library`` and inspects the wrapper decl.
 """
 
-import shutil
-
-import pytest
-
-from _util import have_flang
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import make_builder
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # Minimal shape that mints a v_allocated presence guard: POINTER arg gated on ASSOCIATED(...).
 _SRC = """

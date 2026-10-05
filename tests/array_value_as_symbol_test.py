@@ -3,18 +3,12 @@
 stay constant in the symbol's scope or the build is refused.  Reproduces ICON's
 ``z_raylfac(nrdmax(jg))`` pattern (``mo_solve_nonhydro``)."""
 
-import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 _SRC = """
 module array_value_as_dim_mod

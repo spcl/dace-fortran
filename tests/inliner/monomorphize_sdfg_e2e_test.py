@@ -7,14 +7,11 @@ lower an allocatable derived-type scalar, so the SDFG form uses plain stack slot
 """
 
 import ctypes
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import have_flang
 from dace_fortran.build import build_sdfg
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
@@ -24,10 +21,6 @@ from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
     retype_to_concrete,
 )
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # --- LOCAL dispatch: run(sel, x) allocates one of two arms and dispatches -------
 _LOCAL_SRC = """

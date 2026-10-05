@@ -4,12 +4,10 @@ with cst%rg reads lowered to the flat cst_rg scalar. Passing this means the brid
 upstream cloudsc's derived-type bundles directly, without manual ASSOCIATE flattening."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings import FlattenPlan
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 module mo_consts

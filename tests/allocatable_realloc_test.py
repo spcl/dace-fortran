@@ -6,11 +6,8 @@ Straight-line re-allocation only -- no pointer-aliasing model, so branched ALLOC
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_realloc_size_change(tmp_path: Path):

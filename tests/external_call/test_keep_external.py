@@ -5,14 +5,13 @@ Simple ``bind(c)`` cases derive their arg plan from the HLFIR call site via
 list -- an ``MPI_Comm`` handle is an ABI fact HLFIR can't infer.
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -25,10 +24,6 @@ from dace_fortran.external import (
 )
 from dace_fortran.external_functions import ExternalFunction
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
 
 # increments every element by 1; bind(c, name="bar") -> stable unmangled C symbol
 _BAR_F90 = """

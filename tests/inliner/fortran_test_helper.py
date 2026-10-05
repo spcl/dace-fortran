@@ -8,20 +8,14 @@ trimmed to the surface the inliner tests use (``SourceCodeBuilder`` +
 """
 
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from os import path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple
 
-import pytest
 
 from dace_fortran.fparser_inliner import parse_and_improve  # noqa: F401  (re-exported for tests)
-
-
-def _have_gfortran() -> bool:
-    return shutil.which("gfortran") is not None
 
 
 @dataclass
@@ -48,9 +42,7 @@ class SourceCodeBuilder:
         return self
 
     def check_with_gfortran(self):
-        """Assert that it all compiles with ``gfortran`` (skips if gfortran absent)."""
-        if not _have_gfortran():
-            pytest.skip("gfortran not on PATH")
+        """Assert that it all compiles with ``gfortran`` (fails if gfortran is absent)."""
         with TemporaryDirectory() as td:
             for fname, content in self.sources.items():
                 with open(path.join(td, fname), "w") as f:

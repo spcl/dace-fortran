@@ -9,7 +9,6 @@ result with zero ``fir.dispatch`` (the property the bridge needs), and (c) the
 rewrite is behaviour-preserving under gfortran.
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -18,7 +17,7 @@ import pytest
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
-from _util import _FLANG, have_flang
+from _util import _FLANG
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program, UnsupportedProgram
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
     AxisSpec,
@@ -108,7 +107,6 @@ def test_rewrite_removes_dispatch_and_emits_all_arms():
     assert "CALL cg_apply(s__t_cg, x)" in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_rewritten_fir_has_no_dispatch(tmp_path: Path):
     src = tmp_path / "rw.f90"
     src.write_text(str(_rewritten()))
@@ -119,7 +117,6 @@ def test_rewritten_fir_has_no_dispatch(tmp_path: Path):
     assert text.count("fir.select_type") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_rewrite_is_behaviour_preserving(tmp_path: Path):
     (tmp_path / "rw.f90").write_text(str(_rewritten()))
     (tmp_path / "drive.f90").write_text(
@@ -217,7 +214,6 @@ def test_data_member_access_is_routed_per_arm():
     assert "this % act__t_gmres % b => this % rhs" in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_data_member_rewritten_fir_has_no_dispatch(tmp_path: Path):
     src = tmp_path / "rw.f90"
     src.write_text(str(_rewritten_datamember()))
@@ -226,7 +222,6 @@ def test_data_member_rewritten_fir_has_no_dispatch(tmp_path: Path):
     assert fir.read_text().count("fir.dispatch") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_data_member_rewrite_is_behaviour_preserving(tmp_path: Path):
     (tmp_path / "rw.f90").write_text(str(_rewritten_datamember()))
     (tmp_path / "drive.f90").write_text(
@@ -344,7 +339,6 @@ def test_component_rewrite_expands_slot_and_removes_dispatch():
     assert "CALL this % act__t_cg % solve(x)" in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_component_rewritten_fir_has_no_dispatch(tmp_path: Path):
     src = tmp_path / "rw.f90"
     src.write_text(str(_rewritten_component()))
@@ -355,7 +349,6 @@ def test_component_rewritten_fir_has_no_dispatch(tmp_path: Path):
     assert text.count("fir.select_type") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_component_rewrite_is_behaviour_preserving(tmp_path: Path):
     # the tag is stored in the container, so it must survive setup -> run.
     (tmp_path / "rw.f90").write_text(str(_rewritten_component()))
@@ -463,7 +456,6 @@ def test_shared_interposer_cloned_per_arm_and_original_dropped():
     assert "CALL base_run__t_cg(this % act__t_cg, x)" in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_interposer_clone_resolves_buried_dispatch(tmp_path: Path):
     # the whole point: the buried `this%doit` inside the shared interposer is now
     # a static bind, so the FIR carries zero dispatch.
@@ -474,7 +466,6 @@ def test_interposer_clone_resolves_buried_dispatch(tmp_path: Path):
     assert fir.read_text().count("fir.dispatch") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_interposer_clone_is_behaviour_preserving(tmp_path: Path):
     (tmp_path / "rw.f90").write_text(str(_rewritten_interposer()))
     (tmp_path / "drive.f90").write_text(
@@ -562,7 +553,6 @@ def test_retype_specialises_component_and_dummy_but_not_interface():
     assert "CLASS(t_transfer), INTENT(IN) :: this" in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_retype_makes_dispatch_static(tmp_path: Path):
     src = tmp_path / "rw.f90"
     src.write_text(str(_rewritten_retype()))
@@ -571,7 +561,6 @@ def test_retype_makes_dispatch_static(tmp_path: Path):
     assert fir.read_text().count("fir.dispatch") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_retype_is_behaviour_preserving(tmp_path: Path):
     (tmp_path / "rw.f90").write_text(str(_rewritten_retype()))
     (tmp_path / "drive.f90").write_text(
@@ -725,7 +714,6 @@ def test_driver_collapses_both_nested_axes():
     assert "run => base_run" not in text
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_driver_result_fir_has_no_dispatch(tmp_path: Path):
     src = tmp_path / "rw.f90"
     src.write_text(str(_rewritten_combined()))
@@ -736,7 +724,6 @@ def test_driver_result_fir_has_no_dispatch(tmp_path: Path):
     assert text.count("fir.select_type") == 0
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_driver_result_is_behaviour_preserving(tmp_path: Path):
     # gmres arm: into(+1) then doit(*2): 5 -> 6 -> 12;  cg arm: +1 then *3: 5 -> 6 -> 18.
     (tmp_path / "rw.f90").write_text(str(_rewritten_combined()))
@@ -911,7 +898,6 @@ end module
 """
 
 
-@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_driver_imports_cross_module_clone_at_call_site(tmp_path: Path):
     """When the ladder redirects a dispatch to a per-arm clone in the interposer's
     module but the call site is in a DIFFERENT module, the direct call needs an

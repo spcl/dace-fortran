@@ -48,8 +48,6 @@ def _real_source() -> Path:
     return _PRISTINE_BAK if _PRISTINE_BAK.is_file() else _PRISTINE
 
 
-_HAVE_ICON = _real_source().is_file()
-
 # reads ICON's real source via the icon-model submodule; only the heavy CI lane checks it out
 pytestmark = pytest.mark.long
 
@@ -74,7 +72,6 @@ _DUMMIES = (
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patch_preserves_signature():
     """Patched file's header + INTENT dummy declarations are byte-for-byte identical
     to pristine -- a change would break ICON's ``mo_ocean_ab_timestepping`` call site."""
@@ -112,7 +109,6 @@ def test_patch_preserves_signature():
     )
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patched_body_calls_wrapper():
     """Driver forwards to ``solve_free_sfc_dace_icon`` with all 11 dummies (``lacc`` via
     the resolved ``lzacc__dace`` cast since the original dummy is OPTIONAL)."""
@@ -127,7 +123,6 @@ def test_patched_body_calls_wrapper():
     assert "LOGICAL(lzacc__dace, kind=1)" in dut_call
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_differential_driver_injected():
     """Patch keeps the original body as REF (renamed ``solve_free_sfc_ref``) and injects
     the driver (clone -> snapshot -> DUT -> park/restore -> REF -> compare -> free) as the
@@ -177,7 +172,6 @@ def test_differential_driver_injected():
     )
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_write_patched_ocean_solve(tmp_path: Path):
     """Round-trip the patch through the disk-writing helper."""
     out = tmp_path / "mo_ocean_ab_timestepping_mimetic.f90"
@@ -932,7 +926,6 @@ end module mo_fortran_tools
 """
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
     """Fortran compiler accepts the patched file (syntax-only) against the stand-in

@@ -13,11 +13,8 @@ resolution but hit a separate, clean "not registered as SDFG data" gap downstrea
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_dummy_arg_struct_field_used_as_matmul_input(tmp_path):

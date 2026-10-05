@@ -9,13 +9,11 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest
 
-from _util import flang_binary, flang_intrinsic_modules_path, have_flang
+from _util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import replace_external_with_modules
 
 _HERE = Path(__file__).resolve().parent
-_HAVE_FLANG = have_flang()
 
 
 def _read(name: str) -> str:
@@ -144,7 +142,6 @@ END SUBROUTINE
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_FLANG, reason="no LLVM flang on PATH")
 def test_rewritten_basic_example_parses_under_flang(tmp_path):
     """Rewrite output is valid Fortran flang can lower (kernel + sidecar module staged side by side)."""
     src = _read("external_basic_example.f90")

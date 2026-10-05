@@ -5,11 +5,9 @@ Flang lowers ``call MPI_Send(...)`` to an opaque fir.call; the bridge recognises
 
 from pathlib import Path
 
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # external MPI decls + parameter constants so the program needs no mpi.mod / MPI install to lower (bridge sees the same opaque fir.call either way).
 _SENDRECV = """

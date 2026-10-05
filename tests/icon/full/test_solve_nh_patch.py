@@ -11,12 +11,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from icon.full._icon_solve_nh_patch import apply_solve_nh_patch
 from icon.full._solve_nh_min_types import MIN_GEOMETRY_TYPES_F90, MIN_STATE_TYPES_F90
 
-pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_solve_nh_diff.f90"

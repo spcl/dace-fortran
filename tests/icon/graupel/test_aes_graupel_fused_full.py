@@ -14,7 +14,6 @@ Tolerance evidence: see ``RTOL``/``ATOL`` below.
 import numpy as np
 import pytest
 
-from tests._util import have_flang
 from dace_fortran import build_sdfg_from_files
 
 from ._graupel_harness import (
@@ -35,7 +34,6 @@ from ._graupel_harness import (
     ORIGINAL_SOURCE,
 )
 
-pytestmark = [pytest.mark.long, pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")]
 
 KE = 20
 DT = 30.0

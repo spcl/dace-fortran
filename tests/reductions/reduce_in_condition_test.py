@@ -14,13 +14,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from _util import build_sdfg, have_flang  # noqa: E402
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg  # noqa: E402
 
 
 def _build(src_text: str, tmp_path, name: str):

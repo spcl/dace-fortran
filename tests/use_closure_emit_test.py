@@ -8,12 +8,8 @@ wasteful and drags in modules flang need never touch.  ``emit(entry=...)``
 
 import json
 
-import pytest
 
-from _util import have_flang
 from dace_fortran.emit_hlfir import _entry_module, parse_compile_commands, _select_use_closure, emit
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_entry_module_parsing():

@@ -30,11 +30,7 @@ Pattern catalogue (status as of 2026-06-09):
      routes through a temporary. No alias.
 """
 
-import pytest
-
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _try_build(tmp_path, src, name, entry):

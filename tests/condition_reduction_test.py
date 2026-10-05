@@ -11,12 +11,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _util import build_sdfg, have_flang  # noqa: E402
-
-_needs_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg  # noqa: E402
 
 
 def _reduce_nodes(sdfg):
@@ -25,7 +22,6 @@ def _reduce_nodes(sdfg):
     return [n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, Reduce)]
 
 
-@_needs_flang
 def test_if_sum_reduction_in_loop(tmp_path):
     """IF (SUM((iv-rv)**2) > eps) in a DO loop -- Gate-G pattern. Materialises a Reduce (sum)
     lib-node; the per-element squared diff must keep its subscript (no bare whole-array term)."""
@@ -59,7 +55,6 @@ end module driver_mod
     assert cnt2.tolist() == [0] * n  # integer-valued -> never
 
 
-@_needs_flang
 def test_if_maxval_of_array_diff(tmp_path):
     """IF (MAXVAL(a - b) > thr) -- elementwise subtract feeding a MAXVAL reduction; materialises a Reduce (max)."""
     src = """
@@ -94,7 +89,6 @@ end module driver_mod
     assert cnt2.tolist() == [0] * n
 
 
-@_needs_flang
 def test_reduction_in_loop_body(tmp_path):
     """SUM(m(:, k)) in the loop BODY (not a condition) -- guards the ordinary reduce path
     against regression from the condition-reduction change."""
@@ -122,7 +116,6 @@ end module driver_mod
     assert np.allclose(out, m.sum(axis=0))
 
 
-@_needs_flang
 def test_minval_row_view_in_condition(tmp_path):
     """IF (MINVAL(m(i, :)) > thr) -- a row section becomes a DaCe VIEW (correct shape + column-major
     stride) and Reduce reduces the view, not the whole array."""
@@ -165,7 +158,6 @@ end module driver_mod
     assert cnt.tolist() == [1, 0, 1]
 
 
-@_needs_flang
 def test_maxval_col_view_in_condition(tmp_path):
     """``IF (MAXVAL(m(:, j)) > thr)`` -- a COLUMN section (contiguous in
     column-major) becomes a VIEW reduced by the ``Reduce`` lib-node."""
@@ -202,7 +194,6 @@ end module driver_mod
     assert cnt.tolist() == [1, 0, 0, 1]
 
 
-@_needs_flang
 def test_do_while_maxval_condition(tmp_path):
     """DO WHILE (MAXVAL(a) > thr) -- reduction re-evaluated each iteration over a runtime-extent
     array (old inline-unroll couldn't handle non-constant extent). Loop runs ceil(maxval(a)) times."""

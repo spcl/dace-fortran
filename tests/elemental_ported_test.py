@@ -1,11 +1,8 @@
 """Verbatim port of f2dace/dev:tests/fortran/elemental_test.py."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_elemental_ecrad(tmp_path):

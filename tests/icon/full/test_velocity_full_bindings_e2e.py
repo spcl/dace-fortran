@@ -21,14 +21,13 @@ executed; outputs compared against the gfortran reference.
 import ctypes
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
@@ -45,10 +44,6 @@ from dace_fortran.bindings import (
 #: timing harness sets this once and nothing below may hard-code a compiler name.
 _FC = os.environ.get("VELO_FC", "gfortran")
 
-pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which(_FC) is None, reason=f"{_FC} not on PATH"),
-]
 
 _HERE = Path(__file__).resolve().parent
 _DRIVER_PATH = _HERE / "velocity_full.f90"

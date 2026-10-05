@@ -3,12 +3,9 @@ cloudsc's tendency-init loop body: three view dummies each get a write in the sa
 inlined-callee block. E2e against an f2py-compiled reference."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from _helpers import f2py
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_fortran_frontend_view_multi_write(tmp_path):

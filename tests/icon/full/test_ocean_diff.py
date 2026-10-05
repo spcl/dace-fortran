@@ -18,9 +18,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
-pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_ocean_diff.f90"

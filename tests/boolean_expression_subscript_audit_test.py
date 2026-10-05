@@ -7,11 +7,8 @@ the same bug: dispatch.cpp:218 (fir.store handler), :1919 (const-index assign),
 :1415 (loop-bound fallback)."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_boolean_store_to_logical_scalar(tmp_path):

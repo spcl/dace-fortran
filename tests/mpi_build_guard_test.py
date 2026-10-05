@@ -30,8 +30,7 @@ def test_build_failure_on_root_raises_on_every_rank():
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
-    if comm.Get_size() < 2:
-        pytest.skip("build-guard deadlock check needs >= 2 ranks")
+    assert comm.Get_size() >= 2, "build-guard deadlock check needs >= 2 ranks"
 
     def _failing_build():
         # Runs only on the root rank; the others must still learn it failed.
@@ -54,8 +53,7 @@ def test_build_on_root_no_broadcast_returns_root_only():
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
-    if comm.Get_size() < 2:
-        pytest.skip("build-guard deadlock check needs >= 2 ranks")
+    assert comm.Get_size() >= 2, "build-guard deadlock check needs >= 2 ranks"
 
     rank = comm.Get_rank()
     result = build_on_root(comm, lambda: object(), broadcast=False)

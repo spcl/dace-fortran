@@ -8,11 +8,8 @@ the original Fortran LOGICAL(KIND=N) image (e.g. 4-byte int32, -1/0 encoding) at
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_logical_array_copy_in_copy_out_roundtrip(tmp_path: Path):

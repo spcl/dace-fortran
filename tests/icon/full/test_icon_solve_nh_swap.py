@@ -48,7 +48,6 @@ def _real_source() -> Path:
     return _PRISTINE_BAK if _PRISTINE_BAK.is_file() else _PRISTINE
 
 
-_HAVE_ICON = _real_source().is_file()
 _HAVE_ICON_MODS = (_ICON_BUILD / "mod").is_dir()
 
 # Reads ICON's real mo_solve_nonhydro via the icon-model submodule (heavy CI lane only) -> long.
@@ -59,7 +58,6 @@ pytestmark = pytest.mark.long
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patch_preserves_signature():
     """The patched file's signature line + 14 dummy declarations are byte-identical
     to the pristine -- any drift would break ICON's mo_nh_stepping call site."""
@@ -98,7 +96,6 @@ def test_patch_preserves_signature():
     )
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patched_body_calls_wrapper():
     """The patched body's first executable statement is the
     forwarding ``CALL solve_nh_dace_icon(...)``."""
@@ -126,7 +123,6 @@ def test_patched_body_calls_wrapper():
         assert arg in patched, f"forwarded arg {arg!r} missing"
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_differential_driver_injected():
     """The patch keeps the original body as REF (renamed ``solve_nh_ref``) and
     injects the driver (clone -> DUT -> REF -> compare -> free) as the new
@@ -171,7 +167,6 @@ def test_differential_driver_injected():
     )
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_write_patched_solve_nh(tmp_path: Path):
     """Round-trip the patch through the disk-writing helper."""
     out = tmp_path / "mo_solve_nonhydro.f90"
@@ -185,7 +180,6 @@ def test_write_patched_solve_nh(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon_build):
     """The compiler accepts the patched file (syntax-only) against ICON's own .mod

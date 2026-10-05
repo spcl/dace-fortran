@@ -11,11 +11,9 @@ based (state shared with earlier blocks), not in this block itself.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC_PATH = Path(__file__).resolve().parent / "velocity_zekinh_block.f90"
 _ENTRY = "mo_velocity_zekinh::zekinh_block"

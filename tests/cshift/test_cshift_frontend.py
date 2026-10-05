@@ -6,15 +6,11 @@ dimension.  Tests stop at SDFG-build time -- the lib node's pure expansion stub
 from pathlib import Path
 import sys
 
-import pytest
 
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from _util import have_flang  # noqa: E402
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build(probe_name: str, entry: str, tmp_path):

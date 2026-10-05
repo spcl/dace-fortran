@@ -14,17 +14,14 @@ These tests pin (1) the SDFG builds + validates and (2) the lowered loop is
 numerically exact against the gfortran/f2py reference.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 subroutine probe_ddot(a, s, e, b, n, r)
@@ -42,10 +39,6 @@ end subroutine probe_ddot
 
 
 def _f2py_ref(tmp_path: Path):
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir = tmp_path / "ref"
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / "probe_ddot.f90"

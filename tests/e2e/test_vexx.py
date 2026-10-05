@@ -24,13 +24,12 @@ always runs as part of the pipeline.
 
 import copy
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface
@@ -38,11 +37,7 @@ from dace_fortran.bindings.frozen_signature import refreeze
 from dace_fortran.pipelines import num_maps, optimize
 from qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
-]
+pytestmark = pytest.mark.e2e
 
 
 def binding_entry(sdfg, plan, src_path: Path, out: Path, lib_name: str):

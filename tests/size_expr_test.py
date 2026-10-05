@@ -6,11 +6,8 @@ Each case builds an SDFG and an f2py reference from the same source, writes back
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def _run(tmp_path, src, dims, *, entry="probe_mod::probe", shape_of=None):

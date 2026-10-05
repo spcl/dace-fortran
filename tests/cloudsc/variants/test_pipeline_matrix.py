@@ -25,7 +25,7 @@ import pytest
 import dace
 from dace.config import Config
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 from cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs, parameters as CLOUDSC_PARAMS
 from cloudsc.full._registries import get_inputs_physical, get_outputs
@@ -104,8 +104,6 @@ CASES = {
 }
 VARIANTS = ("parallelize", "canon_cpu", "canon_gpu")
 CODEGENS = ("legacy", "experimental_readable")
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module", params=list(CASES))

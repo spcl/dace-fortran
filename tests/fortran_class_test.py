@@ -1,11 +1,8 @@
 """Port of f2dace/dev:tests/fortran/future/fortran_class_test.py (``recv`` is zero-initialized: the original read it uninitialized)."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_fortran_frontend_class(tmp_path):

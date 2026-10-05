@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
+from _util import build_sdfg, f2py_compile
 from cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     get_inputs_physical,
@@ -21,7 +21,6 @@ from cloudsc.full._registries import (
 from cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 
 _HERE = Path(__file__).resolve().parent
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _module_wrap_drivers(src: str) -> str:

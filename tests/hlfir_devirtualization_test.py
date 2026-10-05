@@ -14,11 +14,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
-from _util import _FLANG, have_flang
+from _util import _FLANG
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
 # the override could only mean genuine devirtualisation (no concrete-TYPE call to muddy the
@@ -153,8 +151,7 @@ def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Pat
     the explicit vtable-load sequence (``fir.address_of`` -> indirect call) -- never a
     direct ``fir.call``. This is *lowering*, not devirtualisation."""
     fir_opt = _sibling_tool("fir-opt-21", "fir-opt")
-    if fir_opt is None:
-        pytest.skip("fir-opt not available alongside flang")
+    assert fir_opt is not None, "fir-opt not found alongside flang"
     raw = tmp_path / "poly.fir"
     raw.write_text(_emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False))
     lowered = subprocess.check_output(

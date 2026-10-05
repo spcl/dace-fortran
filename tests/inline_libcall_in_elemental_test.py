@@ -13,11 +13,8 @@ maxval/any/all with DIM (goes through buildSectionReduceAssign, not the libcall 
 """
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def test_inline_matmul_transpose_in_elemental_division(tmp_path):

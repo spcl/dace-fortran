@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from _helpers import sdfg_call_args
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 from dace_fortran.inliner.ast_desugaring import optimizations
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
@@ -23,7 +23,6 @@ def _truncated_div(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return ((a - np.fmod(a, b)) // b).astype(a.dtype)
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 @pytest.mark.parametrize("kind,dtype", [(4, np.int32), (8, np.int64)])
 def test_integer_mod_modulo_division_negative_operands(tmp_path: Path, kind: int, dtype: type):
     """Integer MOD lowers to ``arith.remsi`` (``FtnMod``), MODULO to the inlined floored idiom (``FtnModulo``)."""
@@ -50,7 +49,6 @@ end subroutine
     np.testing.assert_array_equal(r_div, _truncated_div(a, b))
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 @pytest.mark.parametrize("kind,dtype", [(4, np.float32), (8, np.float64)])
 def test_real_mod_modulo_negative_operands(tmp_path: Path, kind: int, dtype: type):
     """Real MOD / MODULO lower to the ``_FortranAMod*`` / ``_FortranAModulo*`` runtime calls."""
@@ -75,7 +73,6 @@ end subroutine
     np.testing.assert_allclose(r_modulo, np.mod(a, b), rtol=1e-6)
 
 
-@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 def test_mod_and_division_in_index_expression_negative_dividend(tmp_path: Path):
     """``a(mod(i, 3) + 3)`` and ``a(i / 2 + 4)`` over ``i = -5..5``: floored rounding reads other elements."""
     src = """

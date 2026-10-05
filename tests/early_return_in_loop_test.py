@@ -9,11 +9,8 @@ of magnitude divergence). Reproducer: four ``d(M1,M2,i,j)`` assigns guarded
 by an early return in one outer loop.
 """
 
-import pytest
+from _util import build_sdfg
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """\
 module m

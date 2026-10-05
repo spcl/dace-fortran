@@ -4,17 +4,14 @@ gfortran/f2py on random input, plus structural checks that each distinct
 interstate-edge assignment forcing a new state before the compute tasklet.
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "indirect_stencil.f90"
@@ -22,10 +19,6 @@ _SRC_PATH = _HERE / "indirect_stencil.f90"
 
 def _f2py_compile(src: Path, out_dir: Path, mod_name: str) -> Path:
     """Compile `src` via f2py into `out_dir`; returns that dir for sys.path. Requires gfortran."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available (required for f2py)")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
     # meson backend usually drops the .so in cwd; if it landed in a sibling build-dir, locate + symlink.

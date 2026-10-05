@@ -13,13 +13,11 @@ the multi-element convergence matching LU's ``rsdnm(1)<tolrsd(1) .and. ...`` sha
 Isolates the bug from LU's full 1041-state SDFG for fast iteration."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 import dace.data
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """\
 module m

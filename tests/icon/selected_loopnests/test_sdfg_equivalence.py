@@ -9,19 +9,16 @@ bundle (struct+flat+gfortran driver) stays the single source of truth.
 """
 
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -44,11 +41,7 @@ def _extract_flat_kernel(bundle_path: Path) -> str:
 
 def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
     """f2py-compile ``src_text`` as ``mod_name`` into ``out_dir``, return the
-    imported module. Skips if the toolchain's missing."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not available")
-    if shutil.which("meson") is None:
-        pytest.skip("meson not available (f2py backend on Python>=3.12)")
+    imported module. Fails if the toolchain is missing."""
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{mod_name}.f90"
     src.write_text(src_text)

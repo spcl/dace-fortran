@@ -11,13 +11,12 @@ World ranks pair by parity {0<->2, 1<->3}, so expected result is ``world_rank XO
 """
 
 import ctypes
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from _util import build_on_root, build_sdfg, have_flang
+from _util import build_on_root, build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -25,11 +24,7 @@ from dace_fortran.bindings import (
     build_fortran_library,
 )
 
-pytestmark = [
-    pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
-    pytest.mark.skipif(shutil.which("mpif90") is None, reason="mpif90 not on PATH"),
-]
+pytestmark = pytest.mark.mpi
 
 _KERNEL = """
 module sr_usercomm_mod
@@ -96,8 +91,7 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     world = MPI.COMM_WORLD
     wrank = world.Get_rank()
     wsize = world.Get_size()
-    if wsize < 4:
-        pytest.skip("user-comm split e2e needs 4 ranks (mpirun --oversubscribe -n 4 ...)")
+    assert wsize >= 4, "user-comm split e2e needs 4 ranks (mpirun --oversubscribe -n 4 ...)"
 
     # Even ranks {0,2} -> one comm, odd {1,3} -> another (size 2 each).
     split = world.Split(color=wrank % 2, key=wrank)

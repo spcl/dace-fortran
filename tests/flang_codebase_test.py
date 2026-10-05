@@ -12,12 +12,11 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import flang_binary, have_flang
+from _util import flang_binary
 from dace_fortran.flang_codebase import (
     FLANG_BUG_PATCHES,
     LIBRARY_STUBS,
     extract_make_compile_args,
-    find_openmpi_include,
     mpi_stub_source,
     patch_mpi_sizeof,
     prepare_flang_translation_unit,
@@ -34,8 +33,6 @@ _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path(tempfile.gettemp
 # Prefer a pristine .bak if a developer left one; else the submodule's own source.
 _VELOCITY_REF = _VELOCITY_BAK if _VELOCITY_BAK.is_file() else _VELOCITY_SRC
 
-_HAVE_FLANG = have_flang()
-_HAVE_OPENMPI = find_openmpi_include() is not None
 # icon_build session fixture (root conftest.py) configures+builds ICON on demand;
 # no .mod tree required upfront here.
 
@@ -58,7 +55,6 @@ def test_flang_bug_patches_registry_keys():
     assert "mpi_sizeof" in FLANG_BUG_PATCHES
 
 
-@pytest.mark.skipif(not _HAVE_OPENMPI, reason="OpenMPI include not on this system")
 def test_mpi_stub_source_and_flags():
     """The MPI stub source is plain Fortran and the include flag
     points at a directory containing ``mpif-config.h``."""
@@ -118,7 +114,6 @@ def test_extract_make_compile_args_for_icon_velocity(icon_build):
     assert src_include in args["include_dirs"]
 
 
-@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI")
 def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, icon_build):
     """Compose a TU for ICON's real mo_velocity_advection.f90 and verify flang-21 lowers it
     to HLFIR with zero errors -- pins the entire merge+stubs+patches+defines recipe as a gate."""

@@ -4,11 +4,8 @@ build-only port, this DRIVES the compiled SDFG and compares BIT-EXACT against gf
 closed form (s%w(1,1,1)=5.5; lout(1)=p_area(1,1,1)+lon(1); rest 0)."""
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, f2py_compile, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg, f2py_compile
 
 
 def test_fortran_frontend_pointer_test(tmp_path):

@@ -9,11 +9,8 @@ document gaps for Phase 1 of the offset-propagation fix (see
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
-
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
+from _util import build_sdfg
 
 
 def _build(src: str, tmp_path: Path, entry: str):

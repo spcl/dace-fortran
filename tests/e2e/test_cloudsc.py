@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import f2py_compile, have_flang
+from _util import f2py_compile
 from cloudsc.full._harness import run_cloudsc
 from cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
 from dace_fortran.pipelines import num_maps, optimize
@@ -28,8 +28,6 @@ _SRC = Path(__file__).resolve().parents[1] / "cloudsc" / "full" / "cloudsc.F90"
 # of these fold away during the build, so the names are matched against the live SDFG rather than
 # assumed present.
 _SPECIALIZE = {"NCLV": 5, "NCLDQI": 2, "NCLDQL": 1, "NCLDQR": 3, "NCLDQS": 4}
-
-pytestmark = [pytest.mark.e2e, pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")]
 
 
 def _split_specialize(sdfg):

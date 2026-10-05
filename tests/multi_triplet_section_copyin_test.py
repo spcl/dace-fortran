@@ -14,11 +14,9 @@ A per-element pattern (``i + 100*j``) catches a dropped or transposed index.
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Parent is a POINTER member so contiguity is unknown at the call site and flang guards it with
 # copy_in/copy_out; a plain contiguous local would be passed by reference with no copy at all.
