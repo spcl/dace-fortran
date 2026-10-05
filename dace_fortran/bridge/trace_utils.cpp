@@ -24,6 +24,14 @@ void setManglingOverride(const std::string& mangled, const std::string& shortNam
   kManglingOverride[mangled] = shortName;
 }
 
+// Inlined-callee alias declare uniq_name -> its root declare's uniq_name (see buildCollisionSet); ``extractName``
+// names an alias by its root, resolved at lookup time so later renames of the root carry over.
+static thread_local std::unordered_map<std::string, std::string> kAliasRoot;
+
+void setAliasRoot(const std::string& aliasMangled, const std::string& rootMangled) {
+  kAliasRoot[aliasMangled] = rootMangled;
+}
+
 // Per-thread entry F-scope, set once by setEntryScope; extractName consults it to scope-qualify non-entry-scope
 // declares. Empty means skip qualification (back-compat).
 static thread_local std::string kEntryScope;
@@ -55,6 +63,7 @@ static bool funcHasDeclareTail(mlir::Operation* func, llvm::StringRef tail) {
 
 void clearManglingOverrides() {
   kManglingOverride.clear();
+  kAliasRoot.clear();
   kEntryScope.clear();
   kShortNameCollisions.clear();
   kModuleDeclUniqs.clear();
@@ -77,6 +86,7 @@ std::string getFScope(const std::string& uniq) {
 }
 
 std::string extractName(const std::string& m) {
+  if (auto root = kAliasRoot.find(m); root != kAliasRoot.end()) return extractName(root->second);
   auto it = kManglingOverride.find(m);
   if (it != kManglingOverride.end()) return it->second;
   auto p = m.rfind('E');

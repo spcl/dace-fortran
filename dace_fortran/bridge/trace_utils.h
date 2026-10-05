@@ -84,6 +84,8 @@ std::string extractName(const std::string& mangled);
 /// Register mangled -> shortName override for extractName, used by extract_vars to break short-name collisions between
 /// caller and inlined-callee dummy declares. Per thread.
 void setManglingOverride(const std::string& mangled, const std::string& shortName);
+/// Names the inlined-callee alias declare ``aliasMangled`` after its root declare ``rootMangled`` in ``extractName``.
+void setAliasRoot(const std::string& aliasMangled, const std::string& rootMangled);
 
 /// Drop every mangling-override binding; called at the start of each extractVariables/extractAST so prior-module
 /// overrides don't leak.

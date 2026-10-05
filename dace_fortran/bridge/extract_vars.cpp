@@ -399,6 +399,24 @@ std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(const std::string& dec
 /// name list, the same way ``resolveShapeSyms`` resolves a static
 /// declare's shape  --  trace each size operand to its host declare
 /// (preferred), fall back to a constant literal, then to ``?``.
+/// Inlined-callee alias declares of ``v`` (a declare taking ``v`` as its memref), transitively through
+/// alias-of-alias chains, bounded like the other SSA back-walks.
+static std::vector<hlfir::DeclareOp> aliasDeclaresOf(mlir::Value v) {
+  std::vector<hlfir::DeclareOp> out;
+  std::vector<mlir::Value> frontier{v};
+  for (int depth = 0; depth < limits::kSsaBackWalkDepth && !frontier.empty(); ++depth) {
+    std::vector<mlir::Value> next;
+    for (mlir::Value f : frontier)
+      for (auto* u : f.getUsers())
+        if (auto ad = mlir::dyn_cast<hlfir::DeclareOp>(u); ad && ad.getMemref() == f) {
+          out.push_back(ad);
+          next.push_back(ad.getResult(0));
+        }
+    frontier = std::move(next);
+  }
+  return out;
+}
+
 static std::vector<std::string> shapeFromAllocSite(fir::AllocMemOp alloc) {
   std::vector<std::string> syms;
   for (auto sz : alloc.getShape()) {
@@ -1610,30 +1628,14 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
     shortToScopes[shortName].insert(scope);
   };
   module.walk([&](hlfir::DeclareOp decl) {
-    // D4: an inlined-callee assumed-shape alias is just a view of the
-    // outer declare.  Two pieces:
-    //   (a) Skip recording its scope for collision detection -- the
-    //       outer's scope is already recorded on its own walk hit.
-    //   (b) Install a mangling override mapping the alias's uniq_name
-    //       to the OUTER's short name.  Without this, direct calls
-    //       to ``extractName(alias_decl.getUniqName())`` (~16 sites
-    //       across ast/*.cpp) return the alias's bare short name,
-    //       which the SDFG never registered -- downstream lookups
-    //       KeyError.  ``traceToDecl`` already walks past aliases
-    //       to the outer declare; this override ensures the direct
-    //       path produces the same name.
-    if (auto outer = asAssumedShapeAlias(decl)) {
-      auto outerUniq = outer.getUniqName().str();
-      auto p = outerUniq.rfind('E');
-      std::string const outerShort = p != std::string::npos ? outerUniq.substr(p + 1) : outerUniq;
-      if (!outerShort.empty()) {
-        // Only override if outer is entry-scope; otherwise the alias's
-        // OWN qualified name is still the right answer.
-        std::string const outerScope = getFScope(outerUniq);
-        if (outerScope.empty() || outerScope == entryScope) {
-          setManglingOverride(decl.getUniqName().str(), outerShort);
-        }
-      }
+    // D4: an inlined-callee alias (asAssumedShapeAlias) is a view of the outer declare and never becomes an SDFG
+    // variable (extract_vars skips it): its scope is not recorded for collisions, and ``extractName`` resolves its
+    // uniq_name to whatever its ROOT declare's name turns out to be -- also when the root is an inlined callee's
+    // local whose name gets scope-qualified or renamed later.  Without that, direct ``extractName(alias)`` calls
+    // (~16 sites across ast/*.cpp) return the alias's own short name, which the SDFG never registered.
+    if (auto root = asAssumedShapeAlias(decl)) {
+      while (auto outer = asAssumedShapeAlias(root)) root = outer;
+      setAliasRoot(decl.getUniqName().str(), root.getUniqName().str());
       return;
     }
 
@@ -2312,14 +2314,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       std::vector<hlfir::DesignateOp> allDesignates;
       if (designates_it != designatesByDecl.end())
         for (auto dg : designates_it->second) allDesignates.push_back(dg);
-      // Walk users of the module declare's result for inlined-callee
-      // alias declares.  One hop only at first cut; if the bridge
-      // surfaces a multi-hop alias chain in practice, extend with
-      // a transitive walk bounded to ~8 levels.
-      for (auto* u : op.getResult(0).getUsers()) {
-        auto aliasDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u);
-        if (!aliasDecl) continue;
-        if (aliasDecl == op) continue;  // skip self
+      // Walk users of the module declare's result for inlined-callee alias declares, transitively: QE's
+      // ``fft_type_init(dffts_exx)`` -> ``fft_type_allocate(desc)`` chains two dummies before ``desc % nr2p``.
+      for (auto aliasDecl : aliasDeclaresOf(op.getResult(0))) {
         auto aliasIt = designatesByDecl.find(aliasDecl.getOperation());
         if (aliasIt == designatesByDecl.end()) continue;
         for (auto dg : aliasIt->second) allDesignates.push_back(dg);
@@ -2411,8 +2408,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
               // per-field synthesis emits nothing.
               llvm::SmallVector<mlir::Value, 4> scanRoots;
               scanRoots.push_back(designateResult);
+              for (auto ad : aliasDeclaresOf(designateResult)) scanRoots.push_back(ad.getResult(0));
               for (auto* u : designateResult.getUsers()) {
-                if (auto ad = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u)) scanRoots.push_back(ad.getResult(0));
                 // Pointer / allocatable AoR module-level case
                 // (QE's ``tabxx(ia) % box(ir)`` -- ``tabxx`` is
                 // ``type(t), pointer :: tabxx(:)`` at module scope).
