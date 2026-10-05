@@ -189,6 +189,7 @@
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -205,6 +206,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
+#include "passes/ragged_aos.h"
 #include "passes/shallow_alias.h"
 
 namespace hlfir_bridge {
@@ -2282,6 +2284,40 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
   // Function-level orchestration
   // -------------------------------------------------------------------
 
+  /// Runs ``flattenRaggedAosMember`` on every allocatable member allocated per element of an array of records that
+  /// lives in a module variable or behind an ALLOCATABLE local, once per array.
+  static void flattenRaggedMembersOfIndirectArrays(mlir::func::FuncOp func) {
+    llvm::SmallVector<hlfir::DeclareOp, 8> arrays;
+    llvm::DenseSet<const void*> seen;
+    func.walk([&](hlfir::DeclareOp decl) {
+      mlir::Operation* root = decl.getMemref().getDefiningOp();
+      const void* key = nullptr;
+      if (auto global = mlir::dyn_cast_or_null<fir::AddrOfOp>(root)) {
+        key = global.getSymbol().getAsOpaquePointer();
+      } else if (auto local = mlir::dyn_cast_or_null<fir::AllocaOp>(root);
+                 local && mlir::isa<fir::BaseBoxType>(local.getInType())) {
+        key = local.getOperation();
+      }
+      bool outerIsArray = false;
+      llvm::SmallVector<int64_t, 4> outerShape;
+      if (key && peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape) && outerIsArray &&
+          seen.insert(key).second)
+        arrays.push_back(decl);
+    });
+    for (hlfir::DeclareOp decl : arrays) {
+      bool outerIsArray = false;
+      llvm::SmallVector<int64_t, 4> outerShape;
+      auto rec = peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
+      bool flattened = false;
+      for (auto& [memName, memTy] : rec.getTypeList())
+        if (isAllocatableArrayMember(memTy) && raggedAosMemberFlattenable(decl, memName)) {
+          flattenRaggedAosMember(decl, memName, decl.getUniqName().str() + "_" + memName);
+          flattened = true;
+        }
+      if (flattened) dropUnusedRecordArray(decl);
+    }
+  }
+
   void flattenFunc(mlir::func::FuncOp func) {
     if (func.isExternal()) return;
     // Skip private functions.  The bridge always builds an SDFG for
@@ -2304,6 +2340,10 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
     // leave a transient designate state that the inter-pass verifier
     // rejects.
     if (!splitOnly) decomposeStructAssigns(func);
+
+    // Step 0.1: ragged ALLOCATABLE members of an ALLOCATABLE or module-variable array of records (the local
+    // fixed-size array takes the Phase 5c path inside ``splitLocal``).
+    if (!splitOnly) flattenRaggedMembersOfIndirectArrays(func);
 
     // Step 0.4: (C) split a multi-dim array-of-records member with SCALAR
     // inner record members (ICON's ``s%edges%primal_normal_cell(i,j,k)%v1``
@@ -3315,6 +3355,13 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         bool leafIsBox = false;
         mlir::Type const leafEleTy = leafEle(innerTy, leafDims, leafIsBox);
         if (!leafEleTy) continue;
+        // A member the kernel ALLOCATEs per element is allocated after all: the ragged flattening
+        // (``flattenRaggedAosMember``) owns it.
+        if (leafIsBox && llvm::any_of(siteList, [](const Site& site) {
+              return llvm::any_of(site.innerDg->getUsers(),
+                                  [](mlir::Operation* u) { return mlir::isa<fir::StoreOp>(u); });
+            }))
+          continue;
 
         // Rank-0 scalar struct with a SCALAR leaf (``class(t),allocatable ::
         // p``
@@ -5480,7 +5527,8 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
     if (outerIsArray) {
       for (auto& pair : rec.getTypeList()) {
         if (!isAllocatableArrayMember(pair.second)) continue;
-        if (!aosAllocMaxConstSize(decl, pair.first).has_value()) return false;
+        if (!aosAllocMaxConstSize(decl, pair.first).has_value() && !raggedAosMemberFlattenable(decl, pair.first))
+          return false;
       }
     }
     if (allMembersFlattenable(rec)) return true;
@@ -5653,7 +5701,11 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       // semantic no-op).
       if (isAllocatableArrayMember(memTy) && outerIsArray) {
         auto sizeOpt = aosAllocMaxConstSize(decl, memName);
-        if (!sizeOpt) continue;  // gate already verified; defensive
+        if (!sizeOpt) {
+          // Runtime or multi-dimensional extents: the ELLPACK companion sized before the first ALLOCATE.
+          flattenRaggedAosMember(decl, memName, mintCompanionName(baseName + "_" + memName));
+          continue;
+        }
         int64_t const M = sizeOpt->padTo;
         bool const sizeUniform = sizeOpt->uniform;
         auto box = mlir::cast<fir::BoxType>(memTy);

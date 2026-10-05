@@ -2155,8 +2155,17 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     // keeping it off the program signature as a free symbol and letting size(a)/LBOUND/UBOUND (-> fir.box_dims ->
     // <buf>_d<i>) resolve for base buffers, branches, and re-allocations alike.
     {
-      unsigned d = 0;
+      // The shape operands give the RUNTIME extents only: dimension ``d`` of each is the next unknown extent of the
+      // allocated type (``fir.allocmem !fir.array<4x?xf64>, %n`` sizes dimension 1).
+      llvm::SmallVector<unsigned, 4> dynamicDims;
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(allocmem.getInType())) {
+        for (auto [dim, extent] : llvm::enumerate(seq.getShape()))
+          if (extent == fir::SequenceType::getUnknownExtent()) dynamicDims.push_back(static_cast<unsigned>(dim));
+      }
+      unsigned operand = 0;
       for (auto sz : allocmem.getShape()) {
+        unsigned const d = operand < dynamicDims.size() ? dynamicDims[operand] : operand;
+        ++operand;
         std::string const ext = traceExtentExpr(sz);
         if (!ext.empty()) {
           ASTNode an;
@@ -2203,7 +2212,6 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           // symbol to the per-dim synthetic fallback rather than emit a bare array name.
           if (!an.expr.empty() && an.expr != "?" && !an.accesses.empty()) nodes.push_back(std::move(an));
         }
-        ++d;
       }
     }
     // Mints a position symbol for every constant-indexed element in the allocation's shape so each gets a symbol_init
