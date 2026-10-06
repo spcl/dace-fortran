@@ -243,7 +243,9 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
     assert out.exists() and out.stat().st_size > 0, "flang did not produce a HLFIR output"
 
 
-@pytest.mark.timeout(1800)  # the deeply-inlined h_psi parse alone takes ~6 min, past the lanes' 300 s default
+# The full h_psi build takes ~25 minutes (h_psi inlines ~9.6k lines): a long test, run by the CI heavy lanes.
+@pytest.mark.long
+@pytest.mark.timeout(3600)
 def test_h_psi_parses(tmp_path):
     """End-to-end SDFG build for ``h_psi``: the QE checkpoint parses,
     inlines, and lowers to a validated SDFG, with the routines the bridge
@@ -406,7 +408,9 @@ def test_h_psi_reference_runs(tmp_path):
     np.testing.assert_array_equal(psi, psi_snapshot)
 
 
-@pytest.mark.timeout(1800)  # rebuilds the same SDFG as test_h_psi_parses (~6 min), past the lanes' 300 s default
+# Builds the same SDFG as test_h_psi_parses, then compiles it and its binding.
+@pytest.mark.long
+@pytest.mark.timeout(7200)
 def test_h_psi_numerical_correctness(tmp_path):
     """End-to-end numerical correctness for ``h_psi`` THROUGH the generated
     Fortran binding.
