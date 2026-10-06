@@ -194,6 +194,28 @@ def pytest_sessionfinish(session, exitstatus):
     _clean_stray_mods()
 
 
+#: Environment variables an MPI launcher (Open MPI's prterun/mpirun, PMIx) sets in every rank.
+_MPI_LAUNCHER_ENV = ("OMPI_COMM_WORLD_SIZE", "PMIX_RANK")
+
+
+def _under_mpi_launcher() -> bool:
+    return any(k in os.environ for k in _MPI_LAUNCHER_ENV)
+
+
+def pytest_configure(config):
+    """Under an MPI launcher, initialise MPI if mpi4py did not.
+
+    The multi-rank tests call ``COMM_WORLD`` straight away and rely on mpi4py's import-time ``MPI_Init``. An
+    environment exporting ``MPI4PY_RC_INITIALIZE=0`` (the node suite does, for its single-process lanes) turns that
+    off, and the first ``Get_rank`` then aborts the rank ("MPI_Comm_rank() was called before MPI_INIT", exit 14).
+    """
+    if _under_mpi_launcher():
+        from mpi4py import MPI
+
+        if not MPI.Is_initialized():
+            MPI.Init()
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
     import os
@@ -208,7 +230,7 @@ def pytest_unconfigure(config):
     # launcher, skip finalising entirely: on this host OpenMPI's own MPI_Finalize corrupts the
     # heap (SIGABRT, uncatchable, fires before os._exit) -- leaving MPI unfinalised is harmless
     # there and avoids the crash.
-    if any(k in os.environ for k in ("OMPI_COMM_WORLD_SIZE", "PMIX_RANK")):
+    if _under_mpi_launcher():
         try:
             from mpi4py import MPI
 
