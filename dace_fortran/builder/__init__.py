@@ -45,7 +45,7 @@ import gc
 import weakref
 from typing import Any, Callable, Sequence, cast
 
-from dace import InterstateEdge, SDFG, SDFGState
+from dace import InterstateEdge, SDFG, SDFGState, config
 from dace.data import Data
 from dace.frontend.python import astutils
 from dace.properties import CodeBlock
@@ -60,7 +60,7 @@ from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
 from dace_fortran.builder.context import Ctx
-from dace_fortran.dace_types import MapRanges, connectors
+from dace_fortran.dace_types import connectors
 from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
@@ -91,7 +91,7 @@ from dace_fortran.builder.emit_cfg import (
     emit_symbol_init,
     emit_while,
 )
-from dace_fortran.builder.emit_tasklet import emit_scalar_assign
+from dace_fortran.builder.emit_tasklet import add_whole_array_fill, emit_scalar_assign
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
@@ -966,6 +966,14 @@ class SDFGBuilder:
         transformation that drifts the argument list will then raise
         rather than silently invalidate a generated Fortran binding.
         """
+        # DaCe's default ``lineinfo = inspect`` walks the Python stack on every node added without a DebugInfo, to
+        # record the CALLER's file and line -- a line of this builder, not of the Fortran source. That walk was a
+        # sixth of a large build (QE h_psi), for debuginfo nothing reads.
+        with config.set_temporary("compiler", "lineinfo", value="none"):
+            return self._emit_sdfg()
+
+    def _emit_sdfg(self) -> AutoDimSDFG:
+        """:meth:`build` with DaCe's line-info inspection off."""
         self._id_counter = 0
         # Every Fortran extent stays a required SDFG input; ``AutoDimSDFG`` resolves the synthetic
         # ``<arr>_d<i>`` symbols a direct caller omits from the passed arrays (correct extent) or a
@@ -1252,15 +1260,7 @@ class SDFGBuilder:
             tasklet = state.add_tasklet(f"zinit_{name}", {}, connectors(["_out"]), "_out = 0")
             state.add_edge(tasklet, "_out", wnode, None, Memlet(data=name, subset="0"))
             return
-        ranges: MapRanges = {f"__zi{d}": f"0:{ext}" for d, ext in enumerate(desc.shape)}
-        state.add_mapped_tasklet(
-            name=f"zinit_{name}",
-            map_ranges=ranges,
-            inputs={},
-            code="_out = 0",
-            outputs={"_out": Memlet(data=name, subset=", ".join(ranges))},
-            external_edges=True,
-        )
+        add_whole_array_fill(state, name, desc.shape, "0", label=f"zinit_{name}")
 
     def _register_constants(self, sdfg: SDFG) -> None:
         """Attach Flang's constant-pool data to the SDFG.

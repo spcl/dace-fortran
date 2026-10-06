@@ -346,6 +346,37 @@ def emit_tasklet(
         state.add_edge(t, f"_out_{target}", w, None, Memlet(f"{eff_nm}[{ix}]"))
 
 
+def add_whole_array_fill(
+    state: SDFGState,
+    name: str,
+    shape: Sequence[object],
+    value: str,
+    *,
+    label: str,
+    output_node: AccessNode | None = None,
+) -> None:
+    """Write ``value`` (an expression reading no data) to every element of ``name``, of extents ``shape``.
+
+    The map covers the whole array, so the outer memlet is the full range. Stating it beats
+    ``propagate_memlet``, which resolves every symbol defined at the map -- O(SDFG) per fill, a third of a
+    large build (QE ``h_psi``).
+    """
+    ranges: MapRanges = {f"__i{k}": f"0:{extent}" for k, extent in enumerate(shape)}
+    _, _, map_exit = state.add_mapped_tasklet(
+        name=label,
+        map_ranges=ranges,
+        inputs={},
+        code=f"_out = {value}",
+        outputs={"_out": Memlet(f"{name}[{', '.join(ranges)}]")},
+        output_nodes={name: output_node} if output_node is not None else None,
+        external_edges=True,
+        propagate=False,
+    )
+    full_range = ", ".join(f"0:{extent}" for extent in shape)
+    for edge in state.out_edges(map_exit):
+        edge.data = Memlet(f"{name}[{full_range}]")
+
+
 def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, value: str) -> None:
     """Tasklet for ``target = value`` on a scalar target.  Identifier tokens
     naming an SDFG scalar each get their own input connector (so ``i = i + 1``
@@ -424,22 +455,12 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         if not _reads_data:
             assert tgt_var is not None
             dims = tgt_var.shape_symbols
-            ranges: MapRanges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
-            idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
             w = state.add_access(target)
             cache = builder.access_caches.get(state)
             if cache is not None:
                 cache[target] = w
             ensure_view_writeback_link(builder, state, w, target)
-            state.add_mapped_tasklet(
-                name=f"set_{target}",
-                map_ranges=ranges,
-                inputs={},
-                code=f"_out = {src_name}",
-                outputs={"_out": Memlet(f"{target}[{idx_expr}]")},
-                output_nodes={target: w},
-                external_edges=True,
-            )
+            add_whole_array_fill(state, target, dims, src_name, label=f"set_{target}", output_node=w)
             return
 
     tokens = _ident_tokens(value)
