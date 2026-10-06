@@ -27,7 +27,7 @@ keywords = ["fortran", "flang", "hlfir", "mlir", "dace", "frontend", "dataflow"]
 
 dependencies = [
     # A commit of the FaCe branch, which carries the DaCe-core pieces the frontend needs; a sha keeps CI reproducible.
-    "dace @ git+https://github.com/spcl/dace.git@50c15b66e723a1c6f806cc091199c1dde9cf4719",
+    "dace @ git+https://github.com/spcl/dace.git@1a84427ee819a5d7e4cc391e56cb8d811d336014",
     # fparser AST single-TU inliner (dace_fortran.fparser_inliner).  >0.2
     # carries the Fortran2003-before-Fortran2008 import ordering needed
     # under Python 3.14 (cf. d-face commit 74110d690).
@@ -144,6 +144,7 @@ markers = [
     "e2e: Production kernel through the full parallelization pipeline, built with and without it on seeded inputs: pre- vs post-optimize bit-exact, and against the gfortran/f2py reference",
     "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
     "fftw: Needs libfftw3 to link the FFT library node's expansion",
+    "gpu: Needs an AMD GPU, ROCm amdflang and DaCe's HIP backend; runs in the agent-mi300 container (select with '-m gpu')",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
