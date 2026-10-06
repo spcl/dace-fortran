@@ -29,9 +29,11 @@
 #include "bridge/trace_utils.h"  // traceConstInt
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
+#include "flang/Optimizer/Support/InternalNames.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm_compat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -144,6 +146,8 @@ struct Plan {
   mlir::Type eleTy;
   llvm::SmallVector<int64_t, 4> outerShape;        ///< unknown extents come from ``outerExtents``
   llvm::SmallVector<mlir::Value, 4> outerExtents;  ///< the runtime outer extents, from the array's own ALLOCATE
+  /// A module array of records the kernel does not ALLOCATE: its runtime outer extents are read from its descriptor.
+  bool outerFromDescriptor = false;
 };
 
 /// A write to a storage root between the plan's point and its last site.
@@ -496,11 +500,16 @@ std::optional<Plan> planMember(hlfir::DeclareOp decl, llvm::StringRef memName) {
       if (dim && *dim >= 0 && static_cast<size_t>(*dim) < upper.size() && traceConstInt(call.getArgs()[2]) == 1)
         upper[*dim] = call.getArgs()[3];
     });
-    if (allocations != 1) return std::nullopt;
-    for (auto [extent, ub] : llvm::zip(plan.outerShape, upper)) {
-      if (extent != fir::SequenceType::getUnknownExtent()) continue;
-      if (!ub || !dom.properlyDominates(ub, plan.point)) return std::nullopt;
-      plan.outerExtents.push_back(ub);
+    // A module array the kernel never ALLOCATEs was allocated by the host: its descriptor holds the extents.
+    plan.outerFromDescriptor =
+        allocations == 0 && mlir::isa_and_nonnull<fir::AddrOfOp>(decl.getMemref().getDefiningOp());
+    if (!plan.outerFromDescriptor) {
+      if (allocations != 1) return std::nullopt;
+      for (auto [extent, ub] : llvm::zip(plan.outerShape, upper)) {
+        if (extent != fir::SequenceType::getUnknownExtent()) continue;
+        if (!ub || !dom.properlyDominates(ub, plan.point)) return std::nullopt;
+        plan.outerExtents.push_back(ub);
+      }
     }
   }
 
@@ -555,10 +564,30 @@ bool raggedAosMemberFlattenable(hlfir::DeclareOp decl, llvm::StringRef memName) 
   return planMember(decl, memName).has_value();
 }
 
-void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, const std::string& flatName) {
+/// ``flatName`` minted as a local of ``func`` instead (``_QM<mod>F<proc>E<name>``), unless a declare already uses it.
+static std::string kernelLocalName(mlir::func::FuncOp func, llvm::StringRef flatName) {
+  auto [kind, proc] = fir::NameUniquer::deconstruct(func.getSymName());
+  auto [varKind, var] = fir::NameUniquer::deconstruct(flatName);
+  llvm::SmallVector<llvm::StringRef, 4> modules(proc.modules.begin(), proc.modules.end());
+  llvm::SmallVector<llvm::StringRef, 4> procs(proc.procs.begin(), proc.procs.end());
+  procs.push_back(proc.name);
+  llvm::StringSet<> taken;
+  func.walk([&](hlfir::DeclareOp d) { taken.insert(d.getUniqName()); });
+  std::string name = fir::NameUniquer::doVariable(modules, procs, proc.blockId, var.name);
+  for (int n = 1; taken.contains(name); ++n)
+    name = fir::NameUniquer::doVariable(modules, procs, proc.blockId, var.name + "_cc" + std::to_string(n));
+  return name;
+}
+
+void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, const std::string& moduleFlatName) {
   std::optional<Plan> planned = planMember(decl, memName);
   if (!planned) return;
   Plan& plan = *planned;
+  // A host-allocated module array's companions hold nothing across calls (no binding marshals them), so they are
+  // the kernel's own transients: named in its scope, not as module state the caller would have to pass.
+  std::string const flatName = plan.outerFromDescriptor
+                                   ? kernelLocalName(decl->getParentOfType<mlir::func::FuncOp>(), moduleFlatName)
+                                   : moduleFlatName;
   auto* ctx = decl->getContext();
   auto loc = decl.getLoc();
   mlir::OpBuilder b(plan.point);
@@ -567,14 +596,23 @@ void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, cons
   auto cIndex = [&](int64_t v) { return b.create<mlir::arith::ConstantIndexOp>(loc, v).getResult(); };
   auto allocatable = fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::allocatable);
 
-  // The outer extents as values: the static ones as constants, the runtime ones from the array's ALLOCATE.
+  // The outer extents as values: the static ones as constants, the runtime ones from the array's ALLOCATE or, for a
+  // module array the host allocated, from its descriptor.
   llvm::SmallVector<mlir::Value, 4> outerExtents;
   {
+    mlir::Value const descriptor =
+        plan.outerFromDescriptor ? b.create<fir::LoadOp>(loc, decl.getResult(0)).getResult() : mlir::Value{};
     auto dynamic = plan.outerExtents.begin();
-    for (auto e : plan.outerShape)
-      outerExtents.push_back(e == fir::SequenceType::getUnknownExtent()
-                                 ? b.create<fir::ConvertOp>(loc, idxTy, *dynamic++).getResult()
-                                 : cIndex(e));
+    for (auto [dim, e] : llvm::enumerate(plan.outerShape)) {
+      if (e != fir::SequenceType::getUnknownExtent())
+        outerExtents.push_back(cIndex(e));
+      else if (descriptor)
+        outerExtents.push_back(
+            b.create<fir::BoxDimsOp>(loc, idxTy, idxTy, idxTy, descriptor, cIndex(static_cast<int64_t>(dim)))
+                .getResult(1));
+      else
+        outerExtents.push_back(b.create<fir::ConvertOp>(loc, idxTy, *dynamic++).getResult());
+    }
   }
   llvm::SmallVector<mlir::Value, 4> dynamicOuter;
   for (auto [e, v] : llvm::zip(plan.outerShape, outerExtents))
@@ -606,12 +644,14 @@ void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, cons
   mlir::Value const lenTable = allocate(flatName + "_len", lenDims, i64, dynamicOuter, lenExtents);
   b.create<hlfir::AssignOp>(loc, b.create<mlir::arith::ConstantIntOp>(loc, i64, 0).getResult(), lenTable);
 
-  // Caps: the running maximum of every site's extents over its loops.
+  // Caps: the running maximum of every site's extents over its loops.  Fortran ``integer(8)`` updated through
+  // ``hlfir.assign``, like source code: an extent read from an array element (``cnt(i)``) then carries its subscript
+  // into the update -- a raw ``fir.store`` of an ``index`` slot reached the SDFG as ``max(cap, cnt)``.
   llvm::SmallVector<mlir::Value, 4> capSlots;
   for (unsigned d = 0; d < plan.rank; ++d) {
-    auto slot = b.create<fir::AllocaOp>(loc, idxTy);
+    auto slot = b.create<fir::AllocaOp>(loc, i64);
     auto capDecl = b.create<hlfir::DeclareOp>(loc, slot.getResult(), flatName + "_cap" + std::to_string(d));
-    b.create<fir::StoreOp>(loc, cIndex(0), capDecl.getResult(0));
+    b.create<hlfir::AssignOp>(loc, b.create<mlir::arith::ConstantIntOp>(loc, i64, 0).getResult(), capDecl.getResult(0));
     capSlots.push_back(capDecl.getResult(0));
   }
   mlir::func::FuncOp func = decl->getParentOfType<mlir::func::FuncOp>();
@@ -626,13 +666,14 @@ void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, cons
     bounder.openLoops(s.store, &b, map);
     for (unsigned d = 0; d < plan.rank; ++d) {
       mlir::Value const extent = bounder.upper(s.alloc.getShape()[d], s.store, &b, map);
-      mlir::Value const asIndex = b.create<fir::ConvertOp>(loc, idxTy, extent);
+      mlir::Value const asI64 = b.create<fir::ConvertOp>(loc, i64, extent);
       mlir::Value const seen = b.create<fir::LoadOp>(loc, capSlots[d]);
-      b.create<fir::StoreOp>(loc, b.create<mlir::arith::MaxSIOp>(loc, seen, asIndex).getResult(), capSlots[d]);
+      b.create<hlfir::AssignOp>(loc, b.create<mlir::arith::MaxSIOp>(loc, seen, asI64).getResult(), capSlots[d]);
     }
   }
   llvm::SmallVector<mlir::Value, 4> caps;
-  for (mlir::Value const slot : capSlots) caps.push_back(b.create<fir::LoadOp>(loc, slot));
+  for (mlir::Value const slot : capSlots)
+    caps.push_back(b.create<fir::ConvertOp>(loc, idxTy, b.create<fir::LoadOp>(loc, slot)).getResult());
 
   // The companion, padded to the caps.
   llvm::SmallVector<int64_t, 6> dims(plan.outerShape.begin(), plan.outerShape.end());

@@ -144,6 +144,79 @@ end module
     assert _run(tmp_path, src, n=n) == sum(i * (i + 1) for i in range(1, n + 1))
 
 
+def test_extent_read_from_an_array_element(tmp_path):
+    """``ALLOCATE(p(i) % w(cnt(i), 2))``: the cap loop reads ``cnt(i)`` itself, subscript included."""
+    src = """
+module m
+  implicit none
+  type packet
+    real(8), allocatable :: w(:, :)
+  end type
+contains
+  subroutine k(n, cnt, out)
+    integer, intent(in) :: n
+    integer, intent(in) :: cnt(n)
+    real(8), intent(out) :: out
+    type(packet) :: p(4)
+    integer :: i, j
+    do i = 1, n
+      allocate(p(i) % w(cnt(i), 2))
+      do j = 1, cnt(i)
+        p(i) % w(j, :) = i + 10 * j
+      end do
+    end do
+    out = 0
+    do i = 1, n
+      out = out + sum(p(i) % w)
+    end do
+  end subroutine
+end module
+"""
+    cnt = np.array([3, 1, 4, 2], dtype=np.int32)
+    expected = sum(2 * (i + 10 * j) for i in range(1, cnt.size + 1) for j in range(1, cnt[i - 1] + 1))
+    assert _run(tmp_path, src, n=cnt.size, cnt=cnt) == expected
+
+
+def test_host_allocated_module_array_of_records(tmp_path):
+    """A module ``type(packet), allocatable :: p(:)`` the host allocated (QE exx_bp_utils' comm packets): the kernel
+    never ALLOCATEs ``p``, so the companion's outer extent is read from ``p``'s descriptor, a free symbol."""
+    src = """
+module packets
+  implicit none
+  type packet
+    real(8), allocatable :: w(:, :)
+  end type
+  type(packet), allocatable :: p(:)
+end module
+
+module m
+  implicit none
+contains
+  subroutine k(n, cnt, out)
+    use packets, only: p
+    integer, intent(in) :: n
+    integer, intent(in) :: cnt(n)
+    real(8), intent(out) :: out
+    integer :: i, j
+    do i = 1, n
+      allocate(p(i) % w(cnt(i), 2))
+      do j = 1, cnt(i)
+        p(i) % w(j, :) = i + 10 * j
+      end do
+    end do
+    out = 0
+    do i = 1, n
+      out = out + sum(p(i) % w)
+    end do
+  end subroutine
+end module
+"""
+    cnt = np.array([3, 1, 4, 2], dtype=np.int32)
+    n = cnt.size
+    expected = sum(2 * (i + 10 * j) for i in range(1, n + 1) for j in range(1, cnt[i - 1] + 1))
+    assert _run(tmp_path, src, n=n, cnt=cnt, p_d0=n) == expected
+
+
 if __name__ == "__main__":
     import pathlib
     import tempfile
@@ -153,6 +226,8 @@ if __name__ == "__main__":
         test_counting_loop_bounds_the_extent,
         test_constant_rank_two_member,
         test_allocatable_array_of_records,
+        test_extent_read_from_an_array_element,
+        test_host_allocated_module_array_of_records,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             test(pathlib.Path(tmp))

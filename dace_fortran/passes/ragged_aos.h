@@ -34,6 +34,9 @@ bool raggedAosMemberFlattenable(hlfir::DeclareOp decl, llvm::StringRef memName);
 
 /// Flattens ``decl``'s allocatable member ``memName`` into the padded companion
 /// ``flatName`` and the extent table ``flatName + "_len"``; rewrites every access.
+/// A module array the kernel does not ALLOCATE (the host did) reads its outer extents
+/// from its descriptor, and its companions are named in the kernel's scope instead:
+/// kernel transients, since nothing carries them across calls.
 /// Requires :func:`raggedAosMemberFlattenable`.
 void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, const std::string& flatName);
 
