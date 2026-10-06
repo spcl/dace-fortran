@@ -1670,6 +1670,43 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   for (auto& kv : shortToScopes) {
     if (kv.second.size() >= 2) collisions.insert(kv.first);
   }
+
+  // A module record that stays a record (not flattened into companion declares) names each member by composition,
+  // ``<base>_<member>``, which is not a declare and so never entered ``shortToScopes``: a local of that short name
+  // (QE's ``becp_r = becp % r``) became the same SDFG container as the member, and the copy a self-cycle.  Module
+  // globals and the entry's dummies keep their bare names (they are the signature), so the local is renamed: a
+  // non-entry local is scope-qualified like any cross-scope collision, an entry-scope local gets the same
+  // ``<scope>_<short>`` form through an override.
+  std::set<std::string> memberNames;
+  std::function<void(fir::RecordType, const std::string&, int)> addMembers = [&](fir::RecordType rec,
+                                                                                 const std::string& prefix, int depth) {
+    for (auto& [member, memberTy] : rec.getTypeList()) {
+      std::string const flat = prefix + "_" + member;
+      memberNames.insert(flat);
+      auto nested = mlir::dyn_cast<fir::RecordType>(fir::unwrapSequenceType(fir::unwrapPassByRefType(memberTy)));
+      if (nested && depth < 8) addMembers(nested, flat, depth + 1);
+    }
+  };
+  module.walk([&](hlfir::DeclareOp decl) {
+    std::string const un = decl.getUniqName().str();
+    if (!getFScope(un).empty()) return;  // module globals only
+    auto rec =
+        mlir::dyn_cast<fir::RecordType>(fir::unwrapSequenceType(fir::unwrapPassByRefType(decl.getResult(0).getType())));
+    auto const p = un.rfind('E');
+    if (rec && p != std::string::npos) addMembers(rec, un.substr(p + 1), 0);
+  });
+  if (!memberNames.empty()) {
+    module.walk([&](hlfir::DeclareOp decl) {
+      std::string const un = decl.getUniqName().str();
+      std::string const scope = getFScope(un);
+      auto const p = un.rfind('E');
+      if (scope.empty() || p == std::string::npos || !memberNames.count(un.substr(p + 1))) return;
+      if (scope != entryScope)
+        collisions.insert(un.substr(p + 1));
+      else if (!decl.getDummyScope())
+        setManglingOverride(un, scope + "_" + un.substr(p + 1));
+    });
+  }
   setShortNameCollisions(collisions);
 }
 

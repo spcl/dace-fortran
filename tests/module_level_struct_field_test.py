@@ -245,6 +245,42 @@ end module
                 )
 
 
+def test_local_named_like_module_record_member(tmp_path):
+    """A local ``becp_r`` next to the module record member ``becp % r``, whose container is also named
+    ``becp_r`` (QE ``add_vuspsi_gamma_acc``): the copy ``becp_r = becp % r`` must stay a copy between two
+    containers. It used to merge them into one, and the copy into a self-cycle the SDFG rejects."""
+    import numpy as np
+
+    src = """
+module becmod
+  type :: bec_type
+    real(kind=8) :: r(4)
+  end type
+  type(bec_type) :: becp
+end module becmod
+
+module kern
+contains
+  subroutine add_ps(out)
+    use becmod, only: becp
+    real(kind=8), intent(out) :: out(4)
+    real(kind=8) :: becp_r(4)
+    becp % r = 2.0d0
+    becp_r = becp % r
+    out = becp_r + 1.0d0
+  end subroutine add_ps
+end module kern
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="add_ps", entry="kern::add_ps").build()
+    sdfg.validate()
+    assert {"becp_r", "add_ps_becp_r"} <= set(sdfg.arrays), sorted(sdfg.arrays)
+    out = np.zeros(4)
+    member = np.zeros(4)
+    sdfg(out=out, becp_r=member)
+    np.testing.assert_array_equal(member, np.full(4, 2.0))
+    np.testing.assert_array_equal(out, np.full(4, 3.0))
+
+
 if __name__ == "__main__":
     import pytest
 
