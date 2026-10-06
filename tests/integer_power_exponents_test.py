@@ -8,15 +8,15 @@ array/function bases, so the float exponent survives into a tasklet, exactly
 the case this pass exists to fix.
 """
 
-import subprocess
-import sys
 from pathlib import Path
 
+import dace
 import numpy as np
 
-import dace
+from tests._util import build_sdfg, f2py_compile
 
-from tests._util import build_sdfg
+# Strict-FP flags for the gfortran reference: no FMA contraction or fast-math reassociation.
+_REF_F90FLAGS = "-O0 -fno-fast-math -ffp-contract=off"
 
 
 def test_pass_retypes_integer_valued_float_exponents():
@@ -61,34 +61,11 @@ end module kern_mod
 """
 
 
-def _f2py(src_text: str, out_dir: Path, mod: str):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{mod}.f90").write_text(src_text)
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "numpy.f2py",
-            "-c",
-            f"{mod}.f90",
-            "-m",
-            mod,
-            "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
-        ],
-        cwd=out_dir,
-    )
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod)
-    return sys.modules[mod]
-
-
 def test_array_base_float_power_matches_gfortran(tmp_path: Path):
     """``a(jl)**2.0`` (array-ref base skipped by the source preprocessor) goes
     through the bridge; the SDFG pass retypes the exponent to ``ipow``, matching
     gfortran to ``rtol=1e-12``."""
-    ref = _f2py(_ARR_POW, tmp_path / "ref", "ipow_ref")
+    ref = f2py_compile(_ARR_POW, tmp_path / "ref", "ipow_ref", extra_f90flags=_REF_F90FLAGS)
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="kern_mod::kern").build()

@@ -35,11 +35,6 @@ def _read_var(ds, name):
     return raw, mask
 
 
-def _strip_prefix(p: Path, prefix: str) -> str:
-    n = p.name
-    return n.replace(prefix, "_") if prefix and prefix in n else n
-
-
 def compare_files(stock_nc: Path, dace_nc: Path, rtol: float):
     print(f"  {stock_nc.name}")
     issues = []

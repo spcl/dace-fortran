@@ -50,24 +50,6 @@ def _compile_caller_so(out_dir: Path) -> ctypes.CDLL:
     return ctypes.CDLL(str(so_path))
 
 
-# ----- ctypes shape helpers -------------------------------------------------
-
-_F64 = ctypes.POINTER(ctypes.c_double)
-_I32 = ctypes.POINTER(ctypes.c_int)
-_I8 = ctypes.POINTER(ctypes.c_int8)
-
-
-def _ptr(arr: np.ndarray):
-    """numpy array -> typed pointer for the array's dtype."""
-    if arr.dtype == np.float64:
-        return arr.ctypes.data_as(_F64)
-    if arr.dtype == np.int32:
-        return arr.ctypes.data_as(_I32)
-    if arr.dtype == np.int8:
-        return arr.ctypes.data_as(_I8)
-    raise TypeError(f"unsupported dtype {arr.dtype}")
-
-
 # ----- buffer layout --------------------------------------------------------
 
 

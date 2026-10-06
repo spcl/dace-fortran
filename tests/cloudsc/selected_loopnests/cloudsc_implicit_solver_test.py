@@ -179,15 +179,6 @@ END MODULE kernel_mod
     zrdtgdp = np.asfortranarray(zrdtgdp)
     zepsec = 1.0e-12
 
-    def _alloc_io():
-        return (
-            np.asfortranarray(rng.random((klon, klev, nclv, nblocks))),
-            np.asfortranarray(rng.random((klon, nclv, nblocks))),
-            np.asfortranarray(rng.random((klon, klev + 1, nclv, nblocks))),
-            np.asfortranarray(rng.random((klon, nblocks))),
-            np.asfortranarray(rng.random((klon, nblocks))),
-        )
-
     rng_io = np.random.default_rng(99)
 
     def _rng_io_alloc():

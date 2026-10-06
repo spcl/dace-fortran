@@ -10,12 +10,11 @@ emitter's symbol-population path (size/lbound into SDFG free symbols).
 """
 
 import ctypes
-import subprocess
 from pathlib import Path
 
 import numpy as np
 
-from tests._util import FLANG_PORTABLE_FFLAGS, build_sdfg
+from tests._util import build_sdfg, gfortran_compile_so
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -106,15 +105,6 @@ end subroutine run_flux_ref
 """
 
 
-def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):
-    cmd = ["gfortran", "-shared", "-fPIC", *FLANG_PORTABLE_FFLAGS, f"-J{mod_dir}"]
-    cmd.extend(str(s) for s in sources)
-    cmd.extend(["-o", str(out_so)])
-    if link_so is not None:
-        cmd.extend([f"-L{link_so.parent}", f"-Wl,-rpath,{link_so.parent}", f"-l:{link_so.name}"])
-    subprocess.check_call(cmd, cwd=mod_dir)
-
-
 _IFACE = OriginalInterface(
     entry="cloudscouter",
     args=(
@@ -180,7 +170,7 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
     build_dir = tmp_path / "sdfg_build"
     build_dir.mkdir(parents=True, exist_ok=True)
     sdfg_drv_so = build_dir / "flux_sdfg_driver.so"
-    _compile_so(sdfg_drv_so, bindings_path, driver_path, mod_dir=build_dir, link_so=so_path)
+    gfortran_compile_so(sdfg_drv_so, bindings_path, driver_path, mod_dir=build_dir, link_so=so_path)
     sdfg_lib = ctypes.CDLL(str(sdfg_drv_so))
 
     # --- gfortran reference library ---
@@ -191,7 +181,7 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
     ref_drv_path = ref_dir / "ref_driver.f90"
     ref_drv_path.write_text(_REF_DRIVER)
     ref_so = ref_dir / "flux_ref.so"
-    _compile_so(ref_so, kern_path, ref_drv_path, mod_dir=ref_dir)
+    gfortran_compile_so(ref_so, kern_path, ref_drv_path, mod_dir=ref_dir)
     ref_lib = ctypes.CDLL(str(ref_so))
 
     klon, klev, nblocks = 4, 6, 3

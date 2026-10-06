@@ -4,12 +4,11 @@ Complements ``cloudsc_flux_bindings_e2e_test`` / ``struct_bindings_e2e_test``.
 """
 
 import ctypes
-import subprocess
 from pathlib import Path
 
 import numpy as np
 
-from tests._util import FLANG_PORTABLE_FFLAGS, build_sdfg
+from tests._util import build_sdfg, gfortran_compile_so
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -17,15 +16,6 @@ from dace_fortran.bindings import (
     OriginalInterface,
     emit_bindings,
 )
-
-
-def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):
-    cmd = ["gfortran", "-shared", "-fPIC", *FLANG_PORTABLE_FFLAGS, f"-J{mod_dir}"]
-    cmd.extend(str(s) for s in sources)
-    cmd.extend(["-o", str(out_so)])
-    if link_so is not None:
-        cmd.extend([f"-L{link_so.parent}", f"-Wl,-rpath,{link_so.parent}", f"-l:{link_so.name}"])
-    subprocess.check_call(cmd, cwd=mod_dir)
 
 
 def _build_sdfg_binding_lib(tmp_path, *, kernel_src, entry, sdfg_name, iface, sdfg_driver_src, drv_name, types_src=""):
@@ -56,7 +46,7 @@ def _build_sdfg_binding_lib(tmp_path, *, kernel_src, entry, sdfg_name, iface, sd
         srcs.append(tp)
     srcs += [bindings_path, drv_path]
     drv_so = build_dir / f"{drv_name}.so"
-    _compile_so(drv_so, *srcs, mod_dir=build_dir, link_so=so_path)
+    gfortran_compile_so(drv_so, *srcs, mod_dir=build_dir, link_so=so_path)
     return ctypes.CDLL(str(drv_so)), plan
 
 
@@ -74,7 +64,7 @@ def _build_ref_lib(tmp_path, *, kernel_src, ref_driver_src, name, types_src=""):
     d.write_text(ref_driver_src)
     srcs += [k, d]
     so = ref_dir / f"{name}_ref.so"
-    _compile_so(so, *srcs, mod_dir=ref_dir)
+    gfortran_compile_so(so, *srcs, mod_dir=ref_dir)
     return ctypes.CDLL(str(so))
 
 

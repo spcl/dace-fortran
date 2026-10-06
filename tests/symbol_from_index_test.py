@@ -3,30 +3,18 @@ interstate-edge assignment. Stricter than the current bridge: shape/loop-bound s
 as symbols already, but an "index-only scalar" (``ix`` in ``b(i) = a(ix); ix = ix + 1``) does not.
 """
 
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
-
+from tests._util import build_sdfg, f2py_compile
 
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "symbol_from_index.f90"
 
 
-def _f2py(src: Path, out_dir: Path, mod_name: str):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod_name)
-    return sys.modules[mod_name]
-
-
 def test_symbol_from_index(tmp_path):
-    mod = _f2py(_SRC_PATH, tmp_path / "ref", "idx_sym_ref")
+    mod = f2py_compile(_SRC_PATH, tmp_path / "ref", "idx_sym_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="idx_sym").build()

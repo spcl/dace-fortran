@@ -8,33 +8,30 @@ import pytest
 
 from tests._util import build_sdfg
 
-
 # ---------------------------------------------------------------------------
 # Arithmetic  --  parametrised over (kind, op, numpy-equivalent)
 # ---------------------------------------------------------------------------
 
 _COMPLEX_BIN_OPS = [
-    # (fortran_op, numpy_op, label, marks)
-    ("+", np.add, "add", ()),
-    ("-", np.subtract, "sub", ()),
-    ("*", np.multiply, "mul", ()),
+    # (fortran_op, numpy_op), id
+    pytest.param("+", np.add, id="add"),
+    pytest.param("-", np.subtract, id="sub"),
+    pytest.param("*", np.multiply, id="mul"),
     # complex '/' lowers to __divdc3/__divsc3 (Smith's algorithm); bridge recognizes the 4-real call
     # shape and reconstructs the complex operands.
-    ("/", np.divide, "div", ()),
+    pytest.param("/", np.divide, id="div"),
 ]
 
 _COMPLEX_KINDS = [
-    # (kind, np_dtype, fortran_decl, label)
-    (4, np.complex64, "complex(4)", "c4"),
-    (8, np.complex128, "complex(8)", "c8"),
+    # (kind, np_dtype, fortran_decl), id
+    pytest.param(4, np.complex64, "complex(4)", id="c4"),
+    pytest.param(8, np.complex128, "complex(8)", id="c8"),
 ]
 
 
-@pytest.mark.parametrize("kind,np_dtype,decl,klabel", _COMPLEX_KINDS, ids=[k[3] for k in _COMPLEX_KINDS])
-@pytest.mark.parametrize(
-    "fop,np_op,oplabel", [pytest.param(o[0], o[1], o[2], marks=o[3], id=o[2]) for o in _COMPLEX_BIN_OPS]
-)
-def test_complex_arithmetic(tmp_path: Path, kind, np_dtype, decl, klabel, fop, np_op, oplabel):
+@pytest.mark.parametrize("kind,np_dtype,decl", _COMPLEX_KINDS)
+@pytest.mark.parametrize("fop,np_op", _COMPLEX_BIN_OPS)
+def test_complex_arithmetic(tmp_path: Path, kind, np_dtype, decl, fop, np_op):
     """Complex arithmetic on length-N arrays, compared against numpy."""
     src = f"""
 subroutine main(n, a, b, out)
@@ -63,22 +60,22 @@ end subroutine main
 # ---------------------------------------------------------------------------
 
 _COMPLEX_UNARY_FUNCS = [
-    # (fortran_intrinsic, numpy_func, label)
-    ("SIN", np.sin, "sin"),
-    ("COS", np.cos, "cos"),
-    ("TAN", np.tan, "tan"),
-    ("SINH", np.sinh, "sinh"),
-    ("COSH", np.cosh, "cosh"),
-    ("TANH", np.tanh, "tanh"),
-    ("EXP", np.exp, "exp"),
-    ("LOG", np.log, "log"),
-    ("SQRT", np.sqrt, "sqrt"),
+    # (fortran_intrinsic, numpy_func), id
+    pytest.param("SIN", np.sin, id="sin"),
+    pytest.param("COS", np.cos, id="cos"),
+    pytest.param("TAN", np.tan, id="tan"),
+    pytest.param("SINH", np.sinh, id="sinh"),
+    pytest.param("COSH", np.cosh, id="cosh"),
+    pytest.param("TANH", np.tanh, id="tanh"),
+    pytest.param("EXP", np.exp, id="exp"),
+    pytest.param("LOG", np.log, id="log"),
+    pytest.param("SQRT", np.sqrt, id="sqrt"),
 ]
 
 
-@pytest.mark.parametrize("kind,np_dtype,decl,klabel", _COMPLEX_KINDS, ids=[k[3] for k in _COMPLEX_KINDS])
-@pytest.mark.parametrize("fname,np_func,label", _COMPLEX_UNARY_FUNCS, ids=[f[2] for f in _COMPLEX_UNARY_FUNCS])
-def test_complex_transcendentals(tmp_path: Path, kind, np_dtype, decl, klabel, fname, np_func, label):
+@pytest.mark.parametrize("kind,np_dtype,decl", _COMPLEX_KINDS)
+@pytest.mark.parametrize("fname,np_func", _COMPLEX_UNARY_FUNCS)
+def test_complex_transcendentals(tmp_path: Path, kind, np_dtype, decl, fname, np_func):
     """Each complex transcendental lowers to c<func> (kind=8) / c<func>f (kind=4); bridge maps both
     to the bare Python name."""
     src = f"""

@@ -98,8 +98,7 @@ def f2py(src_text: str, out_dir: Path, mod_name: str):
 
 def sdfg_call_args(sdfg, int_values: dict) -> dict:
     """Route each int in ``int_values`` to a plain int or length-1 int32 array per the
-    SDFG's Scalar-vs-Array classification.  Mirrors the helper in
-    ``icon/selected_loopnests/test_sdfg_equivalence.py``."""
+    SDFG's Scalar-vs-Array classification."""
     from dace.data import Scalar
 
     arglist = sdfg.arglist()

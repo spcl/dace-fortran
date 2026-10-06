@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tests._helpers import sdfg_call_args
 from tests._util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
@@ -45,22 +46,6 @@ def _sdfg_from_src(src: str, tmp: Path, name: str):
     return build_sdfg(src, tmp, name=name, pipeline="hlfir-propagate-shapes").build()
 
 
-def _sdfg_call_args(sdfg, int_values: dict) -> dict:
-    """Route each int arg to a plain int (Scalar) or length-1 numpy array (Array),
-    matching the SDFG's classification.  Mirrors the icon/selected_loopnests helper."""
-    from dace.data import Scalar
-
-    arglist = sdfg.arglist()
-    out = {}
-    for k, v in int_values.items():
-        desc = arglist.get(k)
-        if desc is None or isinstance(desc, Scalar):
-            out[k] = v
-        else:
-            out[k] = np.array([v], dtype=np.int32)
-    return out
-
-
 def test_cloudsc_lu_solver_sdfg_matches_f2py(tmp_path: Path):
     """LU forward+back substitute for the microphysics species block -- linear-algebra
     triple-nested loop, nclv-bounded."""
@@ -88,7 +73,7 @@ def test_cloudsc_lu_solver_sdfg_matches_f2py(tmp_path: Path):
     ref.lu_solver_microphysics(kidia, kfdia, zqlhs_ref, zqxn_ref)
 
     kw = dict(zqlhs=zqlhs_sdfg, zqxn=zqxn_sdfg)
-    kw.update(_sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv)))
+    kw.update(sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv)))
     sdfg(**kw)
 
     np.testing.assert_allclose(zqlhs_sdfg, zqlhs_ref, atol=1e-10, rtol=1e-10)
@@ -134,7 +119,7 @@ def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
     outs_ref = dict(zip(("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq"), out_tuple))
 
     kw = dict(ztp1=ztp1, pap=pap, **outs_sdfg, **consts)
-    kw.update(_sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, klev=klev)))
+    kw.update(sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, klev=klev)))
     sdfg(**kw)
 
     for k in outs_ref:
@@ -195,7 +180,7 @@ def test_cloudsc_autoconversion_snow_sdfg_matches_f2py(tmp_path: Path):
         laericeauto=laericeauto,
         **consts,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv, ncldqs=ncldqs, ncldqi=ncldqi)))
+    kw.update(sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv, ncldqs=ncldqs, ncldqi=ncldqi)))
     sdfg(**kw)
 
     np.testing.assert_allclose(zsnowaut_sdfg, zsnowaut_ref, atol=1e-12, rtol=1e-10)
@@ -270,7 +255,7 @@ def test_cloudsc_ice_supersat_sdfg_matches_f2py(tmp_path: Path):
         **consts,
     )
     kw.update(
-        _sdfg_call_args(
+        sdfg_call_args(
             sdfg,
             dict(
                 kidia=kidia,
@@ -402,7 +387,7 @@ def test_cloudsc_rain_evap_sdfg_matches_f2py(tmp_path: Path):
         zevap_out=zevap_sdfg,
         **consts,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv, ncldqv=ncldqv, ncldqr=ncldqr)))
+    kw.update(sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv, ncldqv=ncldqv, ncldqr=ncldqr)))
     sdfg(**kw)
 
     # rho**0.78 amplifies libm-vs-C++-codegen rounding diffs; ~1e-7 relative drift is
@@ -458,7 +443,7 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
         zfallsink=zfallsink, zsolqa=zsolqa, zsolqb=zsolqb, zqx=zqx, zqlhs=zqlhs_sdfg, zqxn=zqxn_sdfg, zepsec=zepsec
     )
     kw.update(
-        _sdfg_call_args(
+        sdfg_call_args(
             sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, klev=klev, nclv=nclv, ncldqv=ncldqv, jk_idx=jk_idx)
         )
     )
@@ -532,7 +517,7 @@ def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
         zepsec=zepsec,
     )
     kw.update(
-        _sdfg_call_args(
+        sdfg_call_args(
             sdfg,
             dict(
                 kidia=kidia, kfdia=kfdia, klon=klon, klev=klev, nclv=nclv, ncldqr=ncldqr, ncldqs=ncldqs, ncldtop=ncldtop
@@ -566,7 +551,7 @@ def test_cloudsc_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
     y_ref = ref.pow_kernel(x, exponent)
     y_sdfg = np.zeros(n, dtype=np.float64, order="F")
     kw = dict(x=x, exponent_val=exponent, y=y_sdfg)
-    kw.update(_sdfg_call_args(sdfg, dict(n=n)))
+    kw.update(sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
     np.testing.assert_allclose(
@@ -600,7 +585,7 @@ def test_cloudsc_zsolqa_accumulator_sdfg_matches_f2py(tmp_path: Path):
 
     kw = dict(zevap=zevap, zsnowsrc=zsnowsrc, zsolqa=zsolqa_sdfg)
     kw.update(
-        _sdfg_call_args(
+        sdfg_call_args(
             sdfg, dict(n=n, nclv=nclv, kidia=kidia, kfdia=kfdia, ncldqv=ncldqv, ncldqr=ncldqr, ncldqs=ncldqs)
         )
     )
@@ -633,7 +618,7 @@ def test_cloudsc_int_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
     y2_sdfg = np.zeros(n, dtype=np.float64, order="F")
     y3_sdfg = np.zeros(n, dtype=np.float64, order="F")
     kw = dict(x=x, y2=y2_sdfg, y3=y3_sdfg)
-    kw.update(_sdfg_call_args(sdfg, dict(n=n)))
+    kw.update(sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
     np.testing.assert_allclose(y2_sdfg, y2_ref, atol=1e-14, rtol=1e-14, err_msg="int_pow x**2 diverges")
@@ -672,7 +657,7 @@ def test_cloudsc_zterm2_kernel_sdfg_matches_f2py(tmp_path: Path):
         rcl_const6s=rcl_const6s,
         zterm2=zterm2_sdfg,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(n=n)))
+    kw.update(sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
     np.testing.assert_allclose(
@@ -736,7 +721,7 @@ def test_cloudsc_zbeta_kernel_sdfg_matches_f2py(tmp_path: Path):
         rcl_const4r=rcl_const4r,
         zbeta=zbeta_sdfg,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(n=n)))
+    kw.update(sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
     np.testing.assert_allclose(
@@ -768,7 +753,7 @@ def test_cloudsc_zaplusb_kernel_sdfg_matches_f2py(tmp_path: Path):
     kw = dict(
         zvpice=zvpice, ztp1=ztp1, pap=pap, rcl_apb1=rcl_apb1, rcl_apb2=rcl_apb2, rcl_apb3=rcl_apb3, zaplusb=zaplusb_sdfg
     )
-    kw.update(_sdfg_call_args(sdfg, dict(n=n)))
+    kw.update(sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
     np.testing.assert_allclose(

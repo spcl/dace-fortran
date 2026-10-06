@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tests._helpers import sdfg_call_args
 from tests._util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
@@ -124,22 +125,6 @@ def test_icon_loopnest_2_sdfg_matches_f2py(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def _sdfg_call_args(sdfg, int_values: dict) -> dict:
-    """Route each int arg to a plain int or length-1 numpy array, based on the SDFG
-    descriptor's symbol/scalar vs Array classification."""
-    from dace.data import Scalar
-
-    arglist = sdfg.arglist()
-    out = {}
-    for k, v in int_values.items():
-        desc = arglist.get(k)
-        if desc is None or isinstance(desc, Scalar):
-            out[k] = v
-        else:
-            out[k] = np.array([v], dtype=np.int32)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Loopnest 3  --  direct stencil with deepatmo vertical profiles
 # ---------------------------------------------------------------------------
@@ -182,7 +167,7 @@ def test_icon_loopnest_3_sdfg_matches_f2py(tmp_path: Path):
         nlev=nlev,
         nblks_e=nblks_e,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
+    kw.update(sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 
     np.testing.assert_allclose(z_sdfg, z_ref, atol=1e-12, rtol=0)
@@ -233,7 +218,7 @@ def test_icon_loopnest_5_sdfg_matches_f2py(tmp_path: Path):
         nblks_e=nblks_e,
     )
     kw.update(
-        _sdfg_call_args(sdfg, dict(i_startblk=i_startblk, i_endblk=i_endblk, i_startidx=i_startidx, i_endidx=i_endidx))
+        sdfg_call_args(sdfg, dict(i_startblk=i_startblk, i_endblk=i_endblk, i_startidx=i_startidx, i_endidx=i_endidx))
     )
     sdfg(**kw)
 
@@ -268,7 +253,7 @@ def test_icon_loopnest_6_sdfg_matches_f2py(tmp_path: Path):
     ref.kernel_flat(levmask_int, levelmask_ref, jk_start, jk_end, i_startblk, i_endblk)
 
     kw = dict(levmask=levmask_bool.astype(np.uint32), levelmask=levelmask_sdfg, nlev=nlev, nblks_c=nblks_c)
-    kw.update(_sdfg_call_args(sdfg, dict(jk_start=jk_start, jk_end=jk_end, i_startblk=i_startblk, i_endblk=i_endblk)))
+    kw.update(sdfg_call_args(sdfg, dict(jk_start=jk_start, jk_end=jk_end, i_startblk=i_startblk, i_endblk=i_endblk)))
     sdfg(**kw)
 
     np.testing.assert_array_equal(levelmask_sdfg.astype(np.int32), levelmask_ref)
@@ -351,7 +336,7 @@ def test_icon_loopnest_1_sdfg_matches_f2py(tmp_path: Path):
         nblks_c=nblks_c,
         nblks_v=nblks_v,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
+    kw.update(sdfg_call_args(sdfg, dict(i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 
     np.testing.assert_allclose(z_sdfg, z_ref, atol=1e-12, rtol=0)
@@ -442,7 +427,7 @@ def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
         # extent, so add_descriptors synthesises vn_ie_d1; caller passes the actual value
         vn_ie_d1=nlev + 1,
     )
-    kw.update(_sdfg_call_args(sdfg, dict(ntnd=ntnd, i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
+    kw.update(sdfg_call_args(sdfg, dict(ntnd=ntnd, i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)
 
     np.testing.assert_allclose(ddt_sdfg, ddt_ref, atol=1e-12, rtol=0)

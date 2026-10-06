@@ -8,7 +8,7 @@ import numpy as np
 
 from tests._util import build_sdfg
 from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
-from dace_fortran.pipelines import verify_numerics
+from dace_fortran.pipelines import accepted_call_args, verify_numerics
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
 _ENTRY = "cloudscouter"
@@ -49,11 +49,6 @@ def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
     return out
 
 
-def accepted_names(sdfg) -> set:
-    """Names the SDFG can be called with: its arglist plus its free symbols."""
-    return set(sdfg.arglist()) | {str(s) for s in sdfg.free_symbols}
-
-
 def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42, transform=None, verify_preopt=False):
     """Build the SDFG and run both the f2py reference and the SDFG on identical seeded physical inputs.
 
@@ -75,9 +70,9 @@ def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42
     preopt = copy.deepcopy(sdfg) if verify_preopt else None
     baked = set()
     if transform is not None:
-        before = accepted_names(sdfg)
+        before = accepted_call_args(sdfg)
         transform(sdfg)
-        baked = before - accepted_names(sdfg)
+        baked = before - accepted_call_args(sdfg)
 
     rng = np.random.default_rng(seed)
     inputs = get_inputs_physical(rng)

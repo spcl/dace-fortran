@@ -13,31 +13,6 @@ import pytest
 
 from dace_fortran.llvm_toolchain import flang_names
 
-# standard NVIDIA HPC SDK install prefixes; version segment (e.g. 25.7) varies by release.
-_NVHPC_PREFIXES = (
-    "/opt/nvidia/hpc_sdk/Linux_x86_64",
-    "/opt/nvhpc/Linux_x86_64",
-    "/usr/local/nvhpc/Linux_x86_64",
-)
-
-
-def _find_nvfortran() -> Optional[Path]:
-    """Locate nvfortran on PATH or under the standard NVHPC prefixes; picks the newest version dir when several are installed."""
-    p = shutil.which("nvfortran")
-    if p is not None:
-        return Path(p)
-    for prefix in _NVHPC_PREFIXES:
-        prefix_path = Path(prefix)
-        if not prefix_path.is_dir():
-            continue
-        versions = sorted((d for d in prefix_path.iterdir() if d.is_dir()), key=lambda d: d.name, reverse=True)
-        for version_dir in versions:
-            candidate = version_dir / "compilers" / "bin" / "nvfortran"
-            if candidate.is_file():
-                return candidate
-    return None
-
-
 # LLVM-flang binary names probed in order, for every supported LLVM major; distributions differ on which spelling is canonical.
 _FLANG_NAMES = tuple(flang_names())
 

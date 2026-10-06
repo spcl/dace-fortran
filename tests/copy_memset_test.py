@@ -5,30 +5,18 @@ and go straight to library nodes on FaCe.  Compared numerically against
 the gfortran/f2py-compiled reference on seeded random input.
 """
 
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
-
+from tests._util import build_sdfg, f2py_compile
 
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "copy_memset.f90"
 
 
-def _f2py(src: Path, out_dir: Path, mod_name: str):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod_name)
-    return sys.modules[mod_name]
-
-
 def test_copy_and_memset_numerical(tmp_path):
-    mod = _f2py(_SRC_PATH, tmp_path / "ref", "copy_and_memset_ref")
+    mod = f2py_compile(_SRC_PATH, tmp_path / "ref", "copy_and_memset_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(
@@ -66,8 +54,8 @@ def test_copy_and_memset_structure(tmp_path):
         _SRC_PATH.read_text(), sdfg_dir, name="copy_and_memset", pipeline="hlfir-propagate-shapes"
     ).build()
 
-    from dace.sdfg.state import LoopRegion, SDFGState
     from dace.libraries.standard.nodes import CopyLibraryNode, FillLibraryNode
+    from dace.sdfg.state import LoopRegion, SDFGState
 
     def iter_states(region):
         for n in region.nodes():

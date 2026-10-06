@@ -4,36 +4,14 @@ consumer reads an array saved in an EARLY loop together with one produced in a L
 loop, across an intervening ``LoopRegion``.  Compared element-wise to f2py/gfortran;
 escalates to long multi-operand tasklets and large producer/consumer state distance."""
 
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
+from tests._util import build_sdfg, f2py_compile
 
-
-def _f2py(src_text: str, out_dir: Path, mod: str):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{mod}.f90").write_text(src_text)
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "numpy.f2py",
-            "-c",
-            f"{mod}.f90",
-            "-m",
-            mod,
-            "--quiet",
-            "--f90flags=-O0 -fno-fast-math -ffp-contract=off",
-        ],
-        cwd=out_dir,
-    )
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod)
-    return sys.modules[mod]
+# Strict-FP flags for the gfortran reference: no FMA contraction or fast-math reassociation.
+_REF_F90FLAGS = "-O0 -fno-fast-math -ffp-contract=off"
 
 
 def _sdfg_kw(sdfg, ints: dict) -> dict:
@@ -109,7 +87,7 @@ end module prefix_scan_mod
 def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
     """``flux(jk+1)=flux(jk)+(qn-q0)*g`` where ``q0`` is saved early and
     ``qn`` produced in a later loop, per block.  Must equal gfortran."""
-    ref = _f2py(_PREFIX_SCAN, tmp_path / "ref", "scan_ref")
+    ref = f2py_compile(_PREFIX_SCAN, tmp_path / "ref", "scan_ref", extra_f90flags=_REF_F90FLAGS)
     sdfg = build_sdfg(_PREFIX_SCAN, _mkd(tmp_path / "sdfg"), name="outer", entry="prefix_scan_mod::outer").build()
 
     klon, klev, nb = 1, 40, 4
@@ -185,7 +163,7 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
     """Long (8-input + self) accumulate expression mixing early-saved (``s0``) and
     late-produced (``sn``) operands, prefix-scanned.  Pins the CLOUDSC
     ``ZQXN2D-ZQX0+...`` increment shape."""
-    ref = _f2py(_LONG_TASKLET, tmp_path / "ref", "long_ref")
+    ref = f2py_compile(_LONG_TASKLET, tmp_path / "ref", "long_ref", extra_f90flags=_REF_F90FLAGS)
     sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern", entry="long_tasklet_mod::kern").build()
 
     n, klev = 1, 50

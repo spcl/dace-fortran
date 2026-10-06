@@ -12,9 +12,7 @@ so the op name survives to the builder.
 
 from pathlib import Path
 
-
 from tests._util import build_sdfg
-
 
 _MPI_OP_MODULE = """
 module mpiops
@@ -27,10 +25,6 @@ end module
 
 def _first(sdfg, cls):
     return next(n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls))
-
-
-def _all(sdfg, cls):
-    return [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls)]
 
 
 def _build(src, tmp_path, name, entry):
