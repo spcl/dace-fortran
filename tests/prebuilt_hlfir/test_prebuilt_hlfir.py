@@ -32,7 +32,9 @@ def test_jacobi_autotools_bear(tmp_path: Path):
     shutil.copytree(_JACOBI_DIR, build)
 
     subprocess.check_call(["autoreconf", "--install"], cwd=build)
-    subprocess.check_call(["./configure"], cwd=build)
+    # configure.ac asks for the MPI wrapper, but AC_PROG_FC prefers an inherited $FC (``spack load gcc`` exports
+    # the bare gfortran, which cannot find mpi.mod): name the wrapper explicitly.
+    subprocess.check_call(["./configure", "FC=mpif90"], cwd=build)
     # serial make so .mod files land in USE-dep order; bear records each compiler exec, writing the DB even on a partial build.
     subprocess.check_call(["bear", "--", "make"], cwd=build)
 
