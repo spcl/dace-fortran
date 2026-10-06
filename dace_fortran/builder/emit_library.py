@@ -142,9 +142,21 @@ def add_copy_node(builder: SDFGBuilder, ctx: Ctx, state: SDFGState, src_name: st
     state.add_edge(cp, output_connector(CopyLibraryNode), tgt_access, None, tgt_memlet)
 
 
+def _state_for_whole_write(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, data: str) -> SDFGState:
+    """Current state, or a fresh successor when it already accesses ``data``: the write would reuse that state's
+    cached access node, so an earlier read of ``data`` (``out = psic`` before ``psic = 0``) would read it after the
+    write."""
+    from dace.sdfg.nodes import AccessNode
+
+    state = ctx.flush_and_ensure(builder, region)
+    if any(isinstance(nd, AccessNode) and nd.data == data for nd in state.nodes()):
+        state = ctx.new_state(builder, region)
+    return state
+
+
 def emit_copy(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Whole-array ``b = a`` -> ``CopyLibraryNode``."""
-    state = ctx.flush_and_ensure(builder, region)
+    state = _state_for_whole_write(builder, ctx, region, n.target)
     add_copy_node(builder, ctx, state, n.reduce_src, n.target)  # buildCopyNode stored the source in reduce_src
 
 
@@ -153,14 +165,13 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     later element write to the same array doesn't race the array-wide write in one state's DAG."""
     from dace.libraries.standard.nodes import FillLibraryNode
 
-    state = ctx.flush_and_ensure(builder, region)
-
     tgt_name = n.target
     # Section-alias dummies route memset through the source array, writing the slab
     # view_dim_map carves out.
     v_tgt = builder.arrays.get(tgt_name)
     if v_tgt is not None and v_tgt.role == "section_alias":
         src_name = v_tgt.view_source
+        state = _state_for_whole_write(builder, ctx, region, src_name)
         src_desc = ctx.sdfg.arrays[src_name]
         slab_parts = []
         for src_dim, slot, dummy_dim in iter_view_dim_map(v_tgt.view_dim_map):
@@ -178,6 +189,7 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         ctx.new_state(builder, region)
         return
 
+    state = _state_for_whole_write(builder, ctx, region, tgt_name)
     tgt_desc = ctx.sdfg.arrays[tgt_name]
 
     ms = FillLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")

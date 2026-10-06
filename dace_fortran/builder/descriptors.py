@@ -671,7 +671,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         # closed-form expr) -- ``ext == syn`` / ``not isidentifier`` skip those.
         for i, ext in enumerate(syms):
             syn = f"{v.fortran_name}_d{i}"
-            if ext == syn or not ext.isidentifier():
+            # A section dummy's extent is the section's, often a literal (``f_in(:, 1:1)``) or a closed form.
+            if ext == syn or ext == "?" or (not ext.isidentifier() and v.role not in ("section_alias", "view_alias")):
                 continue
             builder.extent_aliases[syn] = resolve_object_member_expr(builder, str(ext))
 

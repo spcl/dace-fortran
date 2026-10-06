@@ -3237,6 +3237,17 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
               // ``fir.convert`` to re-shape, and needs
               // the view_alias path's stride remapping.
               bool const rank_matches = ((int)surviving == v.rank);
+              // An assumed-shape dummy's extents are the section's: SIZE(f_in, 1) renders f_in_d0, which nothing
+              // binds otherwise (it leaks as a program argument, or a view is sized by a free symbol).
+              if (rank_matches && (int)v.shape_symbols.size() == v.rank && sec.getShape())
+                if (auto shp = mlir::dyn_cast_or_null<fir::ShapeOp>(sec.getShape().getDefiningOp()))
+                  if ((int)shp.getExtents().size() == v.rank)
+                    for (int d = 0; d < v.rank; ++d) {
+                      auto& sym = v.shape_symbols[d];
+                      if (sym != "?" && sym != v.fortran_name + "_d" + std::to_string(d)) continue;
+                      std::string const ext = traceExtentExpr(shp.getExtents()[d]);
+                      if (!ext.empty()) sym = ext;
+                    }
               if (is_trivial_section && rank_matches) {
                 // Trivial section: name + index suffix
                 // alias.  No SDFG view registration  --

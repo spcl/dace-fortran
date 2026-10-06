@@ -151,6 +151,10 @@ def resolve_section_alias(builder: SDFGBuilder, array_name: str, access: AccessL
         index_exprs=new_exprs,
         index_vars=new_vars,
     )
+    # A section of a section dummy (``CALL inner(f_in(:, 1:1))`` inside a callee whose ``f_in`` is itself a section)
+    # names another section_alias as its source: keep splicing until real storage.
+    if src != array_name:
+        return resolve_section_alias(builder, src, spliced)
     return AliasResolution(src, spliced)
 
 
