@@ -32,6 +32,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm_compat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -585,8 +586,9 @@ void flattenRaggedAosMember(hlfir::DeclareOp decl, llvm::StringRef memName, cons
     auto seq = fir::SequenceType::get(dims, eleTy);
     auto boxTy = fir::BoxType::get(fir::HeapType::get(seq));
     auto slot = b.create<fir::AllocaOp>(loc, boxTy);
-    auto var = b.create<hlfir::DeclareOp>(loc, slot.getResult(), name, mlir::Value{}, mlir::ValueRange{}, mlir::Value{},
-                                          mlir::Value{}, 0, allocatable);
+    auto var = hlfir_bridge::createDeclare(b, loc, slot.getType(), slot.getType(), slot.getResult(),
+                                           /*shape=*/mlir::Value{}, /*typeparams=*/mlir::ValueRange{},
+                                           b.getStringAttr(name), allocatable);
     auto mem = b.create<fir::AllocMemOp>(loc, seq, name + ".alloc", mlir::ValueRange{}, runtime);
     auto shape = b.create<fir::ShapeOp>(loc, extents);
     b.create<fir::StoreOp>(loc, b.create<fir::EmboxOp>(loc, boxTy, mem.getResult(), shape.getResult()).getResult(),

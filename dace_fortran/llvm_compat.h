@@ -25,22 +25,22 @@ namespace hlfir_bridge {
 /// (FortranVariableStorageOpInterface) plus ``skip_rebox`` / ``dummy_arg_no``, so
 /// its generated builder takes four more arguments than LLVM 21's.  All four are
 /// absent/default here: these declares describe freshly allocated local temps.
+/// ``fortranAttrs`` marks such a temp (e.g. ``allocatable`` for a heap box slot).
 inline hlfir::DeclareOp createDeclare(mlir::OpBuilder& b, mlir::Location loc, mlir::Type resultType0,
                                       mlir::Type resultType1, mlir::Value memref, mlir::Value shape,
-                                      mlir::ValueRange typeparams, mlir::StringAttr uniqName) {
+                                      mlir::ValueRange typeparams, mlir::StringAttr uniqName,
+                                      fir::FortranVariableFlagsAttr fortranAttrs = {}) {
 #if LLVM_VERSION_MAJOR >= 22
   return b.create<hlfir::DeclareOp>(loc, resultType0, resultType1, memref, shape, typeparams,
                                     /*dummy_scope=*/mlir::Value{},
                                     /*storage=*/mlir::Value{},
-                                    /*storage_offset=*/static_cast<std::uint64_t>(0), uniqName,
-                                    /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
+                                    /*storage_offset=*/static_cast<std::uint64_t>(0), uniqName, fortranAttrs,
                                     /*data_attr=*/cuf::DataAttributeAttr{},
                                     /*skip_rebox=*/mlir::UnitAttr{},
                                     /*dummy_arg_no=*/mlir::IntegerAttr{});
 #else
   return b.create<hlfir::DeclareOp>(loc, resultType0, resultType1, memref, shape, typeparams,
-                                    /*dummy_scope=*/mlir::Value{}, uniqName,
-                                    /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
+                                    /*dummy_scope=*/mlir::Value{}, uniqName, fortranAttrs,
                                     /*data_attr=*/cuf::DataAttributeAttr{});
 #endif
 }
