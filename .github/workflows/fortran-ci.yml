@@ -101,7 +101,7 @@ jobs:
       run: |
         ulimit -s 65536
         pytest -n auto --dist loadgroup --max-worker-restart=0 $PYTEST_OPTS \
-          -m "not mpi and not long and not integration and not e2e" \
+          -m "not mpi and not long and not integration and not e2e and not gpu" \
           --ignore=tests/cloudsc/full --ignore=tests/cloudsc/variants --ignore=tests/qe/h_psi \
           --timeout=300 --timeout-method=thread -o faulthandler_timeout=420 \
           --cov-report=xml --cov=dace_fortran tests/

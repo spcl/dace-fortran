@@ -15,6 +15,7 @@ import ctypes
 import re
 import subprocess
 from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Sequence
 
@@ -28,8 +29,37 @@ from dace_fortran.bindings.frozen_signature import get_frozen_signature
 if TYPE_CHECKING:
     from dace import SDFG
 
-#: Mandatory flags -- a shared, position-independent, long-line module.
-_SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
+
+class CompilerFamily(Enum):
+    """The flag dialect of a Fortran compiler."""
+
+    GNU = auto()  # gfortran
+    LLVM = auto()  # flang, ROCm amdflang
+
+
+@dataclass(frozen=True, slots=True)
+class FortranCompiler:
+    """The compiler that builds the binding library, and the flag dialect it speaks."""
+
+    executable: str
+    family: CompilerFamily
+
+
+GFORTRAN = FortranCompiler("gfortran", CompilerFamily.GNU)
+
+
+class BuildMode(Enum):
+    """Optimisation flags of the binding library: bit-reproducible, or fast."""
+
+    DEBUG = auto()
+    RELEASE = auto()
+
+
+#: Mandatory flags besides ``-shared`` -- position-independent, long-line sources (flang has no line limit to lift).
+_SOURCE_FLAGS = {
+    CompilerFamily.GNU: ("-fPIC", "-ffree-line-length-none"),
+    CompilerFamily.LLVM: ("-fPIC",),
+}
 
 #: True when a source line is a module-level variable declaration carrying
 #: ALLOCATABLE (i.e. a deferred-shape array) without a TARGET attribute.
@@ -99,12 +129,14 @@ def _ensure_target_on_module_deferred_arrays(text: str) -> str:
 
 #: Optimised + debug info + strict IEEE (no fast-math/fp-contract,
 #: rounding-aware) so SDFG-vs-reference comparisons stay bit-reproducible.
-_DEBUG_FLAGS = ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off", "-frounding-math")
+#: flang has no ``-frounding-math``; it keeps the default rounding mode anyway.
+_DEBUG_FLAGS = {
+    CompilerFamily.GNU: ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off", "-frounding-math"),
+    CompilerFamily.LLVM: ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off"),
+}
 
 #: -O3 -ffast-math -- trades IEEE reproducibility for speed.
 _RELEASE_FLAGS = ("-O3", "-ffast-math")
-
-_MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
 
 def compiled_init_symbols(sdfg_so: Path, sdfg_name: str) -> tuple[str, ...] | None:
@@ -152,7 +184,7 @@ def build_fortran_library(
     name: str | None = None,
     prelude_sources: Sequence[str | Path] = (),
     extra_sources: Sequence[str | Path] = (),
-    mode: str = "debug",
+    mode: BuildMode = BuildMode.DEBUG,
     flags: Sequence[str] | None = None,
     extra_flags: Sequence[str] = (),
     verify: bool = True,
@@ -160,7 +192,7 @@ def build_fortran_library(
     bind_c_shim_debug_prints: bool = False,
     bind_c_shim_module_symbol_forward: Sequence[tuple[str, str, str, int]] = (),
     directive: Directive = Directive.OPENACC,
-    fortran_compiler: str = "gfortran",
+    fortran_compiler: FortranCompiler = GFORTRAN,
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
@@ -189,10 +221,10 @@ def build_fortran_library(
 
     if flags is not None:
         opt_flags = tuple(flags)
-    elif mode in _MODE_FLAGS:
-        opt_flags = _MODE_FLAGS[mode]
+    elif mode is BuildMode.DEBUG:
+        opt_flags = _DEBUG_FLAGS[fortran_compiler.family]
     else:
-        raise ValueError(f"unknown mode {mode!r}; expected 'debug', 'release', or an explicit flags= list")
+        opt_flags = _RELEASE_FLAGS
 
     frozen = get_frozen_signature(sdfg)
     if frozen is None:
@@ -263,8 +295,9 @@ def build_fortran_library(
 
     # gfortran compiles left-to-right, no reordering: deps before, users after.
     cmd = [
-        fortran_compiler,
-        *_SHARED_FLAGS,
+        fortran_compiler.executable,
+        "-shared",
+        *_SOURCE_FLAGS[fortran_compiler.family],
         *opt_flags,
         *extra_flags,
         "-fopenmp",
