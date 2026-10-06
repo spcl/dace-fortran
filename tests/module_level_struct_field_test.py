@@ -315,6 +315,48 @@ end module m
     assert out[0] == 8.0
 
 
+def test_member_array_elements_as_loop_bounds_through_a_dummy(tmp_path):
+    """``DO i = smap % lb(1), smap % ub(1)`` in a callee whose ``smap`` dummy is a module record (QE
+    ``get_sticks``): the bounds read elements of the members, not of the record."""
+    import numpy as np
+
+    src = """
+module smapmod
+  type :: sticks
+    integer :: lb(3) = 0
+    integer :: ub(3) = 0
+  end type
+  type(sticks) :: smap_exx
+end module smapmod
+
+module m
+  use smapmod, only: sticks
+contains
+  subroutine fill(smap, out)
+    type(sticks), intent(inout) :: smap
+    real(8), intent(inout) :: out
+    integer :: i, j
+    out = 0
+    do j = smap % lb(2), smap % ub(2)
+      do i = smap % lb(1), smap % ub(1)
+        out = out + 1
+      end do
+    end do
+  end subroutine
+  subroutine k(out)
+    use smapmod, only: smap_exx
+    real(8), intent(out) :: out
+    call fill(smap_exx, out)
+  end subroutine
+end module m
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="k", entry="m::k").build()
+    assert "smap_exx" not in {str(s) for s in sdfg.free_symbols}
+    out = np.zeros(1)
+    sdfg(out=out, smap_exx_lb=np.array([2, 1, 0], dtype=np.int32), smap_exx_ub=np.array([5, 3, 0], dtype=np.int32))
+    assert out[0] == 12.0
+
+
 if __name__ == "__main__":
     import pytest
 

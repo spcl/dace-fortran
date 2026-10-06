@@ -1867,7 +1867,8 @@ std::string buildExpr(mlir::Value val, int d) {
       auto parent = traceToDecl(dg.getMemref());
       if (!parent.empty()) return parent + "_" + comp.getValue().str();
     }
-    auto name = traceToDecl(dg.getMemref());
+    // ``s % lb(1)``: the member names the element, not the record.
+    auto name = traceToDecl(comp ? dg.getResult() : dg.getMemref());
     if (name.empty()) name = traceToDecl(dg.getResult());
     if (name.empty()) return "?";
     auto indices = dg.getIndices();

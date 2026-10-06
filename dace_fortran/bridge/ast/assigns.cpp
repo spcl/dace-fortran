@@ -137,7 +137,8 @@ std::string buildIndexExpr(mlir::Value v, int d) {
           if (flatName.empty()) return "?";
           return internPosSymbol(flatName, 1);
         }
-        auto arrName = resolveIndex(dg.getMemref());
+        // ``s % lb(1)`` carries the component and the index in one designate: name the member, not the record.
+        auto arrName = dg.getComponentAttr() ? traceToDecl(dg.getResult()) : resolveIndex(dg.getMemref());
         if (arrName.empty()) arrName = traceToDecl(dg.getMemref());
         if (arrName.empty()) return "?";
         // Constant-indexed array element used as an index / bound
