@@ -62,7 +62,7 @@ from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import json
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
@@ -87,6 +87,19 @@ class Residency(Enum):
 
 DEVICE = Residency.DEVICE
 HOST = Residency.HOST
+
+
+class Directive(Enum):
+    """The directive language a transfer plan is rendered in.
+
+    ``OPENACC`` is what nvfortran (and ICON) speak.  ``OPENMP`` renders the same plan as OpenMP offload
+    (``target enter/exit data``, ``target update``, ``use_device_addr``) for compilers without OpenACC offload, e.g.
+    ROCm amdflang on MI300.  The caller picks one; nothing is inferred from the compiler.
+    """
+
+    OPENACC = auto()
+    OPENMP = auto()
+
 
 # ICON launches its dycore kernels on ASYNC(1); putting our copies on the
 # same queue orders them after ICON's in-flight work with no extra fence.
@@ -386,8 +399,14 @@ def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
     )
 
 
-def render_data_open(plan: AccTransferPlan, indent: str = "  ") -> list:
-    """``!$ACC DATA`` opener staging the host caller's buffers onto the device.
+#: OpenMP ``target enter data`` / ``target exit data`` map types per data-region clause.
+_OMP_ENTER_MAP = {"COPYIN": "to", "COPY": "to", "COPYOUT": "alloc"}
+_OMP_EXIT_MAP = {"COPYIN": "release", "COPY": "from", "COPYOUT": "from"}
+
+
+def render_data_open(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
+    """Opener staging the host caller's buffers onto the device: an ``!$ACC DATA`` region, or one
+    ``!$omp target enter data`` per buffer.
 
     One clause per line: the velocity wrapper moves ~100 buffers, and a single
     directive line naming them all would blow past any free-form line limit.
@@ -395,15 +414,22 @@ def render_data_open(plan: AccTransferPlan, indent: str = "  ") -> list:
     pairs = plan.data_region
     if not pairs:
         return []
+    if directive is Directive.OPENMP:
+        return [f"{indent}!$omp target enter data map({_OMP_ENTER_MAP[clause]}: {name})" for clause, name in pairs]
     lines = [f"{indent}!$ACC DATA &"]
     lines += [f"{indent}!$ACC   {clause}({name}) &" for clause, name in pairs[:-1]]
     clause, name = pairs[-1]
     return lines + [f"{indent}!$ACC   {clause}({name})"]
 
 
-def render_data_close(plan: AccTransferPlan, indent: str = "  ") -> list:
-    """Closer matching :func:`render_data_open`."""
-    return [f"{indent}!$ACC END DATA"] if plan.data_region else []
+def render_data_close(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
+    """Closer matching :func:`render_data_open`; OpenMP copies the written buffers back and releases the rest."""
+    pairs = plan.data_region
+    if not pairs:
+        return []
+    if directive is Directive.OPENMP:
+        return [f"{indent}!$omp target exit data map({_OMP_EXIT_MAP[clause]}: {name})" for clause, name in pairs]
+    return [f"{indent}!$ACC END DATA"]
 
 
 def _directive(keyword: str, names: Sequence[str], indent: str) -> list:
@@ -411,31 +437,45 @@ def _directive(keyword: str, names: Sequence[str], indent: str) -> list:
     return [f"{indent}!$ACC {keyword}({name}) ASYNC({ACC_QUEUE})" for name in names]
 
 
-def render_pre_call(plan: AccTransferPlan, indent: str = "  ") -> list:
+def render_pre_call(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
     """Directive lines between the entry timer read and the SDFG call."""
+    if directive is Directive.OPENMP:
+        return [f"{indent}!$omp target update from({name})" for name in plan.update_host]
     return _directive("UPDATE HOST", plan.update_host, indent)
 
 
-def render_post_call(plan: AccTransferPlan, indent: str = "  ") -> list:
+def render_post_call(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
     """Directive lines between the SDFG call and the exit sync."""
+    if directive is Directive.OPENMP:
+        return [f"{indent}!$omp target update to({name})" for name in plan.update_device]
     return _directive("UPDATE DEVICE", plan.update_device, indent)
 
 
-def render_host_data_open(plan: AccTransferPlan, indent: str = "  ") -> list:
-    """``HOST_DATA USE_DEVICE`` opener for the drift-rule arguments."""
+def render_host_data_open(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
+    """Opener of the region handing the SDFG the device addresses: ``HOST_DATA USE_DEVICE``, or
+    ``target data use_device_addr`` with one name per line."""
     if not plan.use_device:
         return []
+    if directive is Directive.OPENMP:
+        names = plan.use_device
+        if len(names) == 1:
+            return [f"{indent}!$omp target data use_device_addr({names[0]})"]
+        lines = [f"{indent}!$omp target data use_device_addr({names[0]}, &"]
+        lines += [f"{indent}!$omp&   {name}, &" for name in names[1:-1]]
+        return lines + [f"{indent}!$omp&   {names[-1]})"]
     return [f"{indent}!$ACC HOST_DATA USE_DEVICE({', '.join(plan.use_device)})"]
 
 
-def render_host_data_close(plan: AccTransferPlan, indent: str = "  ") -> list:
+def render_host_data_close(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
     """Closer matching :func:`render_host_data_open`."""
     if not plan.use_device:
         return []
+    if directive is Directive.OPENMP:
+        return [f"{indent}!$omp end target data"]
     return [f"{indent}!$ACC END HOST_DATA"]
 
 
-def render_sync(plan: AccTransferPlan, indent: str = "  ") -> list:
+def render_sync(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
     """The sync line that must precede each ``SYSTEM_CLOCK`` read.
 
     ICON launches its kernels on ``ASYNC(1)`` and our copies join the
@@ -445,4 +485,6 @@ def render_sync(plan: AccTransferPlan, indent: str = "  ") -> list:
     landed.  Other queues never carry our traffic, so they are not
     drained.
     """
+    if directive is Directive.OPENMP:
+        return []  # OpenMP's target update is synchronous: nothing is left in flight
     return [f"{indent}!$ACC WAIT({ACC_QUEUE})"] if plan.active else []

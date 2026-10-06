@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Sequence
 
+from dace_fortran.bindings.acc_transfers import Directive
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.emit_bindings import emit_bindings
 from dace_fortran.bindings.flatten_plan import FlattenPlan
@@ -158,6 +159,8 @@ def build_fortran_library(
     bind_c_shim: bool = False,
     bind_c_shim_debug_prints: bool = False,
     bind_c_shim_module_symbol_forward: Sequence[tuple[str, str, str, int]] = (),
+    directive: Directive = Directive.OPENACC,
+    fortran_compiler: str = "gfortran",
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
@@ -171,6 +174,10 @@ def build_fortran_library(
     ``bind_c_shim=True`` auto-generates and links a ``bind(c)`` C-ABI
     entry point (flat + inline-flat-struct dummies only; raises
     :class:`UnsupportedShimInterfaceError` otherwise).
+
+    ``directive`` picks the device-staging language of the binding (see :func:`emit_bindings`) and
+    ``fortran_compiler`` the compiler that builds it; an OpenMP-offload build passes its offload flags in
+    ``extra_flags`` (``amdflang`` with ``--offload-arch=gfx942``, say).
 
     :raises SignatureDriftError: live SDFG drifted from the snapshot.
     """
@@ -229,7 +236,7 @@ def build_fortran_library(
     init_symbols = compiled_init_symbols(sdfg_so, sdfg.name)
 
     bindings_f90 = out_dir_path / f"{name}_bindings.f90"
-    emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist, init_symbols=init_symbols)
+    emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist, init_symbols=init_symbols, directive=directive)
 
     # Threaded between the binding (which the shim USEs) and extra_sources
     # -- gfortran compiles strictly left-to-right by module dependency.
@@ -256,7 +263,7 @@ def build_fortran_library(
 
     # gfortran compiles left-to-right, no reordering: deps before, users after.
     cmd = [
-        "gfortran",
+        fortran_compiler,
         *_SHARED_FLAGS,
         *opt_flags,
         *extra_flags,

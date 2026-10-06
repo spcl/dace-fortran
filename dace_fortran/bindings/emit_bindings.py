@@ -20,7 +20,7 @@ from dace_fortran.bindings.block_builders import (
     build_wrapper_tail,
     splice_acc_staging,
 )
-from dace_fortran.bindings.acc_transfers import AccTransferPlan
+from dace_fortran.bindings.acc_transfers import AccTransferPlan, Directive
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalInterface
 from dace_fortran.bindings.frozen_signature import FrozenSignature
@@ -35,6 +35,7 @@ def emit_bindings(
     enum_maps: dict | None = None,
     acc_residency: AccTransferPlan | None = None,
     init_symbols: tuple[str, ...] | None = None,
+    directive: Directive = Directive.OPENACC,
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
@@ -60,6 +61,9 @@ def emit_bindings(
     offload pass moved to the device, the wrapper gets an ``!$ACC DATA`` region
     staging the host caller's buffers up; if it records none, the emitted module
     is byte-identical to today's CPU-only one.
+
+    ``directive`` picks the language the staging is written in: OpenACC (nvfortran, ICON) or OpenMP offload
+    (e.g. ROCm amdflang); the plan is the same.
     """
     from dace_fortran.bindings.acc_transfers import plan_frozen_transfers
 
@@ -79,6 +83,6 @@ def emit_bindings(
         ),
         "finalize": build_finalize(iface),
     }
-    blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
+    blocks = splice_acc_staging(blocks, iface.entry, acc_residency, directive)
     out_file.write_text(assemble_module(iface, frozen, blocks, plan))
     return out_file

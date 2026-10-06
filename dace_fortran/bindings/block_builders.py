@@ -34,6 +34,7 @@ from dace_fortran.bindings.loop_copy import (
     render_copy_in_loop,
     render_copy_out_loop,
 )
+from dace_fortran.bindings.acc_transfers import Directive
 
 if TYPE_CHECKING:
     from dace_fortran.bindings.acc_transfers import AccTransferPlan
@@ -904,7 +905,7 @@ class AccStaging(NamedTuple):
     post: List[str]
 
 
-def build_acc_staging(plan: AccTransferPlan) -> AccStaging:
+def build_acc_staging(plan: AccTransferPlan, directive: Directive = Directive.OPENACC) -> AccStaging:
     """``(pre_lines, post_lines)`` staging ICON's device-resident arguments
     around the whole wrapper body, mirroring what
     ``scripts/build_icon_dace_libs.render_icon_wrapper`` hand-rolls: drain
@@ -915,13 +916,15 @@ def build_acc_staging(plan: AccTransferPlan) -> AccStaging:
 
     if plan is None or not plan.active:
         return AccStaging([], [])
-    pre = render_sync(plan, _ACC_INDENT) + render_pre_call(plan, _ACC_INDENT)
-    post = render_post_call(plan, _ACC_INDENT) + render_sync(plan, _ACC_INDENT)
+    pre = render_sync(plan, _ACC_INDENT, directive) + render_pre_call(plan, _ACC_INDENT, directive)
+    post = render_post_call(plan, _ACC_INDENT, directive) + render_sync(plan, _ACC_INDENT, directive)
     return AccStaging(pre, post)
 
 
-def splice_acc_staging(blocks: Dict[str, str], entry: str, plan: AccTransferPlan) -> Dict[str, str]:
-    """Return ``blocks`` with the OpenACC staging of ``plan`` spliced in:
+def splice_acc_staging(
+    blocks: Dict[str, str], entry: str, plan: AccTransferPlan, directive: Directive = Directive.OPENACC
+) -> Dict[str, str]:
+    """Return ``blocks`` with the staging of ``plan`` spliced in, in ``directive``'s language:
     pre-staging at the top of ``wrapper_body``, the ``DATA``/``HOST_DATA USE_DEVICE``
     regions around the SDFG invocation, post-staging before the wrapper's end statement.
     ``plan`` inactive (or ``None``) returns ``blocks`` unchanged."""
@@ -932,20 +935,21 @@ def splice_acc_staging(blocks: Dict[str, str], entry: str, plan: AccTransferPlan
         render_host_data_open,
     )
 
-    pre, post = build_acc_staging(plan)
+    pre, post = build_acc_staging(plan, directive)
     if plan is None or not plan.active:
         return blocks
+    language = "OpenMP" if directive is Directive.OPENMP else "OpenACC"
     out = dict(blocks)
     if pre:
         out["wrapper_body"] = (
-            "\n".join([_ACC_INDENT + "! ----- OpenACC staging (device -> host) -----"] + pre + [""])
+            "\n".join([_ACC_INDENT + f"! ----- {language} staging (device -> host) -----"] + pre + [""])
             + out["wrapper_body"]
         )
     tail_lines = out["wrapper_tail"].splitlines()
     # The data region encloses HOST_DATA: the device copies have to exist before
     # USE_DEVICE can hand their addresses to the SDFG.
-    call_open = render_data_open(plan, _ACC_INDENT) + render_host_data_open(plan, _ACC_INDENT)
-    call_close = render_host_data_close(plan, _ACC_INDENT) + render_data_close(plan, _ACC_INDENT)
+    call_open = render_data_open(plan, _ACC_INDENT, directive) + render_host_data_open(plan, _ACC_INDENT, directive)
+    call_close = render_host_data_close(plan, _ACC_INDENT, directive) + render_data_close(plan, _ACC_INDENT, directive)
     if call_open:
         call_at = next(i for i, ln in enumerate(tail_lines) if ln.lstrip().startswith(f"call dace_program_{entry}("))
         call_end = call_at
@@ -960,7 +964,7 @@ def splice_acc_staging(blocks: Dict[str, str], entry: str, plan: AccTransferPlan
         )
     if post:
         end_at = next(i for i, ln in enumerate(tail_lines) if ln.strip() == f"end subroutine {entry}_dace")
-        post_block = [_ACC_INDENT + "! ----- OpenACC staging (host -> device) -----"] + post
+        post_block = [_ACC_INDENT + f"! ----- {language} staging (host -> device) -----"] + post
         tail_lines = tail_lines[:end_at] + post_block + tail_lines[end_at:]
     out["wrapper_tail"] = "\n".join(tail_lines)
     return out
