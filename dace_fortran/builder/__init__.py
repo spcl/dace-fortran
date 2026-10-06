@@ -47,6 +47,7 @@ from typing import Any, Callable, Sequence, cast
 
 from dace import InterstateEdge, SDFG, SDFGState
 from dace.data import Data
+from dace.frontend.python import astutils
 from dace.properties import CodeBlock
 from dace.sdfg.state import ControlFlowRegion
 from dace.sdfg.utils import specialize_symbols
@@ -507,6 +508,42 @@ def reject_unlowered_expressions(sdfg: SDFG) -> None:
             + " site(s)); the Fortran construct behind each is not supported yet:\n  "
             + "\n  ".join(leaks[:20])
         )
+
+
+def _rename_in_expr(expr: str, name: str, new_name: str) -> str:
+    """``expr`` with every reference to the name ``name`` replaced by ``new_name`` (an expression)."""
+    replacer = astutils.ASTFindReplace({name: new_name})
+    tree = replacer.visit(ast.parse(expr))
+    return ast.unparse(tree) if replacer.replace_count else expr
+
+
+def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_dtype: bool) -> None:
+    """Rename every alias onto its target and drop the alias from ``sdfg.symbols``.
+
+    Same result as one ``sdfg.replace(alias, target)`` per entry in order, but in a single walk of the SDFG: a
+    whole-SDFG walk per alias dominated large builds (QE ``h_psi`` collapses thousands of extent aliases).  Order
+    matters only through chains -- a later alias that occurs in an earlier target -- so the earlier targets are
+    rewritten as each alias is added, which is exactly what the sequential renames would have produced.  An alias
+    the SDFG does not reference (nor reaches through such a chain) is a no-op, as before.
+
+    :param keep_target_dtype: restore each target symbol's existing dtype afterwards.  ``replace`` re-declares
+        the target with the alias's dtype, which silently widens a scalar argument used as a bound (an int32
+        ``n`` becomes int64) and desyncs the generated interface from the wrapper's variable.
+    """
+    present = set(sdfg.symbols) | set(sdfg.arrays) | {str(s) for s in sdfg.free_symbols}
+    composed: dict[str, str] = {}
+    for alias, target in aliases.items():
+        if alias == target:
+            continue
+        for earlier, earlier_target in composed.items():
+            composed[earlier] = _rename_in_expr(earlier_target, alias, target)
+        if alias in present:
+            composed[alias] = target
+    target_dtypes = {t: sdfg.symbols[t] for t in composed.values() if t in sdfg.symbols} if keep_target_dtype else {}
+    sdfg.replace_dict(composed)
+    for alias in composed:
+        sdfg.symbols.pop(alias, None)
+    sdfg.symbols.update(target_dtypes)
 
 
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
@@ -1019,32 +1056,13 @@ class SDFGBuilder:
         # every reference and drop the now-redundant offset symbol from
         # the SDFG so its signature only carries ``arrsize`` as a free
         # symbol.
-        for src, dst in alias_offsets.items():
-            sdfg.replace(src, dst)
-            if src in sdfg.symbols:
-                sdfg.symbols.pop(src)
+        collapse_symbol_aliases(sdfg, alias_offsets, keep_target_dtype=False)
         # Extent aliases (``<arr>_d<i>`` == the array's declared extent
         # ``shape_symbols[i]``): same symbol-to-symbol rename as the offset
         # aliases above.  A ``box_dims`` synthetic from an inlined ``SIZE`` leaks
         # as a free symbol when the descriptor is already concrete; collapse it
         # onto the real extent so the signature carries only the declared extent.
-        for src, dst in self.extent_aliases.items():
-            if src not in sdfg.symbols and src not in sdfg.free_symbols:
-                continue
-            # The declared extent ``dst`` may already be a real signature symbol
-            # with its own Fortran kind -- a scalar argument used as a bound
-            # (``gbuf(n)`` with ``integer :: n`` -> int32).  ``replace`` re-adds
-            # ``dst`` with the synthetic's default int64 width, silently widening
-            # it, which then desyncs the generated interface param (int64) from
-            # the wrapper variable (the arg's real int32 kind) and fails the
-            # gfortran link.  The collapse is bit-exact (the extents are equal),
-            # so keep it, but restore ``dst``'s pre-existing kind afterwards.
-            dst_dtype = sdfg.symbols[dst] if dst in sdfg.symbols else None
-            sdfg.replace(src, dst)
-            if src in sdfg.symbols:
-                sdfg.symbols.pop(src)
-            if dst_dtype is not None:
-                sdfg.symbols[dst] = dst_dtype
+        collapse_symbol_aliases(sdfg, self.extent_aliases, keep_target_dtype=True)
         # The offset/extent-alias collapses above rename an assignment KEY onto
         # its own value: a descriptor-dim stage ``buffer_cml_d0 = klon`` becomes
         # ``klon = klon`` once ``buffer_cml_d0`` collapses to the grid dim it
