@@ -864,8 +864,10 @@ std::string buildBoolExpr(mlir::Value val, int d) {
     // ALLOCATED(arr)/ASSOCIATED(ptr) idiom (`cmpi ne, convert(box_addr(load %decl)), 0`): render as <decl>_allocated
     // instead of decomposing to lhs != rhs (lhs would resolve to "?"). Same matchAssociatedStatusBoxRef as buildExpr in
     // expressions.cpp; re-checked here since boolean contexts decompose before a whole-shape match.
-    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp))
-      if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
+    bool negated = false;
+    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp, &negated))
+      if (auto arrName = traceToDecl(src); !arrName.empty())
+        return negated ? "(" + arrName + "_allocated == 0)" : arrName + "_allocated";
     auto pred = cmpiPredStr(cmp.getPredicate());
     if (pred.empty()) return "?";
     return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " + leafExpr(cmp.getRhs(), d + 1) + ")";

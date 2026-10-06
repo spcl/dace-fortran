@@ -119,7 +119,8 @@ static std::optional<std::pair<std::string, std::string>> arrayElementExtent(mli
   if (!dg) return std::nullopt;
   auto indices = dg.getIndices();
   if (indices.empty()) return std::nullopt;
-  std::string const array = traceToDecl(dg.getMemref());
+  // ``s % lb(i)`` is one designate carrying both the component and the index: name the member, not the record.
+  std::string const array = traceToDecl(dg.getComponentAttr() ? dg.getResult() : dg.getMemref());
   if (array.empty()) return std::nullopt;
   // Join the per-dimension 1-based index expressions with ',' (``mat(i, j)`` ->
   // ``"i,j"``).  Each index is a scalar / arithmetic expr with no comma of its
@@ -4449,13 +4450,65 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // member's ``associated(...)`` via the static struct layout.  Keyed on the
     // status-read SHAPE + a struct-dummy-rooted component base -- never on a
     // member name -- mirroring the int loop-bound member scalar mint above.
+    // A member of a MODULE-GLOBAL record (QE ``dfftp_exx % nsp``, reached through an inlined ``fft_type_*`` dummy)
+    // gets the same tracker: the flatten plan records its host provenance (hlfir-flatten-global-scalar-reads), so
+    // the binding seeds it from ``allocated(<entity>%<member>)``; the kernel's own ALLOCATE/DEALLOCATE of the
+    // member then update it like any tracker.
+    auto rootedAtModuleRecord = [](hlfir::DesignateOp dg) -> bool {
+      mlir::Value v = dg.getMemref();
+      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+        auto* d = v.getDefiningOp();
+        if (!d) return false;
+        if (auto addr = mlir::dyn_cast<fir::AddrOfOp>(d))
+          return mlir::isa<fir::RecordType>(fir::unwrapRefType(addr.getType()));
+        if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+          auto outer = asAssumedShapeAlias(dc);
+          v = outer ? outer.getResult(0) : dc.getMemref();
+          continue;
+        }
+        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+          v = cv.getValue();
+          continue;
+        }
+        return false;
+      }
+      return false;
+    };
     module.walk([&](mlir::arith::CmpIOp cmp) {
-      mlir::Value const src = matchAssociatedStatusBoxRef(cmp);
+      bool negated = false;
+      mlir::Value const src = matchAssociatedStatusBoxRef(cmp, &negated);
       if (!src) return;
+      // A whole MODULE allocatable with no variable of its own -- QE's ``.NOT. ALLOCATED(comm_recv)`` on an array
+      // of records the kernel never indexes.  Mint its tracker with the module provenance, so the binding seeds it
+      // from ``allocated(<entity>)``.
+      if (auto decl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(src.getDefiningOp())) {
+        auto addr = mlir::dyn_cast_or_null<fir::AddrOfOp>(decl.getMemref().getDefiningOp());
+        auto box = addr ? mlir::dyn_cast<fir::BoxType>(fir::unwrapRefType(addr.getType())) : fir::BoxType{};
+        if (!box || !mlir::isa<fir::HeapType>(box.getEleTy())) return;
+        std::string const name = traceToDecl(src);
+        std::string const sym = name + "_allocated";
+        auto origin = decodeModuleGlobalSymbol(addr.getSymbol().getRootReference().getValue().str());
+        if (name.empty() || origin.first.empty() || existingNames.count(name) || existingNames.count(sym)) return;
+        VarInfo av;
+        av.fortran_name = sym;
+        av.mangled_name = sym;
+        av.dtype = "int32";
+        av.rank = 0;
+        av.intent = "in";  // caller-bound free symbol
+        av.role = "symbol";
+        av.module_origin_mod = origin.first;
+        av.module_origin_name = origin.second;
+        av.module_origin_allocatable = true;
+        symbolNames.insert(sym);
+        vars.push_back(std::move(av));
+        existingNames.insert(sym);
+        return;
+      }
       auto* sd = src.getDefiningOp();
       auto dg = sd ? mlir::dyn_cast<hlfir::DesignateOp>(sd) : nullptr;
       if (!dg || !dg.getComponentAttr()) return;  // must be a member designate
-      if (!rootedAtStructDummy(dg)) return;       // rooted at a caller struct DUMMY
+      // rooted at a caller struct DUMMY, or at a module-global record
+      if (!rootedAtStructDummy(dg) && !rootedAtModuleRecord(dg)) return;
       std::string const flat = traceToDecl(src);
       if (flat.empty() || flat.find('_') == std::string::npos) return;
       std::string const sym = flat + "_allocated";

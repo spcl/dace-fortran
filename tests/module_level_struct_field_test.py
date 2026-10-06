@@ -281,6 +281,40 @@ end module kern
     np.testing.assert_array_equal(out, np.full(4, 3.0))
 
 
+def test_member_array_element_as_extent(tmp_path):
+    """``ALLOCATE(w(smap % lb(1) : smap % ub(1)))`` with ``smap`` a module record (QE ``fft_type_init``'s sticks
+    map): the extent reads elements of the members ``smap_lb`` / ``smap_ub``, not of the record ``smap``."""
+    import numpy as np
+
+    src = """
+module smapmod
+  type :: sticks
+    integer :: lb(3) = 0
+    integer :: ub(3) = 0
+  end type
+  type(sticks) :: smap
+end module smapmod
+
+module m
+contains
+  subroutine k(out)
+    use smapmod, only: smap
+    real(8), intent(out) :: out
+    real(8), allocatable :: w(:)
+    allocate(w(smap % lb(1) : smap % ub(1)))
+    w = 2
+    out = sum(w)
+    deallocate(w)
+  end subroutine
+end module m
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="k", entry="m::k").build()
+    assert "smap" not in {str(s) for s in sdfg.free_symbols}
+    out = np.zeros(1)
+    sdfg(out=out, smap_lb=np.array([2, 0, 0], dtype=np.int32), smap_ub=np.array([5, 0, 0], dtype=np.int32))
+    assert out[0] == 8.0
+
+
 if __name__ == "__main__":
     import pytest
 

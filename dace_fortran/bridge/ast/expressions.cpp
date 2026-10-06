@@ -692,8 +692,10 @@ std::string buildExpr(mlir::Value val, int d) {
   // ``<arr>_allocated`` scalar that ``extract_vars`` registers and
   // the AST builder maintains at ALLOCATE / DEALLOCATE sites.
   if (auto cmp = mlir::dyn_cast<mlir::arith::CmpIOp>(def)) {
-    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp))
-      if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
+    bool negated = false;
+    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp, &negated))
+      if (auto arrName = traceToDecl(src); !arrName.empty())
+        return negated ? "(" + arrName + "_allocated == 0)" : arrName + "_allocated";
   }
 
   // ``fir.box_dims %arr_decl, %dim``  --  Flang's lowering for SIZE /

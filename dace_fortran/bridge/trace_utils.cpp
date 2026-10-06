@@ -287,9 +287,11 @@ mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
   return {};
 }
 
-mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp) {
-  // The intrinsic lowers to a NE-against-null comparison.
-  if (cmp.getPredicate() != mlir::arith::CmpIPredicate::ne) return {};
+mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp, bool* negated) {
+  // The intrinsic lowers to a NE-against-null comparison; its negation folds to EQ.
+  bool const isEq = cmp.getPredicate() == mlir::arith::CmpIPredicate::eq;
+  if (cmp.getPredicate() != mlir::arith::CmpIPredicate::ne && !(isEq && negated)) return {};
+  if (negated) *negated = isEq;
   bool rhsZero = false;
   if (auto c = traceConstInt(cmp.getRhs())) rhsZero = (*c == 0);
   if (!rhsZero) return {};
@@ -560,7 +562,8 @@ std::optional<std::pair<std::string, std::vector<int64_t>>> constIndexedElementL
     if (!c) return std::nullopt;
     consts.push_back(*c);
   }
-  auto arr = traceToDecl(dg.getMemref());
+  // ``s % lb(1)`` is one designate carrying both the component and the index: name the member, not the record.
+  auto arr = traceToDecl(dg.getComponentAttr() ? dg.getResult() : dg.getMemref());
   if (arr.empty()) return std::nullopt;
   return std::make_pair(arr, std::move(consts));
 }

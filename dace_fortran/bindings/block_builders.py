@@ -1730,6 +1730,11 @@ def _build_symbol_assigns(
             guard = optional_array_guards.get((expr or "").lower(), "")
             out.extend(_guarded_assign(sym, f"size({expr}, dim={dim})", guard, absent="1"))
             continue
+        # The allocation status of a whole module ALLOCATABLE the kernel only tests (QE's
+        # ``ALLOCATED(comm_recv)``): its import alias names the entity itself.
+        if sym in _module_sources and sym.endswith("_allocated") and sym not in _synth_members:
+            out.append(f"    {sym} = int(merge(1, 0, allocated({_module_symbol_alias(sym)})), c_int)")
+            continue
         # Last resort: a module global the kernel reads directly, use-imported
         # under the __mod alias -- assign from that import.
         if sym in _module_sources:
@@ -1757,6 +1762,18 @@ def _build_symbol_assigns(
                 and pres_base in _struct_member_paths
             ):
                 present = _present(_struct_member_paths[pres_base], fa.aos_member_pointer)
+                out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
+                continue
+            # A member of a SCALAR module record (QE ``dfftp_exx % nsp``): its local is a copy, always allocated,
+            # so test the host member itself.
+            if (
+                fa is not None
+                and fa.aos_outer_rank == 0
+                and fa.aos_origin_struct
+                and fa.aos_member_path
+                and sym.endswith("_allocated")
+            ):
+                present = _present(f"{fa.aos_origin_struct}%{fa.aos_member_path}", fa.aos_member_pointer)
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
             # A STRUCT-MEMBER ASSOCIATED/ALLOCATED fold the kernel branches on

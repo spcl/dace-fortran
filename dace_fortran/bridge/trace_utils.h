@@ -124,7 +124,8 @@ std::optional<int64_t> traceConstInt(mlir::Value v);
 /// Recognise Flang's ASSOCIATED(ptr)/ALLOCATED(arr) lowering (arith.cmpi ne, fir.convert*(fir.box_addr(fir.load?
 /// %boxref)), 0) and return %boxref, to which callers append "_allocated"; null if cmp isn't that shape. Shared by
 /// buildExpr/buildBoolExpr and extract_vars.
-mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp);
+/// With ``negated`` given, also matches the ``cmpi eq`` form (``.NOT. ALLOCATED(x)``) and sets ``*negated``.
+mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp, bool* negated = nullptr);
 
 /// Render an integer SSA value as a Python expression of Fortran scalar names/literals/operators (e.g. Flang's clamped
 /// ub-lb+1 -> "max((endcol - startcol) + 1, 0)") for a symbolic shape dim; leaf scalars must be separately promoted to
