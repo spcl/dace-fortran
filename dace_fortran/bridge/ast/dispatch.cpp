@@ -798,6 +798,40 @@ static std::string blasScalarArg(mlir::Value v) {
   return resolveCallArg(v);
 }
 
+/// A BLAS array operand as the array whose storage it addresses, with the 1-based element it starts at when the actual
+/// is an element (``deeq(1, 1, na, spin)`` / ``ps(ofs + 1, 1)``): ``name`` or ``name[i1, i2]``.  Follows an inlined
+/// wrapper's dummies (QE ``mydgemm``'s ``a(lda, *)``) back to the caller's actual, so sequence association across a
+/// type or rank change resolves to the real storage rather than the dummy.
+static std::string blasOperandArg(mlir::Value v) {
+  mlir::Value w = v;
+  std::vector<std::string> start;
+  for (int i = 0; i < limits::kSsaBackWalkDepth && w && start.empty(); ++i) {
+    auto* d = w.getDefiningOp();
+    if (!d) break;
+    if (auto c = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      w = c.getValue();
+    } else if (auto b = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      w = b.getVal();
+    } else if (auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d);
+               hd && hd.getDummyScope() && hd.getMemref().getDefiningOp()) {  // an inlined callee's dummy
+      w = hd.getMemref();
+    } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d);
+               dg && !dg.getComponentAttr() && !dg.getIndices().empty() &&
+               llvm::none_of(dg.getIsTriplet(), [](bool t) { return t; })) {
+      for (auto idx : dg.getIndices()) start.push_back(buildIndexExpr(idx, 0));
+      w = dg.getMemref();
+    } else {
+      break;
+    }
+  }
+  std::string base = traceToDecl(w);
+  if (base.empty()) return resolveCallArg(v);
+  if (start.empty()) return base;
+  std::string out = base + "[";
+  for (size_t i = 0; i < start.size(); ++i) out += (i ? ", " : "") + start[i];
+  return out + "]";
+}
+
 /// Builds the ASTNode for a recognised BLAS call. call_args carry resolved decl/constant names in positional order
 /// (N/leading-dim args dropped, derived from memlets later). Char-arg routines (DGEMM, DGEMV) capture TRANS in
 /// ASTNode.expr.
@@ -845,12 +879,12 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = blasFlagArg(args[0]);                  // trans char (literal)
-    n.call_args.push_back(blasScalarArg(args[3]));  // alpha
-    push(args[4]);                                  // A
-    push(args[6]);                                  // x
-    n.call_args.push_back(blasScalarArg(args[8]));  // beta
-    push(args[9]);                                  // y (inout)
+    n.expr = blasFlagArg(args[0]);                   // trans char (literal)
+    n.call_args.push_back(blasScalarArg(args[3]));   // alpha
+    n.call_args.push_back(blasOperandArg(args[4]));  // A
+    n.call_args.push_back(blasOperandArg(args[6]));  // x
+    n.call_args.push_back(blasScalarArg(args[8]));   // beta
+    n.call_args.push_back(blasOperandArg(args[9]));  // y (inout)
     // Sizes, leading dimension and increments, for operands passed by sequence association.
     for (unsigned i : {1u, 2u, 5u, 7u, 10u}) push(args[i]);  // m, n, lda, incx, incy
     return n;
@@ -863,10 +897,10 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     }
     n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);  // transA,transB
     n.call_args.push_back(blasScalarArg(args[5]));               // alpha
-    push(args[6]);                                               // A
-    push(args[8]);                                               // B
+    n.call_args.push_back(blasOperandArg(args[6]));              // A
+    n.call_args.push_back(blasOperandArg(args[8]));              // B
     n.call_args.push_back(blasScalarArg(args[10]));              // beta
-    push(args[11]);                                              // C (inout)
+    n.call_args.push_back(blasOperandArg(args[11]));             // C (inout)
     for (unsigned i : {2u, 3u, 4u, 7u, 9u, 12u}) push(args[i]);  // m, n, k, lda, ldb, ldc
     return n;
   }
@@ -904,9 +938,9 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       return n;
     }
     n.call_args.push_back(blasScalarArg(args[2]));          // alpha
-    push(args[3]);                                          // x
-    push(args[5]);                                          // y
-    push(args[7]);                                          // A (inout)
+    n.call_args.push_back(blasOperandArg(args[3]));         // x
+    n.call_args.push_back(blasOperandArg(args[5]));         // y
+    n.call_args.push_back(blasOperandArg(args[7]));         // A (inout)
     for (unsigned i : {0u, 1u, 4u, 6u, 8u}) push(args[i]);  // m, n, incx, incy, lda
     return n;
   }

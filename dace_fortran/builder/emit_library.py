@@ -1166,35 +1166,71 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             return _ds.symbol(sym)
         raise NotImplementedError(f"{routine}: size argument {name!r} names no symbol or scalar")
 
-    def _storage(arr: str) -> str:
-        """The array whose storage ``arr`` names: an assumed-size dummy of an inlined wrapper reshaping a whole actual
-        (``x(*)`` bound to ``psi(:, :)``) is that actual."""
-        v = builder.arrays.get(arr)
-        if v is not None and v.role == "view_alias" and list(v.view_subset) == [""] and v.view_source:
-            return v.view_source
-        return arr
+    class _Operand(NamedTuple):
+        """A BLAS array operand: the array whose storage it addresses and the subset its first element sits at (the
+        whole array when the actual is the array itself)."""
 
-    def _by_sequence_association(operands: Sequence[tuple[str, int]]) -> bool:
-        """True when an actual's type or rank differs from the dummy's (``COMPLEX psi(:, :)`` passed to
-        ``x(*)``): Fortran sequence association, so each operand must be viewed through the routine's own shapes."""
-        descs = [(ctx.sdfg.arrays[_storage(arr)], rank) for arr, rank in operands]
-        return any(desc.dtype != real_type or len(desc.shape) != rank for desc, rank in descs)
+        name: str
+        start: str | None
 
-    def _view(arr: str, shape: Sequence[Any], strides: Sequence[Any]) -> str:
-        """A ``real_type`` view of ``arr``'s storage in the column-major shape the routine addresses it by."""
-        view = f"{arr}_{routine}_{builder.nid()}"
+    def _operand(arg: str) -> _Operand:
+        """Split the bridge's ``name`` / ``name[i1, i2]`` (1-based start element) form; a non-literal start index is
+        staged into a fresh symbol on the BLAS state's inbound edge."""
+        name, _, rest = arg.partition("[")
+        if not rest:
+            return _Operand(name, None)
+        indices, depth, cur = [], 0, ""
+        for ch in rest[:-1]:
+            depth += ch in "(["
+            depth -= ch in ")]"
+            if ch == "," and depth == 0:
+                indices.append(cur.strip())
+                cur = ""
+            else:
+                cur += ch
+        indices.append(cur.strip())
+        zero_based = []
+        for idx in indices:
+            try:
+                zero_based.append(str(int(idx) - 1))
+            except ValueError:
+                sym = f"__blas_start_{builder.nid()}"
+                ctx.sdfg.add_symbol(sym, dace.int64)
+                promotions[sym] = f"({idx}) - 1"
+                zero_based.append(sym)
+        return _Operand(name, ", ".join(zero_based))
+
+    def _by_sequence_association(operands: Sequence[tuple[_Operand, int]]) -> bool:
+        """True when an actual is an element, or its type or rank differs from the dummy's (``COMPLEX psi(:, :)``
+        passed to ``x(*)``): Fortran sequence association, so each operand is viewed through the routine's own
+        shapes."""
+        for op, rank in operands:
+            desc = ctx.sdfg.arrays[op.name]
+            if op.start is not None or desc.dtype != real_type or len(desc.shape) != rank:
+                return True
+        return False
+
+    def _view(op: _Operand, shape: Sequence[Any], strides: Sequence[Any]) -> str:
+        """A ``real_type`` view of ``op``'s storage in the column-major shape the routine addresses it by."""
+        view = f"{op.name}_{routine}_{builder.nid()}"
         ctx.sdfg.add_view(view, list(shape), real_type, strides=list(strides))
         return view
 
-    def _read_view(node: LibraryNode, conn: str, arr: str, view: str, subset: str) -> None:
+    def _link(op: _Operand) -> Memlet:
+        """The viewed storage, from the operand's first element on."""
+        if op.start is None:
+            return Memlet.from_array(op.name, ctx.sdfg.arrays[op.name])
+        return Memlet(data=op.name, subset=op.start)
+
+    def _read_view(node: LibraryNode, conn: str, op: _Operand, view: str, subset: str) -> None:
         view_node = state.add_access(view)
-        state.add_edge(state.add_read(arr), None, view_node, "views", Memlet.from_array(arr, ctx.sdfg.arrays[arr]))
+        state.add_edge(state.add_read(op.name), None, view_node, "views", _link(op))
         state.add_edge(view_node, None, node, conn, Memlet(data=view, subset=subset))
 
-    def _write_view(node: LibraryNode, conn: str, arr: str, view: str, subset: str) -> None:
+    def _write_view(node: LibraryNode, conn: str, op: _Operand, view: str, subset: str) -> None:
         view_node = state.add_access(view)
         state.add_edge(node, conn, view_node, None, Memlet(data=view, subset=subset))
-        state.add_edge(view_node, "views", state.add_write(arr), None, Memlet.from_array(arr, ctx.sdfg.arrays[arr]))
+        state.add_edge(view_node, "views", state.add_write(op.name), None, _link(op))
 
     if routine in ("daxpy", "saxpy"):
         alpha, x, y = n.call_args
@@ -1220,58 +1256,53 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
 
     if routine in ("dgemv", "sgemv"):
         trans = n.expr.strip().strip("'\"").upper()[:1] or "N"
-        alpha, A, x, beta, y = n.call_args[:5]
+        alpha, beta = n.call_args[0], n.call_args[3]
+        op_a, op_x, op_y = (_operand(n.call_args[i]) for i in (1, 2, 4))
         # For real data a conjugate transpose (``'C'``) is the transpose.
         transposed = trans in ("T", "C")
         node = blas_nodes.Gemv(f"gemv_{builder.nid()}", transA=transposed, alpha=_scalar(alpha), beta=_scalar(beta))
-        if _by_sequence_association(((A, 2), (x, 1), (y, 1))):
-            A, x, y = _storage(A), _storage(x), _storage(y)
+        if _by_sequence_association(((op_a, 2), (op_x, 1), (op_y, 1))):
             rows, cols, lda, incx, incy = (_size(a) for a in n.call_args[5:10])
             x_len, y_len = (rows, cols) if transposed else (cols, rows)
             _apply_promotions()
             state.add_node(node)
-            a_view = _view(A, (lda, cols), (1, lda))
-            _read_view(node, "_A", A, a_view, f"0:{rows}, 0:{cols}")
-            _read_view(node, "_x", x, _view(x, (x_len,), (incx,)), f"0:{x_len}")
+            _read_view(node, "_A", op_a, _view(op_a, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
+            _read_view(node, "_x", op_x, _view(op_x, (x_len,), (incx,)), f"0:{x_len}")
             if "_y" in node.in_connectors:  # beta == 0 reads no y
-                _read_view(node, "_y", y, _view(y, (y_len,), (incy,)), f"0:{y_len}")
-            _write_view(node, "_y", y, _view(y, (y_len,), (incy,)), f"0:{y_len}")
+                _read_view(node, "_y", op_y, _view(op_y, (y_len,), (incy,)), f"0:{y_len}")
+            _write_view(node, "_y", op_y, _view(op_y, (y_len,), (incy,)), f"0:{y_len}")
             return
         _apply_promotions()
         state.add_node(node)
-        for arr, conn in ((A, "_A"), (x, "_x"), (y, "_y")):
+        for op, conn in ((op_a, "_A"), (op_x, "_x"), (op_y, "_y")):
             if conn in node.in_connectors:
-                desc = ctx.sdfg.arrays[arr]
-                state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
-        y_desc = ctx.sdfg.arrays[y]
-        state.add_edge(node, "_y", state.add_write(y), None, Memlet.from_array(y, y_desc))
+                state.add_edge(state.add_read(op.name), None, node, conn, _link(op))
+        state.add_edge(node, "_y", state.add_write(op_y.name), None, _link(op_y))
         return
 
     if routine in ("dgemm", "sgemm"):
         tA, tB = (s.strip("'\"").upper()[:1] in ("T", "C") for s in n.expr.split(","))
-        alpha, A, B, beta, C = n.call_args[:5]
+        alpha, beta = n.call_args[0], n.call_args[3]
+        op_a, op_b, op_c = (_operand(n.call_args[i]) for i in (1, 2, 4))
         node = blas_nodes.Gemm(f"gemm_{builder.nid()}", transA=tA, transB=tB, alpha=_scalar(alpha), beta=_scalar(beta))
-        if _by_sequence_association(((A, 2), (B, 2), (C, 2))):
-            A, B, C = _storage(A), _storage(B), _storage(C)
+        if _by_sequence_association(((op_a, 2), (op_b, 2), (op_c, 2))):
             rows, cols, inner, lda, ldb, ldc = (_size(a) for a in n.call_args[5:11])
             a_rows, a_cols = (inner, rows) if tA else (rows, inner)
             b_rows, b_cols = (cols, inner) if tB else (inner, cols)
             _apply_promotions()
             state.add_node(node)
-            _read_view(node, "_a", A, _view(A, (lda, a_cols), (1, lda)), f"0:{a_rows}, 0:{a_cols}")
-            _read_view(node, "_b", B, _view(B, (ldb, b_cols), (1, ldb)), f"0:{b_rows}, 0:{b_cols}")
+            _read_view(node, "_a", op_a, _view(op_a, (lda, a_cols), (1, lda)), f"0:{a_rows}, 0:{a_cols}")
+            _read_view(node, "_b", op_b, _view(op_b, (ldb, b_cols), (1, ldb)), f"0:{b_rows}, 0:{b_cols}")
             if "_c" in node.in_connectors:  # beta == 0 reads no C
-                _read_view(node, "_c", C, _view(C, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
-            _write_view(node, "_c", C, _view(C, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
+                _read_view(node, "_c", op_c, _view(op_c, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
+            _write_view(node, "_c", op_c, _view(op_c, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
             return
         _apply_promotions()
         state.add_node(node)
-        for arr, conn in ((A, "_a"), (B, "_b"), (C, "_c")):
+        for op, conn in ((op_a, "_a"), (op_b, "_b"), (op_c, "_c")):
             if conn in node.in_connectors:
-                desc = ctx.sdfg.arrays[arr]
-                state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
-        c_desc = ctx.sdfg.arrays[C]
-        state.add_edge(node, "_c", state.add_write(C), None, Memlet.from_array(C, c_desc))
+                state.add_edge(state.add_read(op.name), None, node, conn, _link(op))
+        state.add_edge(node, "_c", state.add_write(op_c.name), None, _link(op_c))
         return
 
     # ----- new-extension BLAS L1/L2/L3 lib nodes -------------------------------
@@ -1300,27 +1331,25 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         return
 
     if routine in ("dger", "sger"):
-        alpha, x, y, A = n.call_args[:4]
-        if _by_sequence_association(((x, 1), (y, 1), (A, 2))):
-            x, y, A = _storage(x), _storage(y), _storage(A)
+        alpha = n.call_args[0]
+        op_x, op_y, op_a = (_operand(n.call_args[i]) for i in (1, 2, 3))
+        if _by_sequence_association(((op_x, 1), (op_y, 1), (op_a, 2))):
             rows, cols, incx, incy, lda = (_size(a) for a in n.call_args[4:9])
             node = blas_nodes.Ger(f"ger_{builder.nid()}", m=rows, n=cols, alpha=_scalar(alpha))
             _apply_promotions()
             state.add_node(node)
-            _read_view(node, "_x", x, _view(x, (rows,), (incx,)), f"0:{rows}")
-            _read_view(node, "_y", y, _view(y, (cols,), (incy,)), f"0:{cols}")
-            _read_view(node, "_A", A, _view(A, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
-            _write_view(node, "_res", A, _view(A, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
+            _read_view(node, "_x", op_x, _view(op_x, (rows,), (incx,)), f"0:{rows}")
+            _read_view(node, "_y", op_y, _view(op_y, (cols,), (incy,)), f"0:{cols}")
+            _read_view(node, "_A", op_a, _view(op_a, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
+            _write_view(node, "_res", op_a, _view(op_a, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
             return
-        rows, cols = ctx.sdfg.arrays[A].shape
+        rows, cols = ctx.sdfg.arrays[op_a.name].shape
         node = blas_nodes.Ger(f"ger_{builder.nid()}", m=rows, n=cols, alpha=_scalar(alpha))
         _apply_promotions()
         state.add_node(node)
-        for arr, conn in ((A, "_A"), (x, "_x"), (y, "_y")):
-            desc = ctx.sdfg.arrays[arr]
-            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
-        a_desc = ctx.sdfg.arrays[A]
-        state.add_edge(node, "_res", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        for op, conn in ((op_a, "_A"), (op_x, "_x"), (op_y, "_y")):
+            state.add_edge(state.add_read(op.name), None, node, conn, _link(op))
+        state.add_edge(node, "_res", state.add_write(op_a.name), None, _link(op_a))
         return
 
     if routine in ("dsymv", "ssymv"):

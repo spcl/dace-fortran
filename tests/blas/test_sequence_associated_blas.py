@@ -55,6 +55,13 @@ CONTAINS
     REAL(8), INTENT(INOUT) :: betapsi(nkb, m)
     CALL mydger(nkb, m, -1.0D0, beta, 2 * npwx, psi, 2 * npwx, betapsi, nkb)
   END SUBROUTINE calbec_ger
+
+  SUBROUTINE add_vuspsi(nh, nhm, nkb, m, ofs, na, deeq, becp, ps)
+    INTEGER, INTENT(IN) :: nh, nhm, nkb, m, ofs, na
+    REAL(8), INTENT(IN) :: deeq(nhm, nhm, 2), becp(nkb, m)
+    REAL(8), INTENT(INOUT) :: ps(nkb, m)
+    CALL mydgemm('N', 'N', nh, m, nh, 1.0D0, deeq(1, 1, na), nhm, becp(ofs + 1, 1), nkb, 0.0D0, ps(ofs + 1, 1), nkb)
+  END SUBROUTINE add_vuspsi
 END MODULE calbec_mod
 """
 
@@ -98,6 +105,21 @@ def test_complex_actuals_to_dger(tmp_path):
     ref = out - np.outer(beta[0].real, psi[0].real)
     sdfg(npwx=np.int32(NPWX), nkb=np.int32(NKB), m=np.int32(M), beta=beta, psi=psi, betapsi=out)
     np.testing.assert_allclose(out, ref, rtol=1e-12)
+
+
+def test_element_actuals_to_dgemm(tmp_path):
+    """QE ``add_vuspsi_gamma``: the operands start at elements (``deeq(1, 1, na)``, ``becp(ofs + 1, 1)``)."""
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="add_vuspsi", entry="calbec_mod::add_vuspsi").build()
+    rng = np.random.default_rng(3)
+    nh, nhm, nkb, m, ofs, na = 2, 3, 5, 2, 1, 2
+    deeq = np.asfortranarray(rng.random((nhm, nhm, 2)))
+    becp = np.asfortranarray(rng.random((nkb, m)))
+    ps = np.asfortranarray(rng.random((nkb, m)))
+    ref = ps.copy(order="F")
+    ref[ofs : ofs + nh] = deeq[:nh, :nh, na - 1] @ becp[ofs : ofs + nh]
+    args = dict(nh=nh, nhm=nhm, nkb=nkb, m=m, ofs=ofs, na=na)
+    sdfg(**{k: np.int32(v) for k, v in args.items()}, deeq=deeq, becp=becp, ps=ps)
+    np.testing.assert_allclose(ps, ref, rtol=1e-12)
 
 
 if __name__ == "__main__":
