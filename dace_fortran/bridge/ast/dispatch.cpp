@@ -727,6 +727,77 @@ static std::string resolveCallArg(mlir::Value v) {
   return std::string{};
 }
 
+static std::string decodeCharLiteralSymbol(llvm::StringRef sym);
+
+/// A BLAS character flag (``'T'``) as its literal text, followed through an inlined wrapper's CHARACTER dummy (QE
+/// ``mydgemv(trans, ...)`` forwarding its ``trans``) back to the literal; else the plain resolved argument.
+static std::string blasFlagArg(mlir::Value v) {
+  for (mlir::Value w = v; w;) {
+    auto* d = w.getDefiningOp();
+    if (!d) break;
+    if (auto ad = mlir::dyn_cast<fir::AddrOfOp>(d)) {
+      if (auto text = decodeCharLiteralSymbol(ad.getSymbol().getRootReference().str()); !text.empty()) return text;
+      break;
+    }
+    if (auto e = mlir::dyn_cast<fir::EmboxCharOp>(d))
+      w = e.getMemref();
+    else if (auto u = mlir::dyn_cast<fir::UnboxCharOp>(d))
+      w = u.getBoxchar();
+    else if (auto c = mlir::dyn_cast<fir::ConvertOp>(d))
+      w = c.getValue();
+    else if (auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d))
+      w = hd.getMemref();
+    else if (auto a = mlir::dyn_cast<hlfir::AssociateOp>(d))
+      w = a.getSource();
+    else if (auto x = mlir::dyn_cast<hlfir::AsExprOp>(d))
+      w = x.getVar();
+    else
+      break;
+  }
+  return resolveCallArg(v);
+}
+
+/// A BLAS scalar (``alpha``/``beta``) as its literal when it reaches the call through an inlined wrapper's dummy bound
+/// to a temporary holding one constant (QE ``mydgemm(..., 2.0_dp, ...)``); else the plain resolved argument.
+static std::string blasScalarArg(mlir::Value v) {
+  for (mlir::Value w = v; w;) {
+    auto* d = w.getDefiningOp();
+    if (!d) break;
+    if (auto c = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      w = c.getValue();
+      continue;
+    }
+    auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d);
+    if (!hd) break;
+    if (mlir::isa_and_nonnull<fir::AllocaOp>(hd.getMemref().getDefiningOp())) {
+      mlir::Value stored;
+      int writes = 0;
+      for (mlir::Value r : hd->getResults())
+        for (auto* u : r.getUsers()) {
+          if (auto st = mlir::dyn_cast<fir::StoreOp>(u); st && st.getMemref() == r) {
+            stored = st.getValue();
+            ++writes;
+          } else if (mlir::isa<hlfir::AssignOp>(u)) {
+            ++writes;
+          }
+        }
+      if (writes != 1 || !stored) break;
+      auto cst = stored.getDefiningOp<mlir::arith::ConstantOp>();
+      if (!cst) break;
+      std::ostringstream o;
+      if (auto f = mlir::dyn_cast<mlir::FloatAttr>(cst.getValue()))
+        o << std::setprecision(17) << f.getValueAsDouble();
+      else if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+        o << i.getInt();
+      else
+        break;
+      return o.str();
+    }
+    w = hd.getMemref();
+  }
+  return resolveCallArg(v);
+}
+
 /// Builds the ASTNode for a recognised BLAS call. call_args carry resolved decl/constant names in positional order
 /// (N/leading-dim args dropped, derived from memlets later). Char-arg routines (DGEMM, DGEMV) capture TRANS in
 /// ASTNode.expr.
@@ -774,12 +845,14 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]);  // trans char (literal)
-    push(args[3]);                     // alpha
-    push(args[4]);                     // A
-    push(args[6]);                     // x
-    push(args[8]);                     // beta
-    push(args[9]);                     // y (inout)
+    n.expr = blasFlagArg(args[0]);                  // trans char (literal)
+    n.call_args.push_back(blasScalarArg(args[3]));  // alpha
+    push(args[4]);                                  // A
+    push(args[6]);                                  // x
+    n.call_args.push_back(blasScalarArg(args[8]));  // beta
+    push(args[9]);                                  // y (inout)
+    // Sizes, leading dimension and increments, for operands passed by sequence association.
+    for (unsigned i : {1u, 2u, 5u, 7u, 10u}) push(args[i]);  // m, n, lda, incx, incy
     return n;
   }
   if (routine == "dgemm" || routine == "sgemm") {
@@ -788,12 +861,13 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);  // transA,transB
-    push(args[5]);                                                     // alpha
-    push(args[6]);                                                     // A
-    push(args[8]);                                                     // B
-    push(args[10]);                                                    // beta
-    push(args[11]);                                                    // C (inout)
+    n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);  // transA,transB
+    n.call_args.push_back(blasScalarArg(args[5]));               // alpha
+    push(args[6]);                                               // A
+    push(args[8]);                                               // B
+    n.call_args.push_back(blasScalarArg(args[10]));              // beta
+    push(args[11]);                                              // C (inout)
+    for (unsigned i : {2u, 3u, 4u, 7u, 9u, 12u}) push(args[i]);  // m, n, k, lda, ldb, ldc
     return n;
   }
   if (routine == "dnrm2" || routine == "snrm2" || routine == "dasum" || routine == "sasum" || routine == "idamax" ||
@@ -829,10 +903,11 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    push(args[2]);  // alpha
-    push(args[3]);  // x
-    push(args[5]);  // y
-    push(args[7]);  // A (inout)
+    n.call_args.push_back(blasScalarArg(args[2]));          // alpha
+    push(args[3]);                                          // x
+    push(args[5]);                                          // y
+    push(args[7]);                                          // A (inout)
+    for (unsigned i : {0u, 1u, 4u, 6u, 8u}) push(args[i]);  // m, n, incx, incy, lda
     return n;
   }
   if (routine == "dsymv" || routine == "ssymv") {

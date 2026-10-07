@@ -1,0 +1,106 @@
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""BLAS operands passed by sequence association (QE ``calbec_gamma``): COMPLEX arrays reach ``REAL(8) a(lda, *)`` /
+``x(*)`` / ``y(*)`` dummies of the ``mydgemv`` / ``mydgemm`` / ``mydger`` wrappers, which forward them to the real
+routine. Each operand is the actual's storage read as REAL(8) in the routine's own column-major shape."""
+
+import numpy as np
+
+from tests._util import build_sdfg
+
+
+_SRC = """
+SUBROUTINE mydgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
+  DOUBLE PRECISION, INTENT(IN) :: alpha, beta
+  INTEGER, INTENT(IN) :: incx, incy, lda, m, n
+  CHARACTER*1, INTENT(IN) :: trans
+  DOUBLE PRECISION :: a(lda, *), x(*), y(*)
+  CALL dgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
+END SUBROUTINE mydgemv
+
+SUBROUTINE mydgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
+  DOUBLE PRECISION, INTENT(IN) :: alpha, beta
+  INTEGER, INTENT(IN) :: k, lda, ldb, ldc, m, n
+  CHARACTER*1, INTENT(IN) :: transa, transb
+  DOUBLE PRECISION :: a(lda, *), b(ldb, *), c(ldc, *)
+  CALL dgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
+END SUBROUTINE mydgemm
+
+SUBROUTINE mydger(m, n, alpha, x, incx, y, incy, a, lda)
+  DOUBLE PRECISION, INTENT(IN) :: alpha
+  INTEGER, INTENT(IN) :: incx, incy, lda, m, n
+  DOUBLE PRECISION :: x(*), y(*), a(lda, *)
+  CALL dger(m, n, alpha, x, incx, y, incy, a, lda)
+END SUBROUTINE mydger
+
+MODULE calbec_mod
+CONTAINS
+  SUBROUTINE calbec_gemv(npw, npwx, nkb, beta, psi, betapsi)
+    INTEGER, INTENT(IN) :: npw, npwx, nkb
+    COMPLEX(8), INTENT(IN) :: beta(npwx, nkb), psi(npwx, 1)
+    REAL(8), INTENT(OUT) :: betapsi(nkb, 1)
+    CALL mydgemv('C', 2 * npw, nkb, 2.0D0, beta, 2 * npwx, psi, 1, 0.0D0, betapsi, 1)
+  END SUBROUTINE calbec_gemv
+
+  SUBROUTINE calbec_gemm(npw, npwx, nkb, m, beta, psi, betapsi)
+    INTEGER, INTENT(IN) :: npw, npwx, nkb, m
+    COMPLEX(8), INTENT(IN) :: beta(npwx, nkb), psi(npwx, m)
+    REAL(8), INTENT(OUT) :: betapsi(nkb, m)
+    CALL mydgemm('C', 'N', nkb, m, 2 * npw, 2.0D0, beta, 2 * npwx, psi, 2 * npwx, 0.0D0, betapsi, nkb)
+  END SUBROUTINE calbec_gemm
+
+  SUBROUTINE calbec_ger(npwx, nkb, m, beta, psi, betapsi)
+    INTEGER, INTENT(IN) :: npwx, nkb, m
+    COMPLEX(8), INTENT(IN) :: beta(npwx, nkb), psi(npwx, m)
+    REAL(8), INTENT(INOUT) :: betapsi(nkb, m)
+    CALL mydger(nkb, m, -1.0D0, beta, 2 * npwx, psi, 2 * npwx, betapsi, nkb)
+  END SUBROUTINE calbec_ger
+END MODULE calbec_mod
+"""
+
+NPW, NPWX, NKB, M = 3, 5, 4, 2
+
+
+def _complex(rng: np.random.Generator, *shape: int) -> np.ndarray:
+    return np.asfortranarray(rng.random(shape) + 1j * rng.random(shape))
+
+
+def _real_rows(z: np.ndarray, rows: int) -> np.ndarray:
+    """The first ``rows`` REAL(8) entries of each column of ``z`` read as REAL(8) storage."""
+    return np.asfortranarray(z).reshape(-1, order="F").view(np.float64).reshape(2 * z.shape[0], -1, order="F")[:rows]
+
+
+def test_complex_actuals_to_dgemv(tmp_path):
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="calbec_gemv", entry="calbec_mod::calbec_gemv").build()
+    rng = np.random.default_rng(0)
+    beta, psi = _complex(rng, NPWX, NKB), _complex(rng, NPWX, 1)
+    out = np.zeros((NKB, 1), order="F")
+    sdfg(npw=np.int32(NPW), npwx=np.int32(NPWX), nkb=np.int32(NKB), beta=beta, psi=psi, betapsi=out)
+    ref = 2.0 * _real_rows(beta, 2 * NPW).T @ _real_rows(psi, 2 * NPW)
+    np.testing.assert_allclose(out, ref, rtol=1e-12)
+
+
+def test_complex_actuals_to_dgemm(tmp_path):
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="calbec_gemm", entry="calbec_mod::calbec_gemm").build()
+    rng = np.random.default_rng(1)
+    beta, psi = _complex(rng, NPWX, NKB), _complex(rng, NPWX, M)
+    out = np.zeros((NKB, M), order="F")
+    sdfg(npw=np.int32(NPW), npwx=np.int32(NPWX), nkb=np.int32(NKB), m=np.int32(M), beta=beta, psi=psi, betapsi=out)
+    ref = 2.0 * _real_rows(beta, 2 * NPW).T @ _real_rows(psi, 2 * NPW)
+    np.testing.assert_allclose(out, ref, rtol=1e-12)
+
+
+def test_complex_actuals_to_dger(tmp_path):
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="calbec_ger", entry="calbec_mod::calbec_ger").build()
+    rng = np.random.default_rng(2)
+    beta, psi = _complex(rng, NPWX, NKB), _complex(rng, NPWX, M)
+    out = np.asfortranarray(rng.random((NKB, M)))
+    ref = out - np.outer(beta[0].real, psi[0].real)
+    sdfg(npwx=np.int32(NPWX), nkb=np.int32(NKB), m=np.int32(M), beta=beta, psi=psi, betapsi=out)
+    np.testing.assert_allclose(out, ref, rtol=1e-12)
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__]))
