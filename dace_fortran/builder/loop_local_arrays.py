@@ -32,9 +32,10 @@ def place_loop_local_arrays_on_stack(sdfg: SDFG) -> None:
     else) of its SDFG as ``StorageType.Register(dynamic=True)``."""
     for sd in sdfg.all_sdfgs_recursive():
         owners: dict[str, set[LoopRegion | None]] = {}
+        array_names = sd.arrays.keys()  # walks every descriptor: once per SDFG, not per block
 
         def own(names: set[str], loop: LoopRegion | None) -> None:
-            for name in names & sd.arrays.keys():
+            for name in names & array_names:
                 owners.setdefault(name, set()).add(loop)
 
         for block in sd.all_control_flow_blocks():

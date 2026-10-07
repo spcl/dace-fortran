@@ -99,10 +99,9 @@ def _anchor_views_referenced_in_expr(
     """
     if not isinstance(expr, str):
         return pre
-    view_aliases = {nm for nm, v in builder.arrays.items() if v.role == "view_alias"}
-    if not view_aliases:
-        return pre
-    referenced = [nm for nm in view_aliases if re.search(rf"\b{re.escape(nm)}\b", expr)]
+    # A name is referenced iff it is one of the expression's maximal word runs (what ``\bname\b`` matches).
+    words = dict.fromkeys(re.findall(r"\w+", expr))
+    referenced = [nm for nm in words if (arr := builder.arrays.get(nm)) is not None and arr.role == "view_alias"]
     if not referenced:
         return pre
     anchor = region.add_state(f"view_anchor_{builder.nid()}")
