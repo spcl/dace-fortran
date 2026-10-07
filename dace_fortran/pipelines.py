@@ -4,16 +4,16 @@
 
 ``optimize`` is the end-to-end parallelization pipeline:
 
-    len1-to-scalar -> specialize -> short-loop-unroll -> unique-loop-iterators -> scalar-fission
+    specialize -> len1-to-scalar -> short-loop-unroll -> unique-loop-iterators -> scalar-fission
       -> simplify -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
       -> map-collapse -> mapfusion -> make-transients-persistent -> bind-omp-thread-count
 
 ``scalar_fission`` runs unconditionally, BEFORE simplify (it splits scalar-carried loop bodies so
 the loop can map downstream): LoopToMap needs it in general, not just CloudSC. ``specialize``
-bakes the known compile-time constants (CloudSC: nclv, ncldqi, ...) so the shape and branch
-folding downstream have literals to work on. ``len1_to_scalar`` runs FIRST, with ``preserve_abi``,
-so the rest of the pipeline sees a plain scalar instead of a one-element buffer while the SDFG
-signature keeps its array form. The builder already runs it on frontend output; repeating it here
+runs FIRST and bakes the known compile-time constants (CloudSC: nclv, ncldqi, ...), so the
+short-loop unroll sees literal trip counts and the shape and branch folding downstream have
+literals to work on. ``len1_to_scalar`` runs with ``preserve_abi``, so the rest of the pipeline
+sees a plain scalar instead of a one-element buffer while the SDFG signature keeps its array form. The builder already runs it on frontend output; repeating it here
 covers an SDFG that reached ``optimize`` some other way, and the pass is idempotent.
 ``mapfusion`` is ``FullMapFusion`` (vertical +
 horizontal fusion run together to a fixed point), applied a second time after ``map-collapse``
@@ -172,12 +172,12 @@ def optimize(
     """
     reference = copy.deepcopy(sdfg) if verify_inputs is not None else None
 
-    ConvertLengthOneArraysToScalars(preserve_abi=True).apply_pass(sdfg, {})
-
     if symbols:
         specialize_symbols(sdfg, symbols)
     if scalars:
         specialize_scalars(sdfg, scalars)
+
+    ConvertLengthOneArraysToScalars(preserve_abi=True).apply_pass(sdfg, {})
 
     ShortLoopUnroll(unroll_limit).apply_pass(sdfg, {})
     # default assign_loop_iterator_post_value=True keeps Fortran counted-DO exit-value semantics;

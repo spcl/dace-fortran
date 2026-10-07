@@ -101,17 +101,22 @@ def run_reference(lib: ctypes.CDLL, fields: dict[str, np.ndarray], cfg: Config) 
     )
 
 
-def run_sdfg(sdfg, fields: dict[str, np.ndarray], cfg: Config) -> None:
+def sdfg_args(fields: dict[str, np.ndarray], cfg: Config) -> dict[str, np.ndarray | np.generic]:
+    """Keyword arguments of one SDFG ``graupel_run`` call; the arrays are ``fields``' own buffers."""
     nvec, ke = fields["t"].shape
-    sdfg(
-        nvec=np.int32(nvec),
-        ke=np.int32(ke),
-        ivstart=np.int32(cfg.ivstart),
-        ivend=np.int32(cfg.ivend),
-        kstart=np.int32(cfg.kstart),
-        dt=np.float64(cfg.dt),
+    return {
+        "nvec": np.int32(nvec),
+        "ke": np.int32(ke),
+        "ivstart": np.int32(cfg.ivstart),
+        "ivend": np.int32(cfg.ivend),
+        "kstart": np.int32(cfg.kstart),
+        "dt": np.float64(cfg.dt),
         **{n: fields[n] for n in _ARRAY_ORDER},
-    )
+    }
+
+
+def run_sdfg(sdfg, fields: dict[str, np.ndarray], cfg: Config) -> None:
+    sdfg(**sdfg_args(fields, cfg))
 
 
 def copy_fields(fields: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
