@@ -35,22 +35,24 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     # Lanes, each sized to stay under ~45 minutes with warm caches:
     #   fast        every test outside the lanes below (uploads coverage)
-    #   e2e         the e2e pipeline tests except CloudSC, the multi-rank mpi tests, the integration tests, QE h_psi
+    #   e2e         the e2e pipeline tests except CloudSC and graupel, the multi-rank mpi tests, the integration
+    #               tests, QE h_psi
     #   e2e-cloudsc CloudSC through the pipeline, then the CloudSC numerical tests (each a multi-GB -O3 build, so
     #               one at a time: four at once exhaust the runner's memory)
-    #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean}, including those that need ICON built from source
-    #               (both builds cached per icon-model commit)
+    #   e2e-graupel ICON AES graupel through the pipeline, then the graupel numerical tests
+    #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean,graupel}, including those that need ICON built from
+    #               source (both builds cached per icon-model commit)
     #   heavy-atmo  long atmosphere tests; the single-TU extractions run one at a time (~9 GB each)
     #   heavy-ocean long ocean tests (~25 minutes)
     strategy:
       fail-fast: false
       matrix:
         llvm: ['21', '22']
-        lane: [fast, e2e, e2e-cloudsc, heavy-icon, heavy-atmo, heavy-ocean]
+        lane: [fast, e2e, e2e-cloudsc, e2e-graupel, heavy-icon, heavy-atmo, heavy-ocean]
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
     # A cold ICON cache adds two ICON builds to heavy-icon.
-    timeout-minutes: ${{ matrix.lane == 'heavy-icon' && 150 || 75 }}
+    timeout-minutes: ${{ matrix.lane == 'heavy-icon' && 150 || matrix.lane == 'e2e-graupel' && 30 || 75 }}
     env:
       LLVM_VERSION: ${{ matrix.llvm }}
       ICON_BUILD: ${{ github.workspace }}/../icon_build/stock_cpu
@@ -64,10 +66,15 @@ jobs:
         llvm: ${{ matrix.llvm }}
 
     - name: Check out the icon-model submodule
-      if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' }}
+      if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' && matrix.lane != 'e2e-graupel' }}
       id: icon-src
+      # The nested submodules live on several hosts (gitlab.dkrz.de among them) whose fetches time out now and then.
       run: |
-        git submodule update --init --recursive --depth 1 tests/icon/full/icon-model
+        for attempt in 1 2 3; do
+          git submodule update --init --recursive --depth 1 tests/icon/full/icon-model && break
+          [ "$attempt" = 3 ] && exit 1
+          sleep 60
+        done
         echo "sha=$(git -C tests/icon/full/icon-model rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     - name: Restore the ICON builds
@@ -103,6 +110,7 @@ jobs:
         pytest -n auto --dist loadgroup --max-worker-restart=0 $PYTEST_OPTS \
           -m "not mpi and not long and not integration and not e2e and not gpu" \
           --ignore=tests/cloudsc/full --ignore=tests/cloudsc/variants --ignore=tests/qe/h_psi \
+          --ignore=tests/icon/graupel \
           --timeout=300 --timeout-method=thread -o faulthandler_timeout=420 \
           --cov-report=xml --cov=dace_fortran tests/
         curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov && ./codecov || true
@@ -118,7 +126,9 @@ jobs:
     - name: e2e -- pipeline tests (QE vexx, ICON velocity_tendencies)
       if: ${{ matrix.lane == 'e2e' }}
       # Sequential: each -O3 build of a production kernel peaks at several GB.
-      run: python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py $PYTEST_OPTS tests/
+      run: |
+        python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py --ignore=tests/e2e/test_graupel.py \
+          $PYTEST_OPTS tests/
 
     - name: e2e -- QE h_psi
       if: ${{ matrix.lane == 'e2e' }}
@@ -135,11 +145,21 @@ jobs:
         python -m pytest -m "not mpi and not long and not integration and not e2e" $PYTEST_OPTS \
           --timeout=1800 --timeout-method=thread tests/cloudsc/full tests/cloudsc/variants
 
+    - name: e2e-graupel
+      if: ${{ matrix.lane == 'e2e-graupel' }}
+      run: python -m pytest -m e2e $PYTEST_OPTS --timeout=900 --timeout-method=thread tests/e2e/test_graupel.py
+
+    - name: e2e-graupel -- graupel numerical tests
+      if: ${{ matrix.lane == 'e2e-graupel' }}
+      run: |
+        python -m pytest -m "not mpi and not integration and not e2e" $PYTEST_OPTS \
+          --timeout=900 --timeout-method=thread tests/icon/graupel
+
     - name: heavy-icon
       if: ${{ matrix.lane == 'heavy-icon' }}
       run: |
         pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS \
-          --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean tests/
+          --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean --ignore=tests/icon/graupel tests/
 
     - name: heavy-atmo
       if: ${{ matrix.lane == 'heavy-atmo' }}
