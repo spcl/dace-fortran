@@ -214,6 +214,65 @@ graupel_run = sdfg.compile()  # callable with the Fortran dummy arguments as key
 ```
 <!-- quickstart:end -->
 
+### Optimize: graupel and CloudSC end to end
+
+`dace_fortran.pipelines.optimize` is the parallelization pipeline the CI e2e lanes run (`tests/e2e/`). It is the
+recipe of DaCe's `ParallelizePipeline`, which DaCe's own CI runs on the Python CloudSC
+(`tests/corpus/cloudsc/cloudsc_parallel_pipeline_test.py`), built from the passes the pinned DaCe provides:
+
+1. **specialize** -- bake the given symbols / scalars to constants (CloudSC's species counts: without them no
+   species loop has a constant trip count), and read length-one arrays as scalars;
+2. **ShortLoopUnroll** -- fully unroll constant-trip loops of at most `unroll_limit` (8) iterations;
+3. **UniqueLoopIterators** -- one iterator name per loop, so unrolled copies of a loop do not share it;
+4. **scalar fission** -- a private copy of each scalar temporary per use (the frontend emits one per local);
+5. **simplify**, then **StateFusionExtended**;
+6. **LoopToMap** -- every loop free of loop-carried dependencies becomes a parallel map;
+7. **StateFusionExtended**, **FullMapFusion**, **MapCollapse**, **FullMapFusion** -- fuse what the lift exposed;
+8. **MakeTransientsPersistent**, **BindOmpThreadCount** -- allocate once, size the OpenMP team.
+
+The ICON AES graupel has nothing to specialize (its constants are Fortran `PARAMETER`s, folded by the build); the
+column loop `DO iv = ivstart, ivend` becomes a map, the level loops inside it stay sequential.
+`tests/readme_quickstart_test.py` runs both blocks below.
+
+<!-- optimize-graupel:begin -->
+```python
+from pathlib import Path
+
+import dace_fortran
+from dace_fortran.pipelines import num_maps, optimize
+
+graupel = Path("tests/icon/graupel")
+sources = [graupel / "aes_graupel" / f for f in ("mo_kind.f90", "mo_physical_constants.f90", "mo_aes_thermo.f90")]
+sources.append(graupel / "aes_graupel_fused" / "graupel.f90")
+
+sdfg = dace_fortran.build_sdfg_from_files(sources, entry="mo_aes_graupel::graupel_run", name="graupel_opt")
+optimize(sdfg)  # in place; validates after every structural stage
+assert num_maps(sdfg) > 0
+graupel_run = sdfg.compile()
+```
+<!-- optimize-graupel:end -->
+
+CloudSC bakes its species counts first. `optimize(..., verify_inputs=kwargs)` additionally runs the pre- and
+post-optimization SDFGs on `kwargs` and requires bit-identical outputs; `tests/e2e/test_cloudsc.py` does so on
+seeded physical inputs and compares against gfortran.
+
+<!-- optimize-cloudsc:begin -->
+```python
+from pathlib import Path
+
+import dace_fortran
+from dace_fortran.pipelines import num_maps, optimize
+
+source = Path("tests/cloudsc/full/cloudsc.F90").read_text()
+sdfg = dace_fortran.build_sdfg(source, entry="cloudscouter", name="cloudsc_opt")
+# NCLV, the species count, reaches the SDFG as a free symbol (flang lowercases it); the NCLDQ* species
+# indices are PARAMETERs, already folded by the build.
+optimize(sdfg, symbols={"nclv": 5})
+assert num_maps(sdfg) > 0
+cloudsc = sdfg.compile()
+```
+<!-- optimize-cloudsc:end -->
+
 The same for one self-contained source, plus a Fortran-callable library:
 
 ```python
