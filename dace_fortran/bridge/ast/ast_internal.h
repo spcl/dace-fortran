@@ -6,6 +6,24 @@
 
 namespace hlfir_bridge {
 
+/// Per-dim spec for an ``hlfir.designate``: either a triplet
+/// (lo:hi:stride) or a scalar index.  Used by section helpers to walk
+/// LHS / RHS uniformly without re-parsing the flat operand list.
+struct DesignateDim {
+  bool isTriplet;
+  std::string lo;           // buildIndexExpr (Fortran 1-based, 0)  --  triplet only
+  std::string hi;           // triplet only
+  std::string strideExpr;   // empty when stride literal == 1
+  int64_t strideConst = 1;  // when strideExpr is empty, the literal stride
+  std::string scalarIdx;    // non-triplet only
+};
+
+/// Walk a designate's per-dim ``isTriplet`` flags and group its flat
+/// index operands accordingly.  Returns ``false`` (and leaves ``out``
+/// undefined) when an operand can't be lowered to a string  --  caller
+/// must decide whether that's recoverable or a hard error.
+bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>& out);
+
 ASTNode buildAssignNode(hlfir::AssignOp assign);
 
 ASTNode buildCopyNode(hlfir::AssignOp assign);

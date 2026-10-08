@@ -2900,6 +2900,30 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           if (auto* dd = dst.getDefiningOp())
             if (auto declOp = mlir::dyn_cast<hlfir::DeclareOp>(dd)) dst_name = extractName(declOp.getUniqName().str());
           if (dst_name.empty()) dst_name = traceToDecl(dst);
+          // A section destination (``mill(:, ng) = (/i, j, k/)``) places element ``k`` at its position along the one
+          // triplet dim; its scalar dims keep their subscripts. Any other section shape takes the general path.
+          std::vector<DesignateDim> dst_dims;
+          if (auto* dd = dst.getDefiningOp())
+            if (auto dst_dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
+              bool const one_triplet =
+                  !dst_dg.getComponentAttr() && parseDesignateDims(dst_dg, dst_dims) &&
+                  llvm::count_if(dst_dims, [](const DesignateDim& dim) { return dim.isTriplet; }) == 1;
+              if (!one_triplet) dst_name.clear();
+            }
+          auto dst_index = [&](int64_t k) {
+            std::vector<std::string> idx;
+            for (const auto& dim : dst_dims) {
+              if (!dim.isTriplet) {
+                idx.push_back(dim.scalarIdx);
+                continue;
+              }
+              std::string const stride =
+                  dim.strideExpr.empty() ? std::to_string(dim.strideConst) : "(" + dim.strideExpr + ")";
+              idx.push_back(k == 1 ? dim.lo : "(" + dim.lo + " + " + std::to_string(k - 1) + " * " + stride + ")");
+            }
+            if (dst_dims.empty()) idx.push_back(std::to_string(k));
+            return idx;
+          };
           if (!dst_name.empty()) {
             std::vector<ASTNode> elem_assigns;
             bool every_idx_const = true;
@@ -2938,8 +2962,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               AccessInfo wa;
               wa.array_name = dst_name;
               wa.is_write = true;
-              wa.index_exprs.push_back(std::to_string(*cidx));
-              wa.index_vars.emplace_back("?");
+              for (auto& idx : dst_index(*cidx)) {
+                wa.index_exprs.push_back(std::move(idx));
+                wa.index_vars.emplace_back("?");
+              }
               a.accesses.push_back(std::move(wa));
               elem_assigns.push_back(std::move(a));
             }

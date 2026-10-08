@@ -30,12 +30,6 @@ namespace hlfir_bridge {
 //     loop-synthesis for arr(lo:hi) = scalar and section-reduce.
 //   * Type / value helpers: peelWrappers, isArrayRef,
 //     isConstantZero, traceLB, asSectionDesignate.
-//
-// This file is included verbatim from extract_ast.cpp via
-// #include "bridge/ast/assigns.cpp" and shares that translation
-// unit's namespace, includes, and file-static state.  It MUST NOT be
-// added to the build's compile list  --  CMakeLists.txt deliberately omits
-// it.  The split is purely for readability.
 std::string buildIndexExpr(mlir::Value v, int d) {
   if (d > limits::kBuildIndexExprDepth || !v) return "?";
 
@@ -841,22 +835,6 @@ hlfir::DesignateOp asSectionDesignate(mlir::Value v) {
   return {};
 }
 
-/// Per-dim spec for an ``hlfir.designate``: either a triplet
-/// (lo:hi:stride) or a scalar index.  Used by section helpers to walk
-/// LHS / RHS uniformly without re-parsing the flat operand list.
-struct DesignateDim {
-  bool isTriplet;
-  std::string lo;           // buildIndexExpr (Fortran 1-based, 0)  --  triplet only
-  std::string hi;           // triplet only
-  std::string strideExpr;   // empty when stride literal == 1
-  int64_t strideConst = 1;  // when strideExpr is empty, the literal stride
-  std::string scalarIdx;    // non-triplet only
-};
-
-/// Walk a designate's per-dim ``isTriplet`` flags and group its flat
-/// index operands accordingly.  Returns ``false`` (and leaves ``out``
-/// undefined) when an operand can't be lowered to a string  --  caller
-/// must decide whether that's recoverable or a hard error.
 /// ``fir.box_dims`` rendered as the descriptor symbols the bridge already mints: result #0 is the lower bound
 /// (Fortran default 1 -- a non-default lb is modelled separately as ``offset_<arr>_d<i>``), result #1 the extent
 /// ``<arr>_d<dim>``.  Returns "" when it cannot be resolved.
@@ -895,7 +873,7 @@ static std::string resolveBoxDimsBound(mlir::Value v) {
   return base + "_d" + std::to_string(*dim);
 }
 
-static bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>& out) {
+bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>& out) {
   auto triplets = dg.getIsTriplet();
   auto idxs = dg.getIndices();
   // Only a designate that DROPS a dim can be miscompiled by the whole-array fallback; everything else keeps its
