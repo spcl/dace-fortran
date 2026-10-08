@@ -1619,10 +1619,12 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
 // scope's -- collapsing the false-positive collision.
 void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   std::map<std::string, std::set<std::string>> shortToScopes;
+  // A module global has no F scope and keeps its bare name; it still counts as a scope of its own, so an inlined
+  // callee's same-named local (QE grid_set's ``g(3)`` vs gvect's ``g(:, :)``) is qualified instead of merged into it.
   auto record = [&](mlir::Operation* /*op*/, llvm::StringRef uniq) {
     std::string const un = uniq.str();
+    if (un.rfind("_QM", 0) != 0 && getFScope(un).empty()) return;
     std::string const scope = getFScope(un);
-    if (scope.empty()) return;
     auto p = un.rfind('E');
     std::string const shortName = p != std::string::npos ? un.substr(p + 1) : un;
     if (shortName.empty()) return;

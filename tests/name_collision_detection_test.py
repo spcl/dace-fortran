@@ -9,6 +9,10 @@ SYMBOL on collision; (2) RuntimeError at builder-init if the three role-keyed
 dicts aren't disjoint, caught at extract time instead of 200 states later.
 """
 
+from pathlib import Path
+
+import numpy as np
+
 from tests._util import build_sdfg
 
 
@@ -61,7 +65,54 @@ end module
     assert "b" in sdfg.arrays
 
 
-if __name__ == "__main__":
-    import pytest
+def test_inlined_callee_local_array_shadowing_module_array(tmp_path):
+    """QE h_psi: ``grid_set``'s local ``g(3)`` and ``gvect``'s module ``g(:, :)`` share a name once
+    ``grid_set`` is inlined; each write must land on its own array (``g(1) = ...`` is not a 1-D write
+    into the 2-D module array, which surfaces in the signature as module globals do)."""
+    src = """
+module gvect
+  real(kind=8) :: g(3, 2)
+end module
+module m
+contains
+  subroutine grid_set(bg, gsq)
+    real(kind=8), intent(in) :: bg(3)
+    real(kind=8), intent(out) :: gsq
+    real(kind=8) :: g(3)
+    g(1) = 2.0d0 * bg(1)
+    g(2) = 2.0d0 * bg(2)
+    g(3) = 2.0d0 * bg(3)
+    gsq = g(1) ** 2 + g(2) ** 2 + g(3) ** 2
+  end subroutine
+  subroutine outer(bg, gsq, s)
+    use gvect, only: g
+    real(kind=8), intent(in) :: bg(3)
+    real(kind=8), intent(out) :: gsq, s
+    g = 1.0d0
+    call grid_set(bg, gsq)
+    s = sum(g)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="m::outer").build()
+    sdfg.validate()
+    bg = np.array([1.0, 2.0, 3.0])
+    gsq = np.zeros(1)
+    s = np.zeros(1)
+    g = np.zeros((3, 2), order="F")
+    sdfg(bg=bg, gsq=gsq, s=s, g=g)
+    assert gsq[0] == 4.0 * 14.0
+    assert s[0] == 6.0
+    assert np.all(g == 1.0)
 
-    raise SystemExit(pytest.main([__file__]))
+
+if __name__ == "__main__":
+    import tempfile
+
+    for test in (
+        test_inlined_callee_scalar_shadowing_outer_array,
+        test_collision_loud_fail_is_loud,
+        test_inlined_callee_local_array_shadowing_module_array,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            test(Path(tmp))
