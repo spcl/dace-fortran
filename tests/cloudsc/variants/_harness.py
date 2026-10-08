@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
+from dace_fortran import inline_to_single_tu
 from tests._util import build_sdfg
 from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
-from dace_fortran import inline_to_single_tu
 
 SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
 ENTRY = "cloudscouter"

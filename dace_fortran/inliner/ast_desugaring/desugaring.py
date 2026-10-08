@@ -8,20 +8,21 @@ substitution, `DATA`->assignments, statement functions->internal functions,
 """
 
 from __future__ import annotations
+
 import sys
-from typing import Tuple, Dict, List, Set, Union
-from io import StringIO
 import warnings
+from io import StringIO
+from typing import Union
 
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
 from fparser.api import get_reader
-from fparser.two.utils import Base, BlockBase, UnaryOpBase, BinaryOpBase, walk
 from fparser.common.readfortran import FortranReaderBase
 from fparser.common.sourceinfo import FortranFormat
+from fparser.two.utils import Base, BinaryOpBase, BlockBase, UnaryOpBase, walk
 
-from . import analysis, pruning, types, utils
 from .. import ast_utils
+from . import analysis, pruning, types, utils
 
 INTERFACE_NAMESPACE = "__interface__"
 
@@ -30,7 +31,7 @@ def deconstruct_enums(ast: f03.Program) -> f03.Program:
     """Replaces `ENUM` definitions with `INTEGER, PARAMETER` declarations, assigning
     consecutive values (from 0, unless explicit) to each enumerator."""
     for en in walk(ast, f03.Enum_Def):
-        en_dict: Dict[str, f03.Expr] = {}
+        en_dict: dict[str, f03.Expr] = {}
         # Tracks the running value for automatic counting.
         next_val = "0"
         next_offset = 0
@@ -120,8 +121,8 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
         specification_part = ast_utils.atmost_one(ast_utils.children_of_type(subprog, f03.Specification_Part))
 
         ifc_spec = analysis.ident_spec(alias_map[fref_spec])
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
-        all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
+        args_sig: tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
+        all_cand_sigs: list[tuple[types.SPEC, tuple[types.TYPE_SPEC, ...]]] = []
 
         conc_spec = None
         for cand in iface_map[ifc_spec]:
@@ -198,8 +199,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
         else:
             utils.replace_node(nm, f03.Name(orig))
 
-    ast = pruning.consolidate_uses(ast)
-    return ast
+    return pruning.consolidate_uses(ast)
 
 
 def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
@@ -216,7 +216,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
 
     for pd in walk(ast, f03.Procedure_Designator):
         # Ref: https://github.com/stfc/fparser/blob/master/src/fparser/two/Fortran2003.py#L12530
-        dref, op, bname = pd.children
+        dref, _op, bname = pd.children
 
         callsite = pd.parent
         assert isinstance(callsite, (f03.Function_Reference, f03.Call_Stmt))
@@ -246,10 +246,10 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         fnref = pd.parent
         assert isinstance(fnref, (f03.Function_Reference, f03.Call_Stmt))
         _, args = fnref.children
-        args_sig: Tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
-        all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
+        args_sig: tuple[types.TYPE_SPEC, ...] = analysis.compute_argument_signature(args, scope_spec, alias_map)
+        all_cand_sigs: list[tuple[types.SPEC, tuple[types.TYPE_SPEC, ...]]] = []
 
-        bspec = dref_type.spec + (bname.string,)
+        bspec = (*dref_type.spec, bname.string)
         # A binding inherited via EXTENDS is keyed under the child type in alias_map, but
         # proc_map/genc_map key by the type that declares it -- remap to the base binding's
         # spec so lookup resolves (an override keeps its own key, already in proc_map/genc_map).
@@ -257,13 +257,13 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
             inherited = alias_map[bspec]
             if isinstance(inherited, (f03.Specific_Binding, f03.Generic_Binding)):
                 bspec = analysis.ident_spec(inherited)
-        if bspec in genc_map and genc_map[bspec]:
+        if genc_map.get(bspec):
             for cand in genc_map[bspec]:
                 # A generic's candidate is registered on the DECLARING type (an abstract base,
                 # where it may be DEFERRED/absent from proc_map) -- resolve on the CONCRETE
                 # receiver instead (e.g. after a monomorphize ladder,
                 # `this%trans__t_trivial_transfer%into`), remapping (base,spec)->(receiver,spec).
-                rcand = dref_type.spec + (cand[-1],)
+                rcand = (*dref_type.spec, cand[-1])
                 if rcand not in proc_map and rcand in alias_map:
                     inherited_spec = alias_map[rcand]
                     if isinstance(inherited_spec, (f03.Specific_Binding, f03.Generic_Binding)):
@@ -323,10 +323,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
 
         # Replace bname with pname_alias and pass dref as the first argument.
         _, args = callsite.children
-        if args is None:
-            args = f03.Actual_Arg_Spec_List(f"{dref}")
-        else:
-            args = f03.Actual_Arg_Spec_List(f"{dref}, {args}")
+        args = f03.Actual_Arg_Spec_List(f"{dref}") if args is None else f03.Actual_Arg_Spec_List(f"{dref}, {args}")
         utils.set_children(callsite, (f03.Name(pname_alias), args))
 
     for tbp in walk(ast, f03.Type_Bound_Procedure_Part):
@@ -346,7 +343,7 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
             continue
 
         # Keep track of what to replace in the local scope.
-        local_map: Dict[str, Base] = {}
+        local_map: dict[str, Base] = {}
         for al in assoc_list:
             for a in al.children:
                 # TODO: Add ref.
@@ -421,8 +418,8 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
                                     if c.children[1] is not None:
                                         if high_expr:
                                             # TODO: Confirm how upper bound is enforced inside Fortran ASSOCIATE construct.
-                                            raise NotImplementedError()
-                                        elif low_expr:
+                                            raise NotImplementedError
+                                        if low_expr:
                                             # original access has (low::). Combine to be (:low+high_subsc:)
                                             new_high_expr_str = f03.Expr(
                                                 f"{low_expr_str} + ({c.children[1].tostr()})"
@@ -475,7 +472,7 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
         box = spart.parent
         xpart = ast_utils.atmost_one(ast_utils.children_of_type(box, f03.Execution_Part))
         for dst in reversed(walk(spart, f03.Data_Stmt)):
-            repls: List[f03.Assignment_Stmt] = []
+            repls: list[f03.Assignment_Stmt] = []
             for ds in dst.children:
                 assert isinstance(ds, f03.Data_Stmt_Set)
                 varz, valz = ds.children
@@ -489,7 +486,7 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
                 varz, valz = ds.children
                 varz, valz = varz.children, valz.children
                 assert len(varz) == len(valz)
-                for k, v in zip(varz, valz):
+                for k, v in zip(varz, valz, strict=False):
                     scope_spec = analysis.find_scope_spec(k)
                     kroot, ktyp, rest = analysis.dataref_root(k, scope_spec, alias_map)
                     if isinstance(v, f03.Data_Stmt_Value):
@@ -531,8 +528,8 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
     internal/module functions. Outer-scope variables used in the body are
     "carried over" as extra arguments, threaded through at all call sites."""
     alias_map = analysis.alias_specs(ast)
-    all_stmt_fns: Set[types.SPEC] = {
-        analysis.find_scope_spec(sf) + (sf.children[0].string,) for sf in walk(ast, f03.Stmt_Function_Stmt)
+    all_stmt_fns: set[types.SPEC] = {
+        (*analysis.find_scope_spec(sf), sf.children[0].string) for sf in walk(ast, f03.Stmt_Function_Stmt)
     }
 
     for sf in walk(ast, f03.Stmt_Function_Stmt):
@@ -542,7 +539,7 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
             args = args.children
 
         def _get_typ(var: f03.Name) -> Base:
-            _spec = scope_spec + (var.string,)
+            _spec = (*scope_spec, var.string)
             _decl = alias_map[_spec]
             assert isinstance(_decl, f03.Entity_Decl)
             _tdecl = _decl.parent.parent
@@ -553,12 +550,12 @@ def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
         arg_typs = tuple(_get_typ(a) for a in args)
         dummy_args = [a.string for a in args]
 
-        arg_decls = [f"{t}, intent(in) :: {a}" for t, a in zip(arg_typs, args)]
+        arg_decls = [f"{t}, intent(in) :: {a}" for t, a in zip(arg_typs, args, strict=False)]
         carryovers = []
         for nm in walk(expr, f03.Name):
             if nm.string in dummy_args:
                 continue
-            spec = scope_spec + (nm.string,)
+            spec = (*scope_spec, nm.string)
             if spec not in alias_map:
                 continue
             decl = alias_map[spec]
@@ -595,7 +592,7 @@ end function {fn}
         for fcall in walk(box, (f03.Call_Stmt, f03.Function_Reference, f03.Part_Ref, f03.Structure_Constructor)):
             tfn, targs = fcall.children
             tfnloc = analysis.search_real_local_alias_spec(tfn, alias_map)
-            if tfnloc != scope_spec + (fn.string,):
+            if tfnloc != (*scope_spec, fn.string):
                 continue
             nufcall = f03.Function_Reference(fcall.tofortran())
             tfn, targs = nufcall.children
@@ -619,7 +616,7 @@ end function {fn}
             endbox = box.children[-1]
             utils.replace_node(endbox, (intsp, endbox))
 
-        ret_decl = alias_map[scope_spec + (fn.string,)]
+        ret_decl = alias_map[(*scope_spec, fn.string)]
         ret_declist = ret_decl.parent
         utils.remove_children(ret_declist, ret_decl)
         if not ret_declist.children:
@@ -694,7 +691,7 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
                 if node is target:
                     backward_gotos.append((ancestor_subroutine, goto, target))
                     break
-                elif node is goto:
+                if node is goto:
                     forward_gotos.append((ancestor_subroutine, goto, target))
                     break
 
@@ -880,7 +877,7 @@ def deconstruct_backward_goto_statements(
             # If parent is the `DO WHILE` wrapper we created, no action needed and deconstruction is complete.
             break
 
-        elif isinstance(par, (f03.Block_Label_Do_Construct, f03.Block_Nonlabel_Do_Construct)):
+        if isinstance(par, (f03.Block_Label_Do_Construct, f03.Block_Nonlabel_Do_Construct)):
             # if EXIT has been previously added, break loop
             if (
                 (len(par.children) > (child_pos + 1))
@@ -905,7 +902,7 @@ def deconstruct_backward_goto_statements(
 
 
 def add_condition_to_node_execution(
-    cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base, List[Base]]
+    cond: Union[str, UnaryOpBase, BinaryOpBase], nodes: Union[Base, list[Base]]
 ) -> None:
     """
     Adds a condition to the execution of given nodes. Nodes are executed only if condition is evaluated
@@ -924,7 +921,7 @@ def add_condition_to_node_execution(
         if isinstance(node, (f03.Continue_Stmt, f03.EndStmtBase)):
             # Continue statements are no-op, but they may have label attached, so we leave them be.
             continue
-        elif isinstance(node, (f03.If_Stmt, f03.Else_If_Stmt)):
+        if isinstance(node, (f03.If_Stmt, f03.Else_If_Stmt)):
             # We merge the condition with existing if.
             own_cond = node.children[0]
             if cond in own_cond.tostr():
@@ -998,9 +995,9 @@ def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
     :return: The modified Fortran AST.
     """
     # Build a dictionary of subprogram name to subprogram node
-    subprograms_wo_modules: Dict[str, Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]] = {}
+    subprograms_wo_modules: dict[str, Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]] = {}
     # Build a dictionary of subprogram name to module
-    new_modules_name_map: Dict[str, str] = {}
+    new_modules_name_map: dict[str, str] = {}
     # Keep track of functions/subroutines with unsupported features. Raise error only if `EXTERNAL` references them.
     not_supported: list[str] = []
 
@@ -1056,7 +1053,9 @@ def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
 
             # If subprogram not in parsed code, a warning is raised for now. These may be calls to library nodes, to be added later.
             if name_str not in subprograms_wo_modules:
-                warnings.warn(f"Unresolved `EXTERNAL` reference: {name_str} (subprogram not found in parsed code)")
+                warnings.warn(
+                    f"Unresolved `EXTERNAL` reference: {name_str} (subprogram not found in parsed code)", stacklevel=2
+                )
                 continue
 
             # Wrap in module (default name: {name_str}_module)
@@ -1106,7 +1105,7 @@ def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
                 if name_str in new_modules_name_map:
                     utils.prepend_children(spec_part, f03.Use_Stmt(f"USE {new_modules_name_map[name_str]}"))
 
-            if all([(name_node.tostr() in new_modules_name_map) for name_node in ext_subprogram_names]):
+            if all((name_node.tostr() in new_modules_name_map) for name_node in ext_subprogram_names):
                 nodes_to_remove.append(ext_node)
             else:
                 nodes_to_remove += [n for n in ext_subprogram_names if (n.tostr() in new_modules_name_map)]

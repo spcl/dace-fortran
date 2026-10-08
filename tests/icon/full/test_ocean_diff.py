@@ -18,7 +18,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_ocean_diff.f90"
 
@@ -275,13 +274,14 @@ def test_ocean_diff_deepcopy_and_compare(tmp_path: Path):
             "-o",
             str(exe),
         ],
+        check=False,
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
     )
     assert compile.returncode == 0, f"mo_ocean_diff.f90 did not compile:\n{compile.stderr}"
 
-    run = subprocess.run([str(exe)], cwd=str(tmp_path), capture_output=True, text=True)
+    run = subprocess.run([str(exe)], check=False, cwd=str(tmp_path), capture_output=True, text=True)
     assert run.returncode == 0 and "PASS" in run.stdout, (
         f"differential helper driver failed:\nstdout={run.stdout}\nstderr={run.stderr}"
     )

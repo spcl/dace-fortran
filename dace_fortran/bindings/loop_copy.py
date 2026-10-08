@@ -9,14 +9,12 @@ alias), ``render_copy_in_loop`` (allocate + forward do-loop copy),
 return ``List[str]`` of lines pre-indented to wrapper-body level.
 """
 
-from typing import List, Tuple
-
-from dace_fortran.bindings.fortran_interface import FORTRAN_C_TYPE
 from dace_fortran.bindings.flatten_plan import (
     FlattenRecipe,
     strip_index_args,
     substitute_indices,
 )
+from dace_fortran.bindings.fortran_interface import FORTRAN_C_TYPE
 
 
 def fortran_scalar_type(dtype: str) -> str:
@@ -24,7 +22,7 @@ def fortran_scalar_type(dtype: str) -> str:
     return FORTRAN_C_TYPE.get(dtype, "real(c_double)")
 
 
-def _loop_index_names(rank: int) -> Tuple[str, ...]:
+def _loop_index_names(rank: int) -> tuple[str, ...]:
     """Loop-index names the wrapper head declares: ``('i1', 'i2', ..., 'iN')``."""
     return tuple(f"i{d + 1}" for d in range(rank))
 
@@ -34,7 +32,7 @@ def _loop_index_names(rank: int) -> Tuple[str, ...]:
 # ----------------------------------------------------------------------------
 
 
-def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
+def render_alias_calls(recipe: FlattenRecipe) -> list[str]:
     """Zero-copy alias emission for an ``aliasable=True`` recipe -- one
     ``call c_f_pointer(c_loc(<outer>), <flat>, [<shape>])`` per flat.
 
@@ -43,8 +41,8 @@ def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
     if not recipe.aliasable:
         raise ValueError("render_alias_calls called on non-aliasable recipe")
     shape_list = ", ".join(recipe.shape_exprs)
-    out: List[str] = []
-    for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs):
+    out: list[str] = []
+    for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs, strict=False):
         base = strip_index_args(read_expr)
         # Scalar member: c_f_pointer must NOT get a shape arg -- `[]` is
         # an invalid empty array constructor in Fortran.
@@ -60,7 +58,7 @@ def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
 # ----------------------------------------------------------------------------
 
 
-def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
+def render_copy_in_loop(recipe: FlattenRecipe) -> list[str]:
     """Generic forward copy: allocate flats, nested do-loops assign each
     flat from its ``read_expr`` with loop-index placeholders substituted.
     Requires ``aliasable=False``, ``rank >= 1``.
@@ -69,7 +67,7 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
     """
     if recipe.aliasable:
         raise ValueError("render_copy_in_loop called on aliasable recipe  --  use render_alias_calls")
-    out: List[str] = []
+    out: list[str] = []
     for flat in recipe.flat_names:
         out.append(f"    allocate({flat}({', '.join(recipe.shape_exprs)}))")
 
@@ -84,7 +82,7 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
 
     body_indent = " " * (recipe.rank * 2)
     idx_tuple = ", ".join(idx_names)
-    for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs):
+    for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs, strict=False):
         rhs = substitute_indices(read_expr, idx_names)
         out.append(f"    {body_indent}{flat}({idx_tuple}) = {rhs}")
 
@@ -100,7 +98,7 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
 # ----------------------------------------------------------------------------
 
 
-def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
+def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> list[str]:
     """Inverse of ``render_copy_in_loop``: pack flat buffers back into
     the outer storage at each position, then deallocate.
 
@@ -108,7 +106,7 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
     ``FlattenEntry.outer_expr``) so the renderer doesn't reach back up
     to the entry.
     """
-    out: List[str] = [f"    ! Copy-out: {outer_expr} <- {', '.join(recipe.flat_names)}"]
+    out: list[str] = [f"    ! Copy-out: {outer_expr} <- {', '.join(recipe.flat_names)}"]
 
     idx_names = _loop_index_names(recipe.rank)
     idx_tuple = ", ".join(idx_names)
@@ -164,7 +162,7 @@ def _aos_alloc_member_at_i(recipe: FlattenRecipe) -> str:
     return base.replace("$i1", "i1")
 
 
-def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
+def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> list[str]:
     """Compute ``cap``, allocate the 2D buffer, pack each allocated row's
     live region.  ``recipe.aos_alloc`` must be True."""
     if not recipe.aos_alloc:
@@ -193,7 +191,7 @@ def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str
     ]
 
 
-def render_aos_alloc_pack_out(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
+def render_aos_alloc_pack_out(recipe: FlattenRecipe, outer_expr: str) -> list[str]:
     """Copy each allocated row's live region back from the buffer, free
     the scratch.  No reallocation -- 5c-B kernels don't change
     per-instance sizes (reserved for 5c-C)."""

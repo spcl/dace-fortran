@@ -9,9 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.preprocess import merge_used_modules
-
+from tests._util import build_sdfg
 
 # Transitive project: physmod  <-  drivermod (use physmod)  <-  drv (use drivermod)
 _PHYSMOD = """\

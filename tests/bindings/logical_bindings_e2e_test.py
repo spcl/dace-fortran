@@ -9,13 +9,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
+from tests._util import build_sdfg
 
 
 def _module_wrap(free_subroutine_src: str, module_name: str) -> str:
@@ -69,7 +69,7 @@ def _build_e2e_module(
         "--f90flags=-Wl,--unresolved-symbols=ignore-all",
         "--quiet",
     ]
-    proc = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    proc = subprocess.run(cmd, check=False, cwd=build_dir, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"f2py compile failed:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
     if str(build_dir) not in sys.path:

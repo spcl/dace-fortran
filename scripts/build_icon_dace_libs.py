@@ -25,25 +25,8 @@ from pathlib import Path
 
 import dace
 
-# Re-use the iface + module-symbol-forward constants already pinned by
-# the velocity e2e test so the standalone build produces *exactly* the
-# artifacts the e2e is known to drive bit-exact.
-from tests.icon.full.test_dycore_velocity_external_e2e import (
-    _VELOCITY_MODULE_FORWARD,
-    _O0_FFLAGS,
-    _O0_CXX_FLAGS,
-    _velocity_iface,
-    _CALLER_PATH,
-    _SYNC_FORTRAN_SRC,
-    _DYCORE_WRAPPER_SRC,
-    _make_sdfg_shim_for_outer,
-    _build_sync_helpers,
-)
-
 import dace_fortran
-
-from tests._util import build_sdfg
-from dace_fortran.bindings import build_fortran_library, FlattenPlan
+from dace_fortran.bindings import FlattenPlan, build_fortran_library
 from dace_fortran.bindings.acc_transfers import (
     AccResidency,
     AccTransferPlan,
@@ -54,10 +37,26 @@ from dace_fortran.bindings.acc_transfers import (
     render_pre_call,
     render_sync,
 )
-from dace_fortran.llvm_toolchain import find_flang
 from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
+from dace_fortran.llvm_toolchain import find_flang
+from tests._util import build_sdfg
+
+# Re-use the iface + module-symbol-forward constants already pinned by
+# the velocity e2e test so the standalone build produces *exactly* the
+# artifacts the e2e is known to drive bit-exact.
+from tests.icon.full.test_dycore_velocity_external_e2e import (
+    _CALLER_PATH,
+    _DYCORE_WRAPPER_SRC,
+    _O0_CXX_FLAGS,
+    _O0_FFLAGS,
+    _SYNC_FORTRAN_SRC,
+    _VELOCITY_MODULE_FORWARD,
+    _build_sync_helpers,
+    _make_sdfg_shim_for_outer,
+    _velocity_iface,
+)
 
 _RELEASE_FFLAGS = (
     "-O3",
@@ -347,9 +346,9 @@ def build_velocity_inner_wrap(
     velocity_source: Path,
     out_dir: Path,
     release: bool,
-    icon_src: Path = None,
-    icon_build: Path = None,
-    acc_residency: Path = None,
+    icon_src: Path | None = None,
+    icon_build: Path | None = None,
+    acc_residency: Path | None = None,
 ):
     """Build ``libvelocity_inner_wrap.so`` from
     ``mo_velocity_advection.f90``.  The output dir gets the .so + the

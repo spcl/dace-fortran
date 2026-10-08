@@ -10,11 +10,11 @@ signature itself is unchanged.
 """
 
 from __future__ import annotations
+
 import re
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import dace
-from typing import Any
 
 
 @runtime_checkable

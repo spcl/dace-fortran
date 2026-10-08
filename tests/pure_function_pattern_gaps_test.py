@@ -15,10 +15,8 @@ recursion cleanly is better than silently emitting ``?``."""
 
 import numpy as np
 
-from tests._util import f2py_compile
-
 from dace_fortran import build_sdfg_from_files
-
+from tests._util import f2py_compile
 
 # ---------------------------------------------------------------------------
 # Pattern A -- array fn return used inside an arithmetic expression.

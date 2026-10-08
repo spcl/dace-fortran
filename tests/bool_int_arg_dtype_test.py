@@ -5,8 +5,8 @@ f2py-compiled reference."""
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
+from tests._util import build_sdfg
 
 
 def test_bool_logical_array_pass_through(tmp_path):

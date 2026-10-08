@@ -9,7 +9,6 @@ itself is covered in d-face's ``tests/library/argminmax_test.py``.
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent

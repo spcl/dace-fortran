@@ -3,12 +3,11 @@ size is bound at SDFG entry from ``omp_get_max_threads()``, not passed in by the
 
 import ctypes
 
+import dace
 import numpy as np
 import pytest
 
-import dace
-
-from dace_fortran.omp_threads import BindOmpThreadCount, OMP_NUM_THREADS_SYMBOL
+from dace_fortran.omp_threads import OMP_NUM_THREADS_SYMBOL, BindOmpThreadCount
 
 N = 64
 #: Room for one flag per thread of any machine.

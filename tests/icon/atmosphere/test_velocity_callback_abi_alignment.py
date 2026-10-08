@@ -40,11 +40,11 @@ def _type_members(tu: Path) -> dict:
     types, cur, members = {}, None, []
     for ln in tu.read_text().splitlines():
         if cur is None:
-            m = re.match(r"\s*TYPE\s*::\s*(\w+)\s*$", ln, re.I)
+            m = re.match(r"\s*TYPE\s*::\s*(\w+)\s*$", ln, re.IGNORECASE)
             if m:
                 cur, members = m.group(1), []
             continue
-        if re.match(r"\s*END\s+TYPE\b", ln, re.I):
+        if re.match(r"\s*END\s+TYPE\b", ln, re.IGNORECASE):
             types[cur] = members
             cur = None
             continue

@@ -5,7 +5,6 @@ Complementary case (tracker kept when ALLOCATED IS queried) is pinned by intrins
 
 from pathlib import Path
 
-
 from tests._util import build_sdfg
 
 

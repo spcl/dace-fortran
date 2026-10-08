@@ -35,12 +35,16 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import dace
 
 _DACE_FORTRAN = Path(__file__).resolve().parent.parent
+import dace_fortran
+from dace_fortran.bindings import FlattenPlan, build_fortran_library
+from dace_fortran.bindings.fortran_interface import build_auto_interface
+from dace_fortran.flang_codebase import _DEFINE_RE, _INCLUDE_RE
 from tests._util import build_sdfg, have_flang
 from tests.icon._halo_modes import _MPI_STUB
 from tests.icon.full._icon_solve_nh_patch import SOLVE_NH_WRAPPER_NAME
@@ -48,11 +52,6 @@ from tests.icon.full.test_dycore_from_icon_source import (
     _ICON_DEFINES_FALLBACK,
     _ICON_EXTERNAL_STUBS,
 )
-
-import dace_fortran
-from dace_fortran.bindings import build_fortran_library, FlattenPlan
-from dace_fortran.bindings.fortran_interface import build_auto_interface
-from dace_fortran.flang_codebase import _DEFINE_RE, _INCLUDE_RE
 
 _RELEASE_FFLAGS = (
     "-O3",

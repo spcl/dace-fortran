@@ -11,10 +11,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 from tests.icon.full._icon_solve_nh_patch import apply_solve_nh_patch
 from tests.icon.full._solve_nh_min_types import MIN_GEOMETRY_TYPES_F90, MIN_STATE_TYPES_F90
-
 
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_solve_nh_diff.f90"
@@ -82,6 +80,7 @@ def test_solve_nh_patch_structure_and_compiles(tmp_path: Path):
     # the patched module which USEs it).
     r = subprocess.run(
         ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "types.f90", "mo_solve_nh_diff.f90", "patched.f90"],
+        check=False,
         cwd=str(tmp_path),
         capture_output=True,
         text=True,

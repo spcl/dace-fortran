@@ -33,7 +33,7 @@ end subroutine fun
     size = 5
     d = np.full([size], 42, order="F", dtype=np.float64)
     d2 = np.full([3], 42, order="F", dtype=np.float64)
-    for i in range(0, size):
+    for i in range(size):
         d[i] = i + 1
 
     sdfg(d=d, d2=d2)
@@ -70,8 +70,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -114,8 +114,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([2, 3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -154,8 +154,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([3, 3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -194,8 +194,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([3, 3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -254,8 +254,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([3, 3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -303,8 +303,8 @@ end subroutine fun
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
     d2 = np.full([3], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
-        for j in range(0, size_y):
+    for i in range(size_x):
+        for j in range(size_y):
             d[i, j] = i + 20 * j
 
     sdfg(d=d, d2=d2)
@@ -333,7 +333,7 @@ end subroutine main
 
     size_x = 5
     d = np.full([1, size_x], 42, order="F", dtype=np.float64)
-    for i in range(0, size_x):
+    for i in range(size_x):
         d[0, i] = 0 + (i + 1) / 10
 
     firstcols = np.full([16], 1, order="F", dtype=np.int32)

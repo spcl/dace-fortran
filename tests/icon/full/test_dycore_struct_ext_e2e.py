@@ -19,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -28,7 +27,7 @@ from dace_fortran.bindings import (
     build_fortran_library,
 )
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 # state_t: two static-shape array members -- smallest struct exercising the bind_c shim's
 # 2 per-member C-ABI slots and the marshal expansion's 2 SoA flats.

@@ -25,6 +25,7 @@ so the project's ``USE`` lines resolve.  The emitted directory feeds
 """
 
 from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -32,14 +33,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
 
 from dace_fortran.entry_names import resolve_entry_name
 from dace_fortran.llvm_toolchain import require_flang
 
 #: (source_path, include_dirs, cpp_defines) of one Fortran translation unit.
-CompileEntry = Tuple[Path, List[str], List[str]]
+CompileEntry = tuple[Path, list[str], list[str]]
 
 #: ``MODULE <name>`` opener at the top of a Fortran source.  Used for
 #: the (fallback) ``--source`` topo-sort when no ``compile_commands.json``
@@ -49,7 +50,7 @@ _MODULE_DEF_RE = re.compile(r"^\s*MODULE\s+([A-Za-z_]\w*)\s*$", re.IGNORECASE | 
 _USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)", re.IGNORECASE | re.MULTILINE)
 
 
-def _topo_order(sources: Sequence[Path]) -> List[Path]:
+def _topo_order(sources: Sequence[Path]) -> list[Path]:
     """USE-graph topo-sort over an explicit file list (fallback path
     for projects without ``compile_commands.json``).  Files defining
     no module sort last.  Multi-module files are emitted once.  A
@@ -88,7 +89,7 @@ def _topo_order(sources: Sequence[Path]) -> List[Path]:
     return order
 
 
-def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
+def parse_compile_commands(cc_path: Path) -> list[CompileEntry]:
     """Return ``[(source_path, include_dirs, cpp_defines), ...]``
     in the order cmake / ninja recorded -- they topo-sort Fortran
     via the same scanner the regular build uses, so reusing that
@@ -102,7 +103,7 @@ def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
     """
     with open(cc_path) as f:
         entries = json.load(f)
-    out: List[CompileEntry] = []
+    out: list[CompileEntry] = []
     for e in entries:
         src = Path(e["file"])
         # Fortran TUs only -- a mixed project's C/C++ entries (yaxt,
@@ -121,8 +122,8 @@ def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
         # Recorded command may be a string ("cc -I/x foo.c") or a list.
         cmd = e["command"] if "command" in e else " ".join(e.get("arguments", []))
         tokens = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
-        includes: List[str] = []
-        defines: List[str] = []
+        includes: list[str] = []
+        defines: list[str] = []
         i = 0
         while i < len(tokens):
             t = tokens[i]
@@ -147,7 +148,7 @@ def parse_compile_commands(cc_path: Path) -> List[CompileEntry]:
     return out
 
 
-def _select_use_closure(parsed: List[CompileEntry], root_module: str) -> List[CompileEntry]:
+def _select_use_closure(parsed: list[CompileEntry], root_module: str) -> list[CompileEntry]:
     """Filter parsed ``(src, includes, defines)`` entries down to the TU
     that defines ``root_module`` plus the transitive ``USE``-closure it
     needs, preserving the original (build) order.
@@ -216,15 +217,15 @@ def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], d
 
 def emit(
     *,
-    compile_commands: Optional[Path] = None,
+    compile_commands: Path | None = None,
     sources: Sequence[Path] = (),
     stubs: Sequence[Path] = (),
     out_dir: Path,
     extra_includes: Sequence[Path] = (),
     extra_defines: Sequence[str] = (),
-    entry: Optional[str] = None,
-    flang: Optional[str] = None,
-) -> List[Path]:
+    entry: str | None = None,
+    flang: str | None = None,
+) -> list[Path]:
     """Emit ``.hlfir`` files under ``out_dir``.  Exactly one of
     ``compile_commands`` or ``sources`` must drive the file list:
 

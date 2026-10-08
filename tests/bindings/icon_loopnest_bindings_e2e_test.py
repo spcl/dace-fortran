@@ -39,15 +39,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
-
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 _LOOPNESTS_DIR = Path(__file__).resolve().parent.parent / "icon" / "selected_loopnests"
 _LOOPNEST = _LOOPNESTS_DIR / "icon_loopnest_2.f90"

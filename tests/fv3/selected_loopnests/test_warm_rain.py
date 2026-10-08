@@ -12,7 +12,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 _HERE = Path(__file__).parent
 _KM = 40
 _ENTRY = "warm_rain_mod::warm_rain_driver"

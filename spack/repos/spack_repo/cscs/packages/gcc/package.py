@@ -19,9 +19,8 @@
 # compiler at all.  Worth reporting to spack-packages; drop this overlay if
 # that lands.
 
-from spack_repo.builtin.packages.gcc.package import Gcc as BuiltinGcc
-
 from spack.package import *
+from spack_repo.builtin.packages.gcc.package import Gcc as BuiltinGcc
 
 
 class Gcc(BuiltinGcc):

@@ -18,11 +18,11 @@ import numpy as np
 import pytest
 
 from tests._util import f2py_compile
+from tests.cloudsc.full._harness import run_cloudsc
 from tests.cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     program_outputs,
 )
-from tests.cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
 

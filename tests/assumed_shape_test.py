@@ -12,10 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+from dace_fortran.builder import SDFGBuilder
 from tests._util import flang_binary
-
-from dace_fortran.builder import SDFGBuilder  # noqa: E402
-
 
 # Two files (assumed-shape callee + custom-bounded driver) exercise the
 # multi-file driver (parse_files -> inline-all), the way ICON's cross-module kernels will.
@@ -74,7 +72,7 @@ def test_inlined_hlfir_has_assumed_shape_alias_declare(tmp_path: Path):
     """After hlfir-inline-all+symbol-dce, IR must retain the alias-declare pattern
     behind assumed-shape re-basing (shape-less declare whose memref fir.converts the
     caller's shape_shift declare) -- pins IR shape, not yet SDFG correctness."""
-    from dace_fortran.build_bridge import hb  # noqa: E402
+    from dace_fortran.build_bridge import hb
 
     callee_hlfir = _hlfir(_CALLEE_SRC, tmp_path / "callee.hlfir")
     driver_hlfir = _hlfir(_DRIVER_SRC, tmp_path / "driver.hlfir")

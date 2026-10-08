@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from tests._util import flang_binary
 from dace_fortran.flang_codebase import (
     FLANG_BUG_PATCHES,
     LIBRARY_STUBS,
@@ -21,6 +20,7 @@ from dace_fortran.flang_codebase import (
     patch_mpi_sizeof,
     prepare_flang_translation_unit,
 )
+from tests._util import flang_binary
 
 # ICON source: in-repo submodule by default, override with ICON_SRC. Build dir is owned
 # by the icon_build fixture (root conftest.py), built into TMP storage on demand.
@@ -155,6 +155,7 @@ def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, i
             "-o",
             str(hlfir_path),
         ],
+        check=False,
         capture_output=True,
         text=True,
         cwd=str(tmp_path),

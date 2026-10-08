@@ -18,14 +18,13 @@ not tolerance-based.
 import ctypes
 from pathlib import Path
 
+import dace
 import numpy as np
 
-import dace
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 # matches the reference's arithmetic order across all three build layers: DaCe's default -O3
 # -ffast-math would contract a*b+c into an FMA (~1 ULP drift), breaking the bit-exact comparison.

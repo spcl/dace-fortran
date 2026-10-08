@@ -21,9 +21,8 @@ Checked e2e against an f2py-compiled gfortran reference: bugged = diverges, fixe
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
-
+from tests._util import build_sdfg
 
 _HEAD = "MODULE kernel_mod\nCONTAINS\n"
 _TAIL = "END MODULE kernel_mod\n"

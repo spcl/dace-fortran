@@ -9,11 +9,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-
 from dace_fortran import build_sdfg, build_sdfg_from_files
 from dace_fortran.build import build_sdfg as build_sdfg_api
 from dace_fortran.preprocess import MergeEngine
-
 
 _MOD_ADD = """
 module mod_add
@@ -72,7 +70,7 @@ def _write(tmp: Path, **named: str) -> list[Path]:
     """Write ``name=source`` pairs to ``<tmp>/<name>.f90``; return paths."""
     tmp.mkdir(parents=True, exist_ok=True)
     paths = [tmp / f"{nm}.f90" for nm in named]
-    for path, src in zip(paths, named.values()):
+    for path, src in zip(paths, named.values(), strict=False):
         path.write_text(src)
     return paths
 
@@ -143,7 +141,7 @@ end module drv
 def test_entry_not_found_is_rejected(tmp_path: Path):
     """No input file defines the entry's procedure -> clear error."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD)
-    with pytest.raises(ValueError, match="(?i)no input file defines procedure"):
+    with pytest.raises(ValueError, match=r"(?i)no input file defines procedure"):
         build_sdfg_from_files(files, entry="missing", name="x", out_dir=tmp_path / "b")
 
 
@@ -152,14 +150,14 @@ def test_entry_resolution_contract(tmp_path: Path):
     empty/ambiguous source (no "first of many" guessing); ``build_sdfg_from_files``
     always requires ``entry=`` (it selects the root file)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
-    with pytest.raises(ValueError, match="(?i)requires entry"):
+    with pytest.raises(ValueError, match=r"(?i)requires entry"):
         build_sdfg_from_files(files, name="run", out_dir=tmp_path / "b")
 
     two_procs = _DRIVER + "\nsubroutine other(p)\n  real(8) :: p\n  p = 1.0d0\nend subroutine other\n"
-    with pytest.raises(ValueError, match="(?i)multiple procedures"):
+    with pytest.raises(ValueError, match=r"(?i)multiple procedures"):
         build_sdfg(two_procs, name="amb", out_dir=tmp_path / "b2")
 
-    with pytest.raises(ValueError, match="(?i)no SUBROUTINE/FUNCTION"):
+    with pytest.raises(ValueError, match=r"(?i)no SUBROUTINE/FUNCTION"):
         build_sdfg("module m\n  integer :: x\nend module m\n", name="np", out_dir=tmp_path / "b3")
 
 

@@ -11,20 +11,22 @@ import dataclasses
 import importlib
 import math
 import re
+from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Sequence, TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
 
 import dace.symbolic
-from dace import dtypes, InterstateEdge, Memlet
+from dace import InterstateEdge, Memlet, dtypes
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
-from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.builder.records import NodeLike, SyntheticNode
+from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.external import C_TYPES, Arg, ArgKind, CAbi, Intent
 
 if TYPE_CHECKING:
     from dace.sdfg.nodes import LibraryNode, Node
     from dace.sdfg.state import ControlFlowRegion, SDFGState
+
     from dace_fortran.builder import SDFGBuilder
     from dace_fortran.builder.context import Ctx
 
@@ -115,7 +117,7 @@ def _parse_reduce_identity(s: str) -> bool | int | float:
     try:
         return float(s)
     except ValueError:
-        raise NotImplementedError(f"unsupported reduction identity {s!r}")
+        raise NotImplementedError(f"unsupported reduction identity {s!r}") from None
 
 
 def add_copy_node(builder: SDFGBuilder, ctx: Ctx, state: SDFGState, src_name: str, tgt_name: str) -> None:
@@ -251,8 +253,9 @@ def emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlo
 
 
 def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
+    from dace import dtypes
+
     from dace_fortran.intrinsics import libnode_spec
-    import dace.dtypes as dtypes
 
     state = ctx.flush_and_ensure(builder, region)
 
@@ -317,8 +320,8 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
         opts = n.options or {}
         shift_expr = opts.get("shift", None)
         boundary_expr = opts.get("boundary", None)
-        shift = dace.symbolic.pystr_to_symbolic(shift_expr) if shift_expr else None  # noqa: F405
-        boundary = dace.symbolic.pystr_to_symbolic(boundary_expr) if boundary_expr else None  # noqa: F405
+        shift = dace.symbolic.pystr_to_symbolic(shift_expr) if shift_expr else None
+        boundary = dace.symbolic.pystr_to_symbolic(boundary_expr) if boundary_expr else None
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
         if spec.node_cls == "CShift":
             node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift)
@@ -327,7 +330,7 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
         # Promote shift's free symbols to SDFG symbols: otherwise a scalar INTENT(IN) arg may
         # land as a Scalar array and the libnode's symbolic-property reference won't match at
         # arglist time.
-        import dace.dtypes as dtypes
+        from dace import dtypes
 
         if shift is not None:
             for sym in shift.free_symbols:
@@ -342,7 +345,7 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
                     region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym_name: f"{name}[0]"}))
                     ctx.cur = nxt
                     state = ctx.flush_and_ensure(builder, region)
-                    node.shift = node.shift.subs(sym, dace.symbolic.symbol(sym_name))  # noqa: F405
+                    node.shift = node.shift.subs(sym, dace.symbolic.symbol(sym_name))
                 else:
                     ctx.sdfg.add_symbol(name, dtypes.int64)
     elif spec.node_cls == "Norm2":
@@ -390,12 +393,9 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
     effective_in_conns = list(in_conns)
     if has_mask and spec.node_cls in ("ArgMin", "ArgMax"):
         effective_in_conns.append("_mask")
-    for conn, src, sub in zip(effective_in_conns, n.call_args, arg_subsets):
+    for conn, src, sub in zip(effective_in_conns, n.call_args, arg_subsets, strict=False):
         src_desc = ctx.sdfg.arrays[src]
-        if sub:
-            in_memlet = Memlet(f"{src}[{sub}]")
-        else:
-            in_memlet = Memlet.from_array(src, src_desc)
+        in_memlet = Memlet(f"{src}[{sub}]") if sub else Memlet.from_array(src, src_desc)
         state.add_edge(acc(builder, state, src), None, node, conn, in_memlet)
 
     # Element-designate dest (res1(1) = dot_product(...)): narrow the output memlet to one
@@ -1505,6 +1505,7 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     # SDFG validation rejects.  A fresh read + write pair binds to the same
     # underlying array but lets the dataflow stay acyclic.
     from dace.data import View
+
     from dace_fortran.builder.emit_tasklet import ensure_view_read_link, ensure_view_writeback_link
 
     in_node = state.add_read(in_arr)
@@ -1581,6 +1582,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     :raises ValueError: registered arg count disagrees with the call.
     """
     import dace
+
     from dace_fortran.external import ExternalCall, lookup_external
 
     # Normalise the bridge's callee name to the registry key the user
@@ -1632,6 +1634,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # so it still needs an authored ``Arg(kind=AOS)``.
     if not sig.args and names:
         from dataclasses import replace
+
         from dace.data import Scalar
 
         if group_pairs:
@@ -1744,7 +1747,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # logical-term position to ``(shape_tuple,)``.
     array_shape_at_term: dict = {}
     prev_gid = None
-    for i, (kind, dtype, intent, gid) in enumerate(plan):
+    for i, (kind, _dtype, intent, gid) in enumerate(plan):
         name = names[i]
         if gid is not None:
             desc = ctx.sdfg.arrays.get(name)
@@ -1957,7 +1960,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             for k, (ct, nel, _, _, _, _) in enumerate(mems)
         )
         body_lines.append(f"struct {{ {fields} }} {buf};")
-        for k, (ct, nel, slot_in, slot_out, _shape, _sym) in enumerate(mems):
+        for k, (_ct, nel, slot_in, _slot_out, _shape, _sym) in enumerate(mems):
             if slot_in is None or nel == 0:
                 continue
             if nel == 1:
@@ -2005,7 +2008,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     for gid, mems in group_members.items():
         if group_c_abi.get(gid, CAbi.AOS_STRUCT_PTR) is not CAbi.AOS_STRUCT_PTR:
             continue
-        for k, (ct, nel, slot_in, slot_out, _shape, _sym) in enumerate(mems):
+        for k, (_ct, nel, _slot_in, slot_out, _shape, _sym) in enumerate(mems):
             if slot_out is None or nel == 0:
                 continue
             if nel == 1:
@@ -2029,7 +2032,7 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     last_gid_seen = None
     last_member_idx = -1
     plan_term_index = -1  # mirrors ``logical_terms`` indexing for non-aos
-    for kind, dtype, intent, gid in plan:
+    for _kind, _dtype, _intent, gid in plan:
         if gid is None:
             plan_term_index += 1
             term_shape = array_shape_at_term.get(plan_term_index)
@@ -2112,15 +2115,13 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     state.add_node(node)
 
     import dace.data as _dd
+
     from dace_fortran.builder.access import acc as _acc
     from dace_fortran.builder.emit_tasklet import ensure_view_writeback_link
 
     for name, conn, writes in edges:
-        if conn in comm_conns:
-            # Comm: by-value opaque scalar (subset '0', single element).
-            mem = Memlet(data=name, subset="0")
-        else:
-            mem = Memlet.from_array(name, ctx.sdfg.arrays[name])
+        # Comm: by-value opaque scalar (subset '0', single element).
+        mem = Memlet(data=name, subset="0") if conn in comm_conns else Memlet.from_array(name, ctx.sdfg.arrays[name])
         # A whole-array POINTER rebind (``fld => tgt``) reaches an external
         # as a View of its target (the velocity-binding shallow-pass pattern).
         # A View access node needs the canonical source <-> view linking edge
@@ -2248,6 +2249,7 @@ def _emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlo
     src_subset = opts.get("src_subset", "")
     if src_subset:
         import dace
+
         from dace_fortran.builder.access import resolve_full_dim_markers
 
         parts = resolve_full_dim_markers([p.strip() for p in src_subset.split(",")], [str(s) for s in src_desc.shape])

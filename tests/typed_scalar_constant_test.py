@@ -12,7 +12,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 module m
   implicit none

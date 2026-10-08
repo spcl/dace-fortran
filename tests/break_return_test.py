@@ -39,6 +39,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     SDFG must leave inputs untouched (no compute before the return)."""
     import dace
     from dace import SDFG
+
     from dace_fortran.builder import SDFGBuilder
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
@@ -72,7 +73,8 @@ def test_break_block_inside_loop_region(tmp_path):
     an early-exit while; the empty body never writes ``a``, so it comes back unchanged either way."""
     import dace
     from dace import SDFG
-    from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
+    from dace.sdfg.state import ConditionalBlock, ControlFlowRegion, LoopRegion
+
     from dace_fortran.builder import SDFGBuilder
     from dace_fortran.builder.context import Ctx
 

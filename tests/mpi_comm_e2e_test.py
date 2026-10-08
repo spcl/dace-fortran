@@ -16,13 +16,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_on_root, build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     build_fortran_library,
 )
+from tests._util import build_on_root, build_sdfg
 
 pytestmark = pytest.mark.mpi
 

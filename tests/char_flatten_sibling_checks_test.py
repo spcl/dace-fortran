@@ -22,10 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-
+from tests._util import build_sdfg
 
 # Minimal QE ``addusxx_g`` shape: character dispatch computed into logicals,
 # one COMBINED input-validation IF across all arms (guarded by ``errore``,

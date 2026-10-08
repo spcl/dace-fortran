@@ -74,7 +74,7 @@ END MODULE matmul_atb_kernel_mod
     mm_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     tr_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Transpose")
     assert mm_count == 1 and tr_count == 0, f"expected 1 MatMul + 0 Transpose, got mm={mm_count} tr={tr_count}"
-    mm = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"][0]
+    mm = next(n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     assert mm.transB is True, f"expected transB=True, got {mm.transB}"
 
     rng = np.random.default_rng(seed=11)
@@ -115,7 +115,7 @@ END MODULE matmul_atbt_kernel_mod
     assert mm_count == 1 and tr_count == 0, (
         f"expected 1 MatMul + 0 Transpose (both fold via BLAS), got mm={mm_count} tr={tr_count}"
     )
-    mm = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"][0]
+    mm = next(n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     assert mm.transA is True and mm.transB is True, (
         f"expected transA=True transB=True, got transA={mm.transA} transB={mm.transB}"
     )

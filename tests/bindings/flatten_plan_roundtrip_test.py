@@ -5,10 +5,9 @@ structurally correct hlfir.flatten_plan attribute that the bridge decodes into F
 import subprocess
 from pathlib import Path
 
-
-from tests._util import flang_binary
-from dace_fortran.build_bridge import hb
 from dace_fortran.bindings import FlattenPlan
+from dace_fortran.build_bridge import hb
+from tests._util import flang_binary
 
 
 def _plan_from_fortran(src: str, tmp_path: Path) -> FlattenPlan:

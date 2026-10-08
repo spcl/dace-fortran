@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, TypeAlias, TypeVar, cast
+from collections.abc import Callable, Iterable
+from typing import Any, TypeAlias, TypeVar, cast
 
 import dace.library
 from dace import dtypes

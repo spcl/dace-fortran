@@ -4,12 +4,11 @@ from __future__ import annotations
 
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Union, Tuple, Dict, Optional, List, Any, Type, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard, Union
 
-import numpy as np
 import fparser.two.Fortran2003 as f03
+import numpy as np
 
 if TYPE_CHECKING:
     from dace_fortran.inliner.ast_desugaring.utils import NAMED_STMTS_OF_INTEREST_TYPES
@@ -17,10 +16,10 @@ if TYPE_CHECKING:
 # fparser node type aliases live in the modules that use them; this file is for our own custom types.
 
 # SPEC: tuple of strings uniquely identifying an AST object, e.g. ('my_program', 'my_module', 'my_subroutine', 'my_variable').
-SPEC = Tuple[str, ...]
+SPEC = tuple[str, ...]
 
 # Maps a SPEC to its defining node; string is a forward ref to NAMED_STMTS_OF_INTEREST_TYPES in utils.
-SPEC_TABLE = Dict[SPEC, "NAMED_STMTS_OF_INTEREST_TYPES"]
+SPEC_TABLE = dict[SPEC, "NAMED_STMTS_OF_INTEREST_TYPES"]
 
 # Type Aliases for numpy types used in constant evaluation
 NUMPY_INTS_TYPES = Union[np.int8, np.int16, np.int32, np.int64]
@@ -49,17 +48,17 @@ class TYPE_SPEC:
 
     NO_ATTRS = ""
 
-    __slots__ = ("spec", "shape", "optional", "pointer", "inp", "out", "alloc", "const", "keyword")
+    __slots__ = ("alloc", "const", "inp", "keyword", "optional", "out", "pointer", "shape", "spec")
 
     spec: SPEC
-    shape: Tuple[str, ...]
+    shape: tuple[str, ...]
     optional: bool
     pointer: bool
     inp: bool
     out: bool
     alloc: bool
     const: bool
-    keyword: Optional[str]
+    keyword: str | None
 
     def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False) -> None:
         if isinstance(spec, str):
@@ -77,7 +76,7 @@ class TYPE_SPEC:
             # Argument with no explicit intent is both in and out.
             self.inp, self.out = True, True
 
-    def copy(self) -> "TYPE_SPEC":
+    def copy(self) -> TYPE_SPEC:
         """Independent copy; use before mutating shape/keyword in place so a shared
         sentinel like the match-anything MATCH_ALL is never corrupted."""
         other = TYPE_SPEC(self.spec)
@@ -92,7 +91,7 @@ class TYPE_SPEC:
         return other
 
     @staticmethod
-    def _parse_shape(attrs: str) -> Tuple[str, ...]:
+    def _parse_shape(attrs: str) -> tuple[str, ...]:
         """Parses the DIMENSION attribute into per-dimension strings."""
         if "DIMENSION" not in attrs:
             return tuple()
@@ -108,10 +107,9 @@ class TYPE_SPEC:
                 if paren_count == 0:
                     parts.append(dims[part_start:i])
                     break
-            elif dims[i] == ",":
-                if paren_count == 1:
-                    parts.append(dims[part_start:i])
-                    part_start = i + 1
+            elif dims[i] == "," and paren_count == 1:
+                parts.append(dims[part_start:i])
+                part_start = i + 1
         return tuple(p.strip().lower() for p in parts)
 
     def __repr__(self) -> str:
@@ -145,7 +143,7 @@ class TYPE_SPEC:
         typ = self.spec[-1]
         typ = TYPE_MAP.get(typ, f"type({typ})")
 
-        bits: List[str] = [typ]
+        bits: list[str] = [typ]
         if self.alloc:
             bits.append("allocatable")
         if self.optional:
@@ -168,7 +166,7 @@ class TYPE_SPEC:
 class ConstTypeInjection:
     """Constant-value injection for a derived-type component, applied everywhere that type is used (optionally scoped)."""
 
-    scope_spec: Optional[SPEC]  # Only replace within this scope object.
+    scope_spec: SPEC | None  # Only replace within this scope object.
     type_spec: SPEC  # The root config derived type's spec (w.r.t. where it is defined)
     component_spec: SPEC  # A tuple of strings that identifies the targeted component
     value: Any  # Literal value to substitute with.
@@ -178,7 +176,7 @@ class ConstTypeInjection:
 class ConstInstanceInjection:
     """Constant-value injection for one variable instance's component (not all instances of its type)."""
 
-    scope_spec: Optional[SPEC]  # Only replace within this scope object.
+    scope_spec: SPEC | None  # Only replace within this scope object.
     root_spec: SPEC  # The root config object's spec (w.r.t. where it is defined)
     component_spec: SPEC  # A tuple of strings that identifies the targeted component
     value: Any  # Literal value to substitute with.
@@ -210,17 +208,14 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
         bytez = count_bytes(type(val))
         valstr = str(val)
         if bytez == 8:
-            if "e" in valstr:
-                valstr = valstr.replace("e", "D")
-            else:
-                valstr = f"{valstr}D0"
+            valstr = valstr.replace("e", "D") if "e" in valstr else f"{valstr}D0"
         if val < 0:
             return f03.Signed_Real_Literal_Constant(valstr)
         return f03.Real_Literal_Constant(valstr)
     raise TypeError(f"not a numpy scalar the constant evaluator produces: {type(val)}")
 
 
-def count_bytes(t: Type[NUMPY_TYPES]) -> int:
+def count_bytes(t: type[NUMPY_TYPES]) -> int:
     """Byte size of a numpy numeric type."""
     if t is np.int8:
         return 1

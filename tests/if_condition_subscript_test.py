@@ -22,7 +22,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 _IF_OR_SRC = """
 SUBROUTINE if_logical_or_neighbour(mask, out, n)
   IMPLICIT NONE

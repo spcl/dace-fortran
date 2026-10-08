@@ -17,7 +17,6 @@ import pytest
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 module mo_cr
   implicit none

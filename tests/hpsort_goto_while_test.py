@@ -23,7 +23,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Verbatim from QE (ast_v1_h_psi.f90:977) -- the ``goto_10`` DO WHILE shape is
 # what drives the structurizer to scf.index_switch.
 _SRC = """

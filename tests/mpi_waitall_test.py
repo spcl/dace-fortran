@@ -7,9 +7,7 @@ analogue of ``mpi_wait`` -> ``Wait``. Lowering test only; no ranks required.
 
 from pathlib import Path
 
-
 from tests._util import build_sdfg
-
 
 #: nonblocking exchange, two requests in an array, completed by one MPI_Waitall -- the ICON
 #: halo mpi_waitall(p_irequest, p_request, ...) shape in miniature

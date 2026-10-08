@@ -14,11 +14,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-
 from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
-def _emit_hlfir_and_strip(src: str, *, env_extra: dict = None) -> str:
+def _emit_hlfir_and_strip(src: str, *, env_extra: dict | None = None) -> str:
     """Compile ``src`` to HLFIR with flang, parse into the bridge, run
     ``hlfir-strip-error-helpers``, return the dumped IR.  Split out from
     ``build_sdfg`` so the test can inspect pre/post IR for this pre-pipeline pass."""

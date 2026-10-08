@@ -18,7 +18,6 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
 from dace_fortran.fparser_inliner import inline_to_ast, restore_cross_module_uses, strip_builtin_stub_modules
 
 
@@ -28,7 +27,10 @@ def _compiles(src_text: str) -> bool:
         f = Path(td) / "single.f90"
         f.write_text(src_text)
         r = subprocess.run(
-            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)],
+            check=False,
+            cwd=td,
+            capture_output=True,
         )
         if r.returncode != 0:
             print(r.stderr.decode())
@@ -176,8 +178,9 @@ def test_restore_no_double_import_when_whole_module_used():
 
     Calls restore_cross_module_uses directly on an AST that still carries the
     whole USE (the full pipeline strips every inter-module USE)."""
-    from fparser.two.parser import ParserFactory
     from fparser.common.readfortran import FortranStringReader
+    from fparser.two.parser import ParserFactory
+
     from dace_fortran.inliner.ast_desugaring import cleanup
 
     src = """
@@ -540,8 +543,9 @@ def test_proc_pointer_component_uses_component_name_not_interface():
     """``procedure(fun), pointer :: nofun`` is the component ``nofun`` (not the
     interface ``fun``): the two same-interface components map to distinct
     specs."""
-    from fparser.two.parser import ParserFactory
     from fparser.common.readfortran import FortranStringReader
+    from fparser.two.parser import ParserFactory
+
     from dace_fortran.inliner.ast_desugaring import analysis, cleanup
 
     src = """
@@ -571,9 +575,10 @@ def test_associate_section_with_fixed_dimension():
     """``associate(col => a(:, 1))`` then ``col(i) = ...`` lowers to
     ``a(i, 1) = ...`` -- the use indexes only the sectioned dimension, the
     fixed ``1`` is preserved."""
-    from fparser.two.parser import ParserFactory
     from fparser.common.readfortran import FortranStringReader
-    from dace_fortran.inliner.ast_desugaring import desugaring, cleanup
+    from fparser.two.parser import ParserFactory
+
+    from dace_fortran.inliner.ast_desugaring import cleanup, desugaring
 
     src = """
 subroutine main(a, i, v)

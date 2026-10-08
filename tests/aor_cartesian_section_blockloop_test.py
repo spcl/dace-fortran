@@ -13,7 +13,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Two inlining levels needed: ``mid`` passes a per-block 2-D SECTION of the WHOLE
 # 3-D member to ``worker``, so after inlining the section's base is an inlined
 # alias reached through ``copy_in`` -- the chain shape that defeats the walkers.

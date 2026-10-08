@@ -10,10 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.external import ExternalCall, apply_external_functions, clear_external_registry
 from dace_fortran.external_functions import ExternalFunction
-
+from tests._util import build_sdfg
 
 # Separately-compiled external function: increments a whole array by 1.
 # ``bind(c, name="foo")`` -> stable, unmangled C symbol callable from

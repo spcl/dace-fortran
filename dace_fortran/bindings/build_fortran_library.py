@@ -11,13 +11,15 @@ kernel ``.so`` and any extra sources into one shared library.
 """
 
 from __future__ import annotations
+
 import ctypes
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Sequence
+from typing import TYPE_CHECKING
 
 from dace_fortran.bindings.acc_transfers import Directive
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
@@ -94,7 +96,7 @@ def _ensure_target_on_module_deferred_arrays(text: str) -> str:
     in_module = False
     in_spec = True
     in_type = False
-    out: List[str] = []
+    out: list[str] = []
     for raw in lines:
         if re.match(r"^\s*MODULE\s+\w+", raw, re.IGNORECASE):
             in_module = True
@@ -286,7 +288,7 @@ def build_fortran_library(
     so_path = out_dir_path / f"lib{name}.so"
     # Copy and patch prelude sources in the build dir so module arrays used by
     # the binding carry TARGET; the originals are left untouched.
-    patched_preludes: List[Path] = []
+    patched_preludes: list[Path] = []
     for src in prelude_sources:
         src_path = Path(src)
         patched = out_dir_path / f"{src_path.stem}_target{src_path.suffix}"

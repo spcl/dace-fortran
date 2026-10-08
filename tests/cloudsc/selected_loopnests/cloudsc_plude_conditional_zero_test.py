@@ -5,8 +5,8 @@ unconditionally zeroes.  E2e against an f2py-compiled reference."""
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_cloudsc_plude_conditional_zero(tmp_path):

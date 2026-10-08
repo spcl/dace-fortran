@@ -45,7 +45,7 @@ _ARRAY_ORDER = (
     "pre_gsp",
 )
 # Fields written by graupel_run (everything the comparison must cover).
-RESULT_FIELDS = INOUT_2D + ("pflx",) + OUT_1D
+RESULT_FIELDS = (*INOUT_2D, "pflx", *OUT_1D)
 
 TMELT = 273.15
 RD = 287.04

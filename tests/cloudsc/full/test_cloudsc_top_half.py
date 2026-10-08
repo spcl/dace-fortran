@@ -13,12 +13,12 @@ import numpy as np
 import pytest
 
 from tests._util import build_sdfg, f2py_compile
+from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 from tests.cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     get_inputs_physical,
     get_outputs,
 )
-from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
 
 _HERE = Path(__file__).resolve().parent
 

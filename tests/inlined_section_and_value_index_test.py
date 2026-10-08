@@ -25,7 +25,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # (a) -------------------------------------------------------------------
 _SRC_SECTION = """
 MODULE m_seca

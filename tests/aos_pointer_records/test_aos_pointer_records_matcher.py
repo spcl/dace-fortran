@@ -4,7 +4,6 @@ AoS-of-pointer-records pattern emits ``hlfir.aos_ptr_records.<aos_decl>``, ahead
 
 from pathlib import Path
 
-
 from dace_fortran.build import make_builder
 
 _HERE = Path(__file__).resolve().parent

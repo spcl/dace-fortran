@@ -10,7 +10,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 

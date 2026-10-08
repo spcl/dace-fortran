@@ -54,9 +54,8 @@
 
 import os
 
-from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm
-
 from spack.package import *
+from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm
 
 
 class Llvm(BuiltinLlvm):
@@ -74,7 +73,7 @@ class Llvm(BuiltinLlvm):
     for _t in ("nvptx", "all"):
         conflicts(
             "openmp=project",
-            when="@22: +libomptarget targets={0}".format(_t),
+            when=f"@22: +libomptarget targets={_t}",
             msg="llvm@22: +libomptarget with an nvptx target needs openmp=runtime: the "
             "OpenMP device runtime is built by a second LLVM_RUNTIME_TARGETS cross-build, "
             "which only exists for LLVM_ENABLE_RUNTIMES entries",
@@ -104,7 +103,7 @@ class Llvm(BuiltinLlvm):
                 [
                     # 'default' must stay first: it is the existing host runtimes build.
                     self.define("LLVM_RUNTIME_TARGETS", ["default", triple]),
-                    self.define("RUNTIMES_{0}_LLVM_ENABLE_RUNTIMES".format(triple), "openmp"),
+                    self.define(f"RUNTIMES_{triple}_LLVM_ENABLE_RUNTIMES", "openmp"),
                 ]
             )
 

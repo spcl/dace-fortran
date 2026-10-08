@@ -11,9 +11,7 @@ reference is the closed-form result; offset constants are the correctness signal
 
 from pathlib import Path
 
-
 from tests._util import build_sdfg
-
 
 _SRC = """
 module mn

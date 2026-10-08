@@ -29,12 +29,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.bindings.frozen_signature import refreeze
 from dace_fortran.pipelines import num_maps, optimize
+from tests._util import build_sdfg
 from tests.qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
 
 pytestmark = pytest.mark.e2e

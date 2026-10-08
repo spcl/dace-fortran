@@ -35,7 +35,6 @@ from tests._helpers import f2py
 from tests._util import build_sdfg
 from tests.hazard_scan import scan
 
-
 HEAD = """
 MODULE kernel_mod
 CONTAINS

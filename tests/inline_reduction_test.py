@@ -186,6 +186,7 @@ end subroutine kernel
     # drive the bridge pipeline directly: parse HLFIR, run DEFAULT_PIPELINE; a resurfaced
     # verifier complaint makes run_passes raise
     import subprocess
+
     from dace_fortran import DEFAULT_PIPELINE
     from dace_fortran.build_bridge import hb
 

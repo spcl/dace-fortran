@@ -9,7 +9,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.fparser_inliner import inline_to_ast
 

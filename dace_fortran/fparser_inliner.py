@@ -37,23 +37,23 @@ that want to inspect / further-transform the tree before serialisation.
 """
 
 from __future__ import annotations
+
 import argparse
 import logging
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union, cast
+from typing import NamedTuple, Union, cast
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
-
-from dace_fortran.llvm_toolchain import require_flang
-from dace_fortran.entry_names import resolve_entry_name
 from fparser.two.C99Preprocessor import CPP_CLASS_NAMES
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, FortranSyntaxError, walk
 
+from dace_fortran.entry_names import resolve_entry_name
 from dace_fortran.external_functions import ExternalFunction, dont_inline_names, validate
 from dace_fortran.inliner.ast_desugaring import (
     analysis,
@@ -61,12 +61,15 @@ from dace_fortran.inliner.ast_desugaring import (
     desugaring,
     optimizations,
     pruning,
-    specialize_at_source as specialize_at_source_mod,
     types,
     utils,
 )
+from dace_fortran.inliner.ast_desugaring import (
+    specialize_at_source as specialize_at_source_mod,
+)
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import monomorphize_auto
 from dace_fortran.inliner.ast_utils import atmost_one, children_of_type, singular
+from dace_fortran.llvm_toolchain import require_flang
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +178,7 @@ INTRINSIC_MODULE_NAMES = frozenset(
 EXTERNAL_LIBRARY_MODULE_NAMES = frozenset({"omp_lib", "omp_lib_kinds", "openacc", "mpi", "mpi_f08"})
 
 
-def _preserved_intrinsic_modules(ast: Optional[f03.Program] = None) -> frozenset:
+def _preserved_intrinsic_modules(ast: f03.Program | None = None) -> frozenset:
     """The compiler-provided modules whose ``USE`` is captured before the
     pipeline and restored after.  Under ``tolerate_external_uses`` the external
     -library group (:data:`EXTERNAL_LIBRARY_MODULE_NAMES`) is excluded so those
@@ -246,58 +249,58 @@ class ParseConfig:
     """
 
     __slots__ = (
-        "sources",
-        "entry_points",
-        "config_injections",
-        "make_return_false",
-        "do_not_prune",
-        "do_not_rename",
-        "make_noop",
-        "drop_noop_calls",
         "ast_checkpoint_dir",
+        "config_injections",
         "consolidate_global_data",
-        "rename_uniquely",
+        "do_not_prune",
         "do_not_prune_type_components",
+        "do_not_rename",
+        "drop_noop_calls",
+        "entry_points",
+        "f2py_safe",
         "keep_type_components",
+        "make_noop",
+        "make_return_false",
         "monomorphize",
         "rename_specifics",
+        "rename_uniquely",
+        "sources",
         "specialize_at_source",
-        "f2py_safe",
     )
 
-    sources: Dict[str, str]
-    entry_points: List[types.SPEC]
+    sources: dict[str, str]
+    entry_points: list[types.SPEC]
     config_injections: list
-    make_return_false: Set[str]
-    do_not_prune: List[types.SPEC]
-    do_not_rename: List[types.SPEC]
-    make_noop: List[types.SPEC]
-    drop_noop_calls: Set[str]
-    ast_checkpoint_dir: Optional[Path]
+    make_return_false: set[str]
+    do_not_prune: list[types.SPEC]
+    do_not_rename: list[types.SPEC]
+    make_noop: list[types.SPEC]
+    drop_noop_calls: set[str]
+    ast_checkpoint_dir: Path | None
     consolidate_global_data: bool
     rename_uniquely: bool
     do_not_prune_type_components: bool
-    keep_type_components: Dict[str, List[str]]
+    keep_type_components: dict[str, list[str]]
     monomorphize: bool
-    rename_specifics: Dict[str, str]
-    specialize_at_source: List[str]
+    rename_specifics: dict[str, str]
+    specialize_at_source: list[str]
     f2py_safe: bool
 
     def __init__(
         self,
-        sources: Union[None, List[Path], Dict[str, str]] = None,
-        entry_points: Union[None, types.SPEC, List[types.SPEC]] = None,
-        do_not_prune: Union[None, types.SPEC, List[types.SPEC]] = None,
-        do_not_rename: Union[None, types.SPEC, List[types.SPEC]] = None,
-        make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+        sources: Union[None, list[Path], dict[str, str]] = None,
+        entry_points: Union[None, types.SPEC, list[types.SPEC]] = None,
+        do_not_prune: Union[None, types.SPEC, list[types.SPEC]] = None,
+        do_not_rename: Union[None, types.SPEC, list[types.SPEC]] = None,
+        make_noop: Union[None, types.SPEC, list[types.SPEC]] = None,
         ast_checkpoint_dir: Union[None, str, Path] = None,
         consolidate_global_data: bool = False,
         rename_uniquely: bool = False,
         do_not_prune_type_components: bool = False,
-        keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
+        keep_type_components: dict[str, Iterable[str]] | None = None,
         monomorphize: bool = True,
-        rename_specifics: Optional[Dict[str, str]] = None,
-        specialize_at_source: Optional[Iterable[str]] = None,
+        rename_specifics: dict[str, str] | None = None,
+        specialize_at_source: Iterable[str] | None = None,
         f2py_safe: bool = False,
     ) -> None:
         # Make the configs canonical, by processing the various types upfront.
@@ -313,12 +316,12 @@ class ParseConfig:
             do_not_prune = []
         elif isinstance(do_not_prune, tuple):
             do_not_prune = [do_not_prune]
-        do_not_prune = list({x for x in entry_points + do_not_prune})
+        do_not_prune = list(set(entry_points + do_not_prune))
         if not do_not_rename:
             do_not_rename = []
         elif isinstance(do_not_rename, tuple):
             do_not_rename = [do_not_rename]
-        do_not_rename = list({x for x in entry_points + do_not_rename})
+        do_not_rename = list(set(entry_points + do_not_rename))
         if not make_noop:
             make_noop = []
         elif isinstance(make_noop, tuple):
@@ -396,13 +399,13 @@ class ParseConfig:
             for c in walk(ast, utils.ENTRY_POINT_OBJECT_CLASSES)
             if isinstance(c, utils.ENTRY_POINT_OBJECT_CLASSES)
         ]
-        self.do_not_prune = list({x for x in self.entry_points + self.do_not_prune})
+        self.do_not_prune = list(set(self.entry_points + self.do_not_prune))
 
     def avoid_pruning_type_components(self, ast: f03.Program) -> None:
         """Mark every derived-type component to be preserved during pruning."""
         ident_map = analysis.identifier_specs(ast)
         comp_specs = [k for k, v in ident_map.items() if isinstance(v, f03.Component_Decl)]
-        self.do_not_prune = list({x for x in comp_specs + self.do_not_prune})
+        self.do_not_prune = list(set(comp_specs + self.do_not_prune))
 
     def keep_named_type_components(self, ast: f03.Program) -> None:
         """Mark the specific derived-type components named in
@@ -417,20 +420,20 @@ class ParseConfig:
         if not self.keep_type_components:
             return
         ident_map = analysis.identifier_specs(ast)
-        keep: List[types.SPEC] = []
+        keep: list[types.SPEC] = []
         for spec, node in ident_map.items():
             if not isinstance(node, f03.Component_Decl) or len(spec) < 2:
                 continue
             tname, cname = spec[-2].lower(), spec[-1].lower()
             if cname in self.keep_type_components.get(tname, ()):
                 keep.append(spec)
-        self.do_not_prune = list({x for x in keep + self.do_not_prune})
+        self.do_not_prune = list(set(keep + self.do_not_prune))
 
 
-def top_level_objects_map(ast: f03.Program, path: str) -> Dict[str, Base]:
+def top_level_objects_map(ast: f03.Program, path: str) -> dict[str, Base]:
     """Map lowercase names of top-level objects (modules, main programs) to
     their fparser nodes.  Warns (and skips) leftover cpp directives."""
-    out: Dict[str, Base] = {}
+    out: dict[str, Base] = {}
     for top in ast.children:
         if type(top).__name__ in CPP_CLASS_NAMES:
             logger.warning(
@@ -446,8 +449,8 @@ def top_level_objects_map(ast: f03.Program, path: str) -> Dict[str, Base]:
 
 
 def _get_toplevel_objects(
-    path_f90: Tuple[str, str], parser: Callable[..., f03.Program], sources: Dict[str, str]
-) -> Dict[str, Base]:
+    path_f90: tuple[str, str], parser: Callable[..., f03.Program], sources: dict[str, str]
+) -> dict[str, Base]:
     """Parse one source file, resolve its ``INCLUDE`` statements by text
     substitution from ``sources``, and map its top-level objects."""
     path, f90 = path_f90
@@ -483,12 +486,12 @@ def _get_toplevel_objects(
 
 
 def construct_full_ast(
-    sources: Dict[str, str], parser: Callable[..., f03.Program], entry_points: Optional[Iterable[types.SPEC]] = None
+    sources: dict[str, str], parser: Callable[..., f03.Program], entry_points: Iterable[types.SPEC] | None = None
 ) -> f03.Program:
     """Combine every source file into one fparser AST, resolving
     ``INCLUDE`` directives and pruning modules unreachable from
     ``entry_points`` (all modules kept when ``entry_points`` is ``None``)."""
-    tops: Dict[str, Base] = {}
+    tops: dict[str, Base] = {}
     for path, f90 in sources.items():
         ctops = _get_toplevel_objects((path, f90), parser=parser, sources=sources)
         if ctops.keys() & tops.keys():
@@ -497,14 +500,13 @@ def construct_full_ast(
 
     ast = f03.Program(get_reader(""))
     ast.content = []
-    for _, v in tops.items():
+    for v in tops.values():
         utils.append_children(ast, v)
 
-    ast = pruning.keep_sorted_used_modules(ast, entry_points)
-    return ast
+    return pruning.keep_sorted_used_modules(ast, entry_points)
 
 
-def _module_name_of_use(use: f03.Use_Stmt) -> Optional[str]:
+def _module_name_of_use(use: f03.Use_Stmt) -> str | None:
     """The module name a ``USE`` statement imports from (its first ``Name``
     child -- the ``ONLY:`` list / renames are separate child nodes)."""
     nm = next(iter(children_of_type(use, f03.Name)), None)
@@ -512,11 +514,11 @@ def _module_name_of_use(use: f03.Use_Stmt) -> Optional[str]:
 
 
 class VisibleNames(NamedTuple):
-    bound: Set[str]
-    whole_use_modules: Set[str]
+    bound: set[str]
+    whole_use_modules: set[str]
 
 
-def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]) -> VisibleNames:
+def _scope_visible_names(scope: Base, host_spec: f03.Specification_Part | None) -> VisibleNames:
     """Names already bound in ``scope`` that must NOT be re-imported / shadowed,
     plus the set of modules ``scope`` imports *whole* (``USE x`` with no
     ``ONLY:``, which brings in every public name of ``x``).
@@ -525,8 +527,8 @@ def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part
     entities, and every ``USE``-imported name -- from the scope's own
     specification part and, for a module-contained procedure, the host module's
     specification part (host association)."""
-    visible: Set[str] = set()
-    whole_use_mods: Set[str] = set()
+    visible: set[str] = set()
+    whole_use_mods: set[str] = set()
     own_stmt = atmost_one(children_of_type(scope, (f03.Subroutine_Stmt, f03.Function_Stmt, f03.Program_Stmt)))
     if own_stmt is not None:
         for nm in walk(own_stmt, f03.Name):  # proc name + dummy-arg names (+ result)
@@ -569,13 +571,13 @@ _SCOPE_CLASSES = (f03.Module, f03.Main_Program, f03.Subroutine_Subprogram, f03.F
 _SCOPE_STMT_CLASSES = (f03.Module_Stmt, f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt)
 
 
-def _scope_qualname(scope: Base) -> Tuple[str, ...]:
+def _scope_qualname(scope: Base) -> tuple[str, ...]:
     """The qualified name of ``scope`` -- the lower-cased names of the enclosing
     program units, root-first (``('m', 'foo')`` for subprogram ``foo`` in module
     ``m``).  Stable across the (no-body-inlining) merge, so it keys a scope
     before and after the pipeline."""
-    names: List[str] = []
-    node: Optional[Base] = scope
+    names: list[str] = []
+    node: Base | None = scope
     while node is not None:
         if isinstance(node, _SCOPE_CLASSES):
             stmt = atmost_one(children_of_type(node, _SCOPE_STMT_CLASSES))
@@ -586,12 +588,12 @@ def _scope_qualname(scope: Base) -> Tuple[str, ...]:
     return tuple(reversed(names))
 
 
-def collect_intrinsic_uses(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]:
+def collect_intrinsic_uses(ast: f03.Program) -> dict[tuple[str, ...], list[str]]:
     """Record every ``USE`` of a compiler-provided intrinsic module
     (:data:`INTRINSIC_MODULE_NAMES`), keyed by the qualified name of the scope
     that holds it.  Run BEFORE the pipeline, which strips these ``USE``s."""
     preserved = _preserved_intrinsic_modules(ast)
-    captured: Dict[Tuple[str, ...], List[str]] = {}
+    captured: dict[tuple[str, ...], list[str]] = {}
     for use in walk(ast, f03.Use_Stmt):
         if _module_name_of_use(use) not in preserved:
             continue
@@ -604,7 +606,7 @@ def collect_intrinsic_uses(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]
     return captured
 
 
-def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], List[str]]) -> f03.Program:
+def restore_intrinsic_uses(ast: f03.Program, captured: dict[tuple[str, ...], list[str]]) -> f03.Program:
     """Re-add the intrinsic-module ``USE``s captured by
     :func:`collect_intrinsic_uses` to their original scopes (matched by
     qualified name), so the merged Fortran still compiles -- flang supplies the
@@ -647,12 +649,12 @@ def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], Lis
     return ast
 
 
-def _defined_proc_names(ast: f03.Program) -> Set[str]:
+def _defined_proc_names(ast: f03.Program) -> set[str]:
     """Names of every procedure DEFINED with a body (module / internal
     subprograms).  Interface-body declarations are not subprograms, so they are
     excluded -- which is exactly what lets us tell a declared-external procedure
     from a locally-defined one."""
-    names: Set[str] = set()
+    names: set[str] = set()
     for sp in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram)):
         stmt = atmost_one(children_of_type(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)))
         nm = utils.find_name_of_stmt(stmt) if stmt is not None else None
@@ -661,7 +663,7 @@ def _defined_proc_names(ast: f03.Program) -> Set[str]:
     return names
 
 
-def _interface_block_decl_names(ib: f03.Interface_Block) -> Set[str]:
+def _interface_block_decl_names(ib: f03.Interface_Block) -> set[str]:
     """The lower-cased names of the procedures an ``INTERFACE`` block declares."""
     return {
         nm.lower()
@@ -670,7 +672,7 @@ def _interface_block_decl_names(ib: f03.Interface_Block) -> Set[str]:
     }
 
 
-def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]:
+def collect_external_interfaces(ast: f03.Program) -> dict[tuple[str, ...], list[str]]:
     """Capture ``INTERFACE`` blocks that declare *external* procedures -- an
     explicit interface for a procedure with no definition anywhere in the
     project (e.g. a C-library function via ``BIND(C)``), keyed by the scope's
@@ -679,7 +681,7 @@ def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[
     object -- the external symbol is resolved at link time, which the bridge's
     compile-to-HLFIR step never does)."""
     defined = _defined_proc_names(ast)
-    captured: Dict[Tuple[str, ...], List[str]] = {}
+    captured: dict[tuple[str, ...], list[str]] = {}
     for ib in walk(ast, f03.Interface_Block):
         # An ABSTRACT INTERFACE declares deferred-binding *templates* (referenced
         # by ``PROCEDURE(name), DEFERRED``), never an external link-time
@@ -706,7 +708,7 @@ def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[
     return captured
 
 
-def restore_external_interfaces(ast: f03.Program, captured: Dict[Tuple[str, ...], List[str]]) -> f03.Program:
+def restore_external_interfaces(ast: f03.Program, captured: dict[tuple[str, ...], list[str]]) -> f03.Program:
     """Re-insert the external-procedure ``INTERFACE`` blocks captured by
     :func:`collect_external_interfaces` into their scopes' specification parts
     (matched by qualified name), so the calls to those external procedures have
@@ -763,7 +765,7 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
     untouched -- so a local array or variable that merely shares a name with
     some module procedure is never mis-imported."""
     # Map each module-procedure name to its defining module(s).
-    proc_mods: Dict[str, Set[str]] = {}
+    proc_mods: dict[str, set[str]] = {}
     for mod in walk(ast, f03.Module):
         mname = utils.find_name_of_stmt(singular(children_of_type(mod, f03.Module_Stmt)))
         subpart = atmost_one(children_of_type(mod, f03.Module_Subprogram_Part))
@@ -781,8 +783,8 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
 
     # Plan the additions per target node (a module, or a free scope), so two
     # sibling procedures needing the same import add it once at module level.
-    plan: Dict[int, Tuple[Base, Dict[str, Set[str]]]] = {}
-    planned: Dict[int, Set[str]] = {}
+    plan: dict[int, tuple[Base, dict[str, set[str]]]] = {}
+    planned: dict[int, set[str]] = {}
     for scope in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)):
         exec_part = atmost_one(children_of_type(scope, f03.Execution_Part))
         if exec_part is None:
@@ -802,7 +804,7 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
         # Procedure names referenced in this scope: CALL targets + function/array
         # references (the latter guarded by ``visible`` so a local array of the
         # same name is excluded).
-        refs: Set[str] = set()
+        refs: set[str] = set()
         for call in walk(exec_part, f03.Call_Stmt):
             nm = next(iter(children_of_type(call, f03.Name)), None)
             if nm:
@@ -829,7 +831,7 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def _resolve_dont_inline_names(external_functions: Iterable[ExternalFunction], do_not_emit: Iterable[str]) -> Set[str]:
+def _resolve_dont_inline_names(external_functions: Iterable[ExternalFunction], do_not_emit: Iterable[str]) -> set[str]:
     """Union the (lower-cased) don't-inline names the inliner must stub.
 
     The external-function policy (see :mod:`dace_fortran.external_functions`)
@@ -841,7 +843,7 @@ def _resolve_dont_inline_names(external_functions: Iterable[ExternalFunction], d
     return dont_inline_names(external_functions, do_not_emit)
 
 
-def _external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.SPEC]:
+def _external_noop_specs(ast: f03.Program, names: Iterable[str]) -> list[types.SPEC]:
     """Resolve a caller-supplied list of *external* procedure names to the
     ``make_noop`` specs that stub them.
 
@@ -856,7 +858,7 @@ def _external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.S
     targets = {n.lower() for n in names}
     if not targets:
         return []
-    specs: List[types.SPEC] = []
+    specs: list[types.SPEC] = []
     for fn in walk(ast, (f03.Subroutine_Stmt, f03.Function_Stmt)):
         spec = analysis.ident_spec(fn)
         nm = spec[-1].lower()
@@ -974,7 +976,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
 
     if cfg.make_noop:
         logger.debug("FParser Op: Making certain functions no-op in the AST...")
-        noop_missed: Set[types.SPEC] = set(cfg.make_noop)
+        noop_missed: set[types.SPEC] = set(cfg.make_noop)
         # CLASS(t)->TYPE(t) dummy demotion is an f2py-safety transform: a stubbed
         # module proc with a CLASS dummy makes numpy f2py emit a NULL module entry
         # (import segfault). Only the f2py path needs it; a gfortran-only extraction
@@ -1213,7 +1215,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     return ast
 
 
-def parse_and_improve(sources: Dict[str, str], entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
+def parse_and_improve(sources: dict[str, str], entry_points: Iterable[types.SPEC] | None = None) -> f03.Program:
     """Parse ``sources`` into one combined AST and apply the
     ``correct_for_function_calls`` improver -- the light-weight entry used
     by the ported unit tests (matches the upstream
@@ -1225,7 +1227,7 @@ def parse_and_improve(sources: Dict[str, str], entry_points: Optional[Iterable[t
     return ast
 
 
-def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
+def _entry_to_spec(source: str, entry: str | None) -> types.SPEC | None:
     """Resolve ``entry`` (``proc`` / ``module::proc``) to an fparser entry-point SPEC ``(module, proc)`` or
     ``(proc,)``.
 
@@ -1251,11 +1253,11 @@ _ACC_SPEC_PART_HEADS = frozenset({"declare", "routine"})
 
 
 class EncodedAccDirectives(NamedTuple):
-    sources: Dict[str, str]
-    directives: Dict[int, List[str]]
+    sources: dict[str, str]
+    directives: dict[int, list[str]]
 
 
-def encode_acc_directives(src_map: Dict[str, str]) -> EncodedAccDirectives:
+def encode_acc_directives(src_map: dict[str, str]) -> EncodedAccDirectives:
     """Replace each logical ``!$acc`` directive (continuations joined) with a
     ``CALL dace_acc_dirmark_<n>`` marker statement, returning the rewritten
     sources and the ``{n: [original lines]}`` table :func:`decode_acc_directives`
@@ -1268,12 +1270,12 @@ def encode_acc_directives(src_map: Dict[str, str]) -> EncodedAccDirectives:
     single TU is one whose statement context survived.  Specification-part
     directive heads (``DECLARE`` / ``ROUTINE``) stay comments: a CALL between
     declarations would not parse."""
-    table: Dict[int, List[str]] = {}
-    out_map: Dict[str, str] = {}
+    table: dict[int, list[str]] = {}
+    out_map: dict[str, str] = {}
     counter = 0
     for name, text in src_map.items():
         lines = text.splitlines()
-        out: List[str] = []
+        out: list[str] = []
         i = 0
         while i < len(lines):
             if not _ACC_SENTINEL_LINE_RE.match(lines[i]):
@@ -1300,11 +1302,11 @@ def encode_acc_directives(src_map: Dict[str, str]) -> EncodedAccDirectives:
     return EncodedAccDirectives(out_map, table)
 
 
-def decode_acc_directives(text: str, table: Dict[int, List[str]]) -> str:
+def decode_acc_directives(text: str, table: dict[int, list[str]]) -> str:
     """Inverse of :func:`encode_acc_directives` on serialised Fortran: each
     surviving marker CALL becomes its original ``!$acc`` line(s) again (verbatim,
     original indentation).  Markers whose region was pruned simply never appear."""
-    out: List[str] = []
+    out: list[str] = []
     for line in text.splitlines():
         match = _ACC_MARKER_CALL_RE.match(line)
         if match is not None and int(match.group(1)) in table:
@@ -1331,9 +1333,7 @@ def _strip_unparseable_attrs(text: str) -> str:
     return _STANDALONE_CONTIGUOUS_RE.sub(r"\1! CONTIGUOUS\2", text)
 
 
-def _cpp_expand_one(
-    name: str, content: str, *, defines: List[str], include_dirs: List[Path], flang: Optional[str]
-) -> str:
+def _cpp_expand_one(name: str, content: str, *, defines: list[str], include_dirs: list[Path], flang: str | None) -> str:
     """Run the C preprocessor (via flang ``-cpp -E -P``) over one source's
     text and return the expanded Fortran.
 
@@ -1365,7 +1365,7 @@ def _cpp_expand_one(
         cmd += [f"-D{d}" for d in defines]
         cmd += [f"-I{Path(d)}" for d in inc]
         cmd += [str(srcf)]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"cpp preprocessing failed for {name!r} (exit {proc.returncode}):\n{proc.stderr.strip()}"
@@ -1374,12 +1374,12 @@ def _cpp_expand_one(
 
 
 def cpp_expand_sources(
-    src_map: Dict[str, str],
+    src_map: dict[str, str],
     *,
     defines: Iterable[str] = (),
     include_dirs: Iterable[Union[str, Path]] = (),
-    flang: Optional[str] = None,
-) -> Dict[str, str]:
+    flang: str | None = None,
+) -> dict[str, str]:
     """Preprocess every source in a ``{name: content}`` map through the C
     preprocessor and return the expanded map.
 
@@ -1399,27 +1399,27 @@ def cpp_expand_sources(
 
 
 def inline_to_ast(
-    sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
-    entry: Optional[str] = None,
+    sources: Union[dict[str, str], Iterable[Union[str, Path]]],
+    entry: str | None = None,
     *,
     expand_cpp: bool = False,
     force_double_precision: bool = False,
     defines: Iterable[str] = (),
     include_dirs: Iterable[Union[str, Path]] = (),
-    flang: Optional[str] = None,
-    make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+    flang: str | None = None,
+    make_noop: Union[None, types.SPEC, list[types.SPEC]] = None,
     make_return_false: Iterable[str] = (),
     external_functions: Iterable[ExternalFunction] = (),
     do_not_emit: Iterable[str] = (),
     consolidate_global_data: bool = False,
     rename_uniquely: bool = False,
     do_not_prune_type_components: bool = False,
-    keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
+    keep_type_components: dict[str, Iterable[str]] | None = None,
     checkpoint_dir: Union[None, str, Path] = None,
     include_builtins: bool = True,
     tolerate_external_uses: bool = False,
     monomorphize: bool = True,
-    rename_specifics: Optional[Dict[str, str]] = None,
+    rename_specifics: dict[str, str] | None = None,
     specialize_at_source: Iterable[str] = (),
     f2py_safe: bool = False,
     optimize: bool = True,
@@ -1521,8 +1521,8 @@ def inline_to_ast(
 
 
 def inline_to_single_tu(
-    sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
-    entry: Optional[str] = None,
+    sources: Union[dict[str, str], Iterable[Union[str, Path]]],
+    entry: str | None = None,
     *,
     output: Union[None, str, Path] = None,
     out_dir: Union[None, str, Path] = None,
@@ -1531,20 +1531,20 @@ def inline_to_single_tu(
     force_double_precision: bool = False,
     defines: Iterable[str] = (),
     include_dirs: Iterable[Union[str, Path]] = (),
-    flang: Optional[str] = None,
-    make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+    flang: str | None = None,
+    make_noop: Union[None, types.SPEC, list[types.SPEC]] = None,
     make_return_false: Iterable[str] = (),
     external_functions: Iterable[ExternalFunction] = (),
     do_not_emit: Iterable[str] = (),
     consolidate_global_data: bool = False,
     rename_uniquely: bool = False,
     do_not_prune_type_components: bool = False,
-    keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
+    keep_type_components: dict[str, Iterable[str]] | None = None,
     checkpoint_dir: Union[None, str, Path] = None,
     include_builtins: bool = True,
     tolerate_external_uses: bool = False,
     monomorphize: bool = True,
-    rename_specifics: Optional[Dict[str, str]] = None,
+    rename_specifics: dict[str, str] | None = None,
     specialize_at_source: Iterable[str] = (),
     f2py_safe: bool = False,
     keep_acc_directives: bool = False,
@@ -1594,7 +1594,7 @@ def inline_to_single_tu(
         off no code path changes and the output stays byte-identical.
     :returns: the path to the written single-TU ``.f90``.
     """
-    acc_table: Optional[Dict[int, List[str]]] = None
+    acc_table: dict[int, list[str]] | None = None
     if keep_acc_directives:
         src_map = _normalize_sources(sources)
         if expand_cpp:
@@ -1652,12 +1652,12 @@ def inline_to_single_tu(
     return out_path
 
 
-def _normalize_sources(sources: Union[Dict[str, str], Iterable[Union[str, Path]]]) -> Dict[str, str]:
+def _normalize_sources(sources: Union[dict[str, str], Iterable[Union[str, Path]]]) -> dict[str, str]:
     """Accept a ``{name: content}`` mapping or an iterable of file /
     directory paths and return a ``{name: content}`` mapping."""
     if isinstance(sources, dict):
-        return dict(cast(Dict[str, str], sources))
-    out: Dict[str, str] = {}
+        return dict(cast(dict[str, str], sources))
+    out: dict[str, str] = {}
     for item in sources:
         p = Path(item)
         for f in find_all_f90_files(p):
@@ -1665,12 +1665,12 @@ def _normalize_sources(sources: Union[Dict[str, str], Iterable[Union[str, Path]]
     return out
 
 
-def _concat_sources(src_map: Dict[str, str]) -> str:
+def _concat_sources(src_map: dict[str, str]) -> str:
     """Join all source texts (for the entry-name scan)."""
     return "\n".join(src_map.values())
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI: ``python -m dace_fortran.fparser_inliner -i SRC -k ENTRY -o OUT.f90``."""
     argp = argparse.ArgumentParser(
         prog="dace_fortran.fparser_inliner",

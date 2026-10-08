@@ -24,7 +24,7 @@ def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
     SDFG build.  Shared retry policy with ``f2py_compile`` in ``_util``."""
     cwd = Path(cwd)
     for attempt in range(1, _F2PY_BUILD_ATTEMPTS + 1):
-        proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+        proc = subprocess.run(cmd, check=False, cwd=cwd, env=env, capture_output=True, text=True)
         if proc.returncode == 0:
             return
         if attempt == _F2PY_BUILD_ATTEMPTS:

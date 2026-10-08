@@ -26,7 +26,6 @@ from ._graupel_harness import (
     zero_outputs,
 )
 
-
 RTOL = 1e-10
 ATOL = 1e-14
 

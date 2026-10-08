@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 
 from dace_fortran.external_functions import ExternalFunction
-
 from tests.icon._halo_modes import halo_config
 
 _HERE = Path(__file__).resolve().parent
@@ -195,6 +194,7 @@ def extract_single_tu(
     env["PYTHONHASHSEED"] = "0"
     proc = subprocess.run(
         [sys.executable, str(_EXTRACT_SCRIPT), source_relpath, entry, str(out_dir), str(mem_gb), halo_mode],
+        check=False,
         capture_output=True,
         text=True,
         env=env,

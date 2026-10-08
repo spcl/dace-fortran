@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 
 from dace_fortran.external_functions import ExternalFunction
-
 from tests.icon._halo_modes import halo_config
 
 _HERE = Path(__file__).resolve().parent
@@ -342,6 +341,7 @@ def extract_single_tu(
             "1" if loop_exchange else "0",
             "1" if keep_acc_directives else "0",
         ],
+        check=False,
         capture_output=True,
         text=True,
         env=env,

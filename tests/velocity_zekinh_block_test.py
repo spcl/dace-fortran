@@ -14,7 +14,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC_PATH = Path(__file__).resolve().parent / "velocity_zekinh_block.f90"
 _ENTRY = "mo_velocity_zekinh::zekinh_block"
 

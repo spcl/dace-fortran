@@ -9,17 +9,18 @@ low + high frequency bins, drop the middle), then IFFT back.
 """
 
 from __future__ import annotations
-import itertools
-from enum import Enum
 
+import itertools
+from collections.abc import Sequence
+from enum import Enum
+from typing import Any, ClassVar, NamedTuple, cast
+
+import dace
 import dace.library
 import dace.properties
-import dace
-from dace import nodes, SDFG, SDFGState, dtypes, Memlet
-from dace import transformation as xf
-from typing import Any, ClassVar, NamedTuple, Sequence, cast
-
 import numpy as np
+from dace import SDFG, Memlet, SDFGState, dtypes, nodes
+from dace import transformation as xf
 
 from dace_fortran.dace_types import MapRanges, library_node, register_expansion
 
@@ -99,8 +100,8 @@ def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[
     Hermitian-correct.
     """
     cuts: list[AxisCut] = []
-    for nin_d, nout_d in zip(indesc.shape, outdesc.shape):
-        smaller = nin_d if nin_d <= nout_d else nout_d
+    for nin_d, nout_d in zip(indesc.shape, outdesc.shape, strict=False):
+        smaller = min(nin_d, nout_d)
         low_d = (smaller + 1) // 2
         high_d = smaller // 2
         cuts.append(AxisCut(low_d, high_d, nin_d, nout_d))
@@ -110,7 +111,7 @@ def _low_high_per_axis(indesc: dace.data.Data, outdesc: dace.data.Data) -> list[
 def _region_index(part_per_axis: Sequence[Half], cuts: Sequence[AxisCut], side: Side, ivars: Sequence[str]) -> str:
     """Build the per-element index string for the copy tasklet."""
     parts = []
-    for part, (low_d, high_d, nin_d, nout_d), iv in zip(part_per_axis, cuts, ivars):
+    for part, (_low_d, high_d, nin_d, nout_d), iv in zip(part_per_axis, cuts, ivars, strict=False):
         n_d = nin_d if side is Side.IN else nout_d
         if part is Half.LOW:
             parts.append(f"{iv}")
@@ -178,7 +179,7 @@ def _region_iter_ranges(part_per_axis: Sequence[Half], cuts: Sequence[AxisCut], 
     :meth:`add_mapped_tasklet`.
     """
     ranges: MapRanges = {}
-    for part, (low_d, high_d, _, _), iv in zip(part_per_axis, cuts, ivars):
+    for part, (low_d, high_d, _, _), iv in zip(part_per_axis, cuts, ivars, strict=False):
         size_d = low_d if part is Half.LOW else high_d
         ranges[iv] = f"0:{size_d}"
     return ranges
@@ -212,8 +213,8 @@ class FFTInterpolatePure(xf.ExpandTransformation):
         if rank not in (1, 2, 3):
             raise NotImplementedError(f"FFTInterpolate pure expansion supports rank 1/2/3 (got {rank})")
 
-        from dace.libraries.fft.nodes import FFT, IFFT
         from dace.libraries.fft.environments import FFTW3 as FFTW3Env
+        from dace.libraries.fft.nodes import FFT, IFFT
 
         sdfg = SDFG(node.label + "_sdfg")
         in_inner = indesc.clone()
@@ -311,7 +312,7 @@ class FFTInterpolatePure(xf.ExpandTransformation):
             # A zero-width cut on any axis means an empty region; skip it.
             if any(
                 (part is Half.LOW and low_d == 0) or (part is Half.HIGH and high_d == 0)
-                for part, (low_d, high_d, _, _) in zip(combo, cuts)
+                for part, (low_d, high_d, _, _) in zip(combo, cuts, strict=False)
             ):
                 continue
             st_copy = sdfg.add_state_after(prev_state, "s_copy_" + "".join(p.value[0] for p in combo))

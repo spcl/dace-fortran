@@ -38,7 +38,6 @@ See ``newdxx_g_caller.f90`` for the C-callable driver harness.
 
 from pathlib import Path
 
-
 import dace_fortran
 from tests._util import flang_binary, flang_intrinsic_modules_path
 
@@ -126,6 +125,7 @@ def test_newdxx_g_flang_parses(tmp_path):
             "-o",
             str(out),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -309,10 +309,10 @@ def test_newdxx_g_numerical_correctness(tmp_path):
 
     import numpy as np
 
-    from tests._util import build_sdfg
     from dace_fortran.bindings.build_fortran_library import build_fortran_library
     from dace_fortran.bindings.flatten_plan import FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
+    from tests._util import build_sdfg
 
     # --- gfortran reference (active 'c' augmentation) ---
     _, init, run = _compile_reference(tmp_path)

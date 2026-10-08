@@ -63,7 +63,7 @@ END SUBROUTINE intrinsic_math_test_sqrt_function
     sdfg(d=d, res=res)
     py_res = np.sqrt(d)
 
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -112,7 +112,7 @@ END SUBROUTINE intrinsic_math_test_exp_function
     sdfg(d=d, res=res)
     py_res = np.exp(d)
 
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -137,7 +137,7 @@ END SUBROUTINE intrinsic_math_test_exp_function
     sdfg(d=d, res=res)
     py_res = np.log(d)
 
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -695,7 +695,7 @@ END SUBROUTINE intrinsic_math_test_exp2_function
     sdfg(d=d, res=res, n=0)
     py_res = np.exp(-1.66 * d)
 
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 

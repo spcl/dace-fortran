@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-
 from dace import data, dtypes
 
 from tests._util import build_sdfg

@@ -152,7 +152,7 @@ END MODULE main_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main_mod::main").build()
     # No tf_x in the signature -- the inlined OPTIONAL is folded.
-    bad_keys = [k for k in sdfg.arrays.keys() if k.startswith("tf_") or k.endswith("_x")]
+    bad_keys = [k for k in sdfg.arrays if k.startswith("tf_") or k.endswith("_x")]
     assert not bad_keys, f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}"
 
 

@@ -9,9 +9,8 @@ import re
 import subprocess
 from pathlib import Path
 
-
-from tests._util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import replace_external_with_modules
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
 

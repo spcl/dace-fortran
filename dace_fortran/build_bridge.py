@@ -42,7 +42,7 @@ class LlvmSelection:
     broken cmake config).  :func:`_detect_dirs` fills in whichever the environment left empty.
     """
 
-    __slots__ = ("version", "cmake_dir")
+    __slots__ = ("cmake_dir", "version")
 
     version: str
     cmake_dir: str

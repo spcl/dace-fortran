@@ -19,16 +19,15 @@ import importlib.util
 import os
 from pathlib import Path
 
+import dace
 import numpy as np
 import pytest
-
-import dace
 from dace.config import Config
 
 from tests._util import build_sdfg, f2py_compile
 from tests.cloudsc.full._harness import f2py_argnames, lower_keys, sdfg_call_args
-from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs, parameters as CLOUDSC_PARAMS
-from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, get_inputs_physical, get_outputs, program_outputs
+from tests.cloudsc.full._registries import parameters as CLOUDSC_PARAMS
 from tests.cloudsc.variants._harness import (
     SCALAR_TYPES,
     assert_species_parameters_baked,

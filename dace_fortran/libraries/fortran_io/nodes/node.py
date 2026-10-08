@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared base and helpers for the Fortran I/O library nodes."""
 
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 from dace import SDFG, SDFGState, data, dtypes
 from dace.sdfg import nodes
@@ -52,7 +52,7 @@ class FortranIONode(nodes.LibraryNode):
     def has_side_effects(self, sdfg: SDFG) -> bool:
         return True
 
-    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str, edges_in: bool, num_items: int) -> List[IoItem]:
+    def ordered_items(self, sdfg: SDFG, state: SDFGState, prefix: str, edges_in: bool, num_items: int) -> list[IoItem]:
         """Resolve the ``num_items`` connected I/O items in connector order, as ``(connector,
         descriptor, count, is_value)``.  ``is_value`` marks a scalar/single-element
         connector (emitted by value, so the call site takes its address)."""
@@ -60,7 +60,7 @@ class FortranIONode(nodes.LibraryNode):
             edges = {e.dst_conn: e for e in state.in_edges(self) if e.dst_conn}
         else:
             edges = {e.src_conn: e for e in state.out_edges(self) if e.src_conn}
-        items: List[IoItem] = []
+        items: list[IoItem] = []
         for i in range(num_items):
             conn = f"{prefix}{i}"
             edge = edges.get(conn)

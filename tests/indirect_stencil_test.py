@@ -12,7 +12,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "indirect_stencil.f90"
 
@@ -59,7 +58,7 @@ def test_indirect_access_numerical(tmp_path):
     f2py_dir = _f2py_compile(_SRC_PATH, tmp_path / "f2py", "ind_fort")
     sys.path.insert(0, str(f2py_dir))
     try:
-        import ind_fort  # noqa: E402
+        import ind_fort
     finally:
         sys.path.remove(str(f2py_dir))
 

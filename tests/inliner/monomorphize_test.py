@@ -12,7 +12,7 @@ asserted with ``pytest.raises`` (not xfail) so detection is itself under test.
 
 import pytest
 
-from dace_fortran.inliner.ast_desugaring.monomorphize import analyze_source, UnsupportedProgram
+from dace_fortran.inliner.ast_desugaring.monomorphize import UnsupportedProgram, analyze_source
 
 # Two independent abstract bases -- mirrors ICON's orthogonal dispatch axes
 # (backend + transfer), each its own closed subtype set => two plans.

@@ -13,8 +13,8 @@ carry ``kmin`` and the sedimentation flux from level to level and stay sequentia
 
 import numpy as np
 import pytest
-
 from dace.sdfg import nodes
+
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.pipelines import num_maps, optimize
 from tests.icon.graupel._graupel_harness import (
@@ -84,9 +84,9 @@ if __name__ == "__main__":
     import tempfile
     from pathlib import Path
 
-    from tests._util import BITEXACT_CPU_ARGS
-
     import dace
+
+    from tests._util import BITEXACT_CPU_ARGS
 
     dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
     with tempfile.TemporaryDirectory() as tmp:

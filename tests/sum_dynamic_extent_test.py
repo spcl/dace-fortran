@@ -17,7 +17,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 subroutine probe_sum(deeq, nh, becpr, nhm, nt, ia, m, fac, w1)
   implicit none

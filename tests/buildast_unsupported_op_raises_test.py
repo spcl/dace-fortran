@@ -9,7 +9,6 @@ import pytest
 
 from tests._util import build_sdfg
 
-
 # WHERE lowers to hlfir.where; no pipeline pass rewrites it, so it reaches buildAST and must trigger the compute-drop guard.
 _WHERE_KERNEL = """
 subroutine where_masked_assign(a, b, n)

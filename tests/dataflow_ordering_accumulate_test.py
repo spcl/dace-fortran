@@ -98,7 +98,7 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
 
     paph, pclv = F(klon, klev + 1, nb), F(klon, klev, nb)
     ptend, pwin = F(klon, klev, nb), F(klon, klev, nb)
-    q0r, qnr, fr = ref.prefix_scan_mod.outer(paph, pclv, ptend, pwin)
+    _q0r, _qnr, fr = ref.prefix_scan_mod.outer(paph, pclv, ptend, pwin)
 
     q0s = np.zeros((klon, klev, nb), order="F")
     qns = np.zeros((klon, klev, nb), order="F")
@@ -173,7 +173,7 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
         return np.asfortranarray(rng.standard_normal((n, klev)))
 
     arrs = [F() for _ in range(8)]
-    s0r, snr, accr = ref.long_tasklet_mod.kern(*arrs)
+    _s0r, _snr, accr = ref.long_tasklet_mod.kern(*arrs)
 
     s0s = np.zeros((n, klev), order="F")
     sns = np.zeros((n, klev), order="F")

@@ -13,7 +13,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _HERE = Path(__file__).resolve().parent
 _SRC_PATH = _HERE / "velocity_one_loop.f90"
 

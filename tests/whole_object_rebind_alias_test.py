@@ -20,7 +20,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Module-global TARGET derived-type object (mirrors ICON's mo_ocean_physics_types::v_params)
 # with a POINTER array member, rebound by a local pointer. out0 = g%arr(1) reads directly (so
 # flatten materialises g_arr); the loop updates the member THROUGH alias p -- ICON's shape.

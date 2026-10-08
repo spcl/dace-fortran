@@ -43,8 +43,9 @@ import functools
 import json
 import re
 import sys
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Iterator, List, NamedTuple, Sequence, Tuple
+from typing import NamedTuple
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two import Fortran2003 as f03
@@ -139,8 +140,8 @@ def _cpp_expr_true(expr: str, defines: frozenset) -> bool:
 def _mask_cpp(source: str, defines: frozenset) -> str:
     """Comment out cpp directive lines and every line of a not-taken arm,
     preserving the line count so fparser spans keep pointing at the original."""
-    out: List[str] = []
-    stack: List[List[bool]] = []  # [taken_now, taken_ever] per open #if
+    out: list[str] = []
+    stack: list[list[bool]] = []  # [taken_now, taken_ever] per open #if
     for line in source.splitlines():
         stripped = line.lstrip()
         if stripped.startswith("#"):
@@ -171,7 +172,7 @@ def _mask_cpp(source: str, defines: frozenset) -> str:
     return "\n".join(out)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _parser() -> Callable[..., f03.Program]:
     return ParserFactory().create(std="f2008")
 
@@ -218,9 +219,9 @@ def _node_span(node: f03.Base) -> LineSpan:
 class _Logical:
     """A directive joined across ``&`` continuations, with offset->line map."""
 
-    __slots__ = ("text", "_spans", "line")
+    __slots__ = ("_spans", "line", "text")
 
-    def __init__(self, pieces: Sequence[Tuple[int, str]]) -> None:
+    def __init__(self, pieces: Sequence[tuple[int, str]]) -> None:
         parts, spans, off = [], [], 0
         for lineno, piece in pieces:
             parts.append(piece)
@@ -257,7 +258,7 @@ def _sentinel_body(line: str) -> SentinelBody:
     return SentinelBody(body, continued)
 
 
-def acc_directives(source: str) -> List[_Logical]:
+def acc_directives(source: str) -> list[_Logical]:
     """Yield every ``!$ACC`` directive of ``source`` as a :class:`_Logical`."""
     lines = source.splitlines()
     out, i = [], 0
@@ -295,10 +296,10 @@ class ClauseEntity(NamedTuple):
 
 class Clause(NamedTuple):
     name: str
-    entities: List[ClauseEntity]
+    entities: list[ClauseEntity]
 
 
-def _clause_entities(text: str, start: int, end: int) -> List[ClauseEntity]:
+def _clause_entities(text: str, start: int, end: int) -> list[ClauseEntity]:
     """``(base_name, full_ref, offset)`` per comma-separated clause item.
 
     An item is a variable reference: plain name, component path (``a%b%c``),
@@ -307,7 +308,7 @@ def _clause_entities(text: str, start: int, end: int) -> List[ClauseEntity]:
     removed.  Items that do not start with an identifier (e.g. a ``*``) are
     skipped.
     """
-    out: List[ClauseEntity] = []
+    out: list[ClauseEntity] = []
     depth, token_start = 0, start
     for i in range(start, end + 1):
         ch = text[i] if i < end else ","
@@ -348,14 +349,14 @@ def _clauses(logical: _Logical) -> Iterator[Clause]:
 # ---------------------------------------------------------------------------
 
 
-def dummy_args(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> List[str]:
+def dummy_args(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> list[str]:
     """Dummy argument names of ``routine``, in declaration order, lowercased."""
     node = _routine_node(_parse(source, defines), routine)
     stmt = next(iter(walk(node, _SCOPE_STMT_CLASSES)))
     args = next(iter(walk(stmt, f03.Dummy_Arg_List)), None)
     if args is None:
         return []
-    out: List[str] = []
+    out: list[str] = []
     for name in walk(args, f03.Name):
         low = name.string.lower()
         if low not in out:
@@ -363,7 +364,7 @@ def dummy_args(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_D
     return out
 
 
-def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) -> Dict[str, list]:
+def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) -> dict[str, list]:
     ast = _parse(source, defines)
     node = _routine_node(ast, routine)
     first, last = _node_span(node)
@@ -375,7 +376,7 @@ def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) ->
     # Directive scan runs over the cpp-masked text so only live-arm directives
     # count, matching the parsed structure the spans came from.
     masked = _mask_cpp(source, frozenset(defines))
-    evidence: Dict[str, list] = {}
+    evidence: dict[str, list] = {}
     depth, order = 0, 0
     for logical in acc_directives(masked):
         if not first <= logical.line <= last:
@@ -396,7 +397,7 @@ def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) ->
     return evidence
 
 
-def collect_evidence(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Dict[str, list]:
+def collect_evidence(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> dict[str, list]:
     """Map ``arg -> [(depth, order, clause, line, ref)]`` from the routine's
     directives.
 
@@ -460,8 +461,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--define",
         action="append",
         default=[],
-        help="Extra cpp macro assumed defined when selecting #if arms "
-        "(added to the default set: %s)." % ", ".join(sorted(DEFAULT_CPP_DEFINES)),
+        help="Extra cpp macro assumed defined when selecting #if arms (added to the default set: {}).".format(
+            ", ".join(sorted(DEFAULT_CPP_DEFINES))
+        ),
     )
     parser.add_argument("--out", type=Path, help="Write the sidecar JSON here (default: stdout).")
     parser.add_argument("--out-dir", type=Path, help="Write <routine>.acc_residency.json into this directory.")

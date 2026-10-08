@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.preprocess import MergeEngine
 

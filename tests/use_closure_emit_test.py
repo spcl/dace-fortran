@@ -8,8 +8,7 @@ wasteful and drags in modules flang need never touch.  ``emit(entry=...)``
 
 import json
 
-
-from dace_fortran.emit_hlfir import parse_compile_commands, _select_use_closure, emit
+from dace_fortran.emit_hlfir import _select_use_closure, emit, parse_compile_commands
 
 
 def _write(tmp_path, name, body):

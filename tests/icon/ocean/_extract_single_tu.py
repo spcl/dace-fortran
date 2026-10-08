@@ -36,9 +36,9 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from tests.icon.ocean._ocean_harness import ocean_config, SRC, ocean_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
+    from tests.icon.ocean._ocean_harness import SRC, ocean_config, ocean_search_dirs
 
     cfg = ocean_config(halo_mode)
 
@@ -109,6 +109,7 @@ def main(argv):
         # buffer arg type varies across wrappers -- the same flag every real MPI build needs.
         r = subprocess.run(
             ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
+            check=False,
             cwd=str(cdir),
             capture_output=True,
             text=True,

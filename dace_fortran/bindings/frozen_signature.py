@@ -16,13 +16,12 @@ dict this rides in and never reads it -- the contract is dace-fortran-only.
 from __future__ import annotations
 
 import json
-from enum import Enum
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Dict, NamedTuple, Optional, Tuple, cast
+from enum import Enum
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import dace
 from dace.data import Data
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -74,9 +73,9 @@ class FrozenArg:
     kind: FrozenArgKind
     dtype: str
     rank: int
-    shape: Tuple[str, ...] = field(default_factory=tuple)
+    shape: tuple[str, ...] = field(default_factory=tuple)
     intent: str = ""
-    from_struct_member: Optional[str] = None
+    from_struct_member: str | None = None
     is_written: bool = False
     # Provenance for a flattened component of a MODULE-LEVEL array-of-structs
     # global (QE ``becxx(ikq)%k``, TYPE(bec_type) ALLOCATABLE).  This arg is
@@ -132,7 +131,7 @@ class FrozenArg:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "FrozenArg":
+    def from_dict(cls, d: dict) -> FrozenArg:
         """Rebuild from a :meth:`to_dict` mapping (list back to tuple)."""
         d = dict(d)
         d["shape"] = tuple(d.get("shape", []))
@@ -150,18 +149,18 @@ class FrozenSignature:
 
     entry: str  # 'compute_tendencies'
     mangled: str  # '_QPcompute_tendencies'
-    args: Tuple[FrozenArg, ...]
-    free_symbols: Tuple[str, ...] = field(default_factory=tuple)
+    args: tuple[FrozenArg, ...]
+    free_symbols: tuple[str, ...] = field(default_factory=tuple)
     schema_version: int = 1
     # Auto-detected module-global provenance for SDFG names that aren't
     # outer dummies.  Maps sdfg_name -> (module, entity).  Binding emitter
     # merges with hand-authored OriginalInterface.module_symbol_sources
     # (explicit map wins on conflict).
-    module_symbol_origins: Dict[str, ModuleOrigin] = field(default_factory=dict)
+    module_symbol_origins: dict[str, ModuleOrigin] = field(default_factory=dict)
     # Integer communicator dummy the wrapper feeds (via MPI_Comm_f2c +
     # MPI_Comm_size) into __user_comm/__user_comm_size at dace_init_<entry>
     # time.  None if no runtime MPI comm.
-    user_comm_source: Optional[str] = None
+    user_comm_source: str | None = None
 
     # ----- I/O ---------------------------------------------------------
 
@@ -181,7 +180,7 @@ class FrozenSignature:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "FrozenSignature":
+    def from_dict(cls, d: dict) -> FrozenSignature:
         """Rebuild from a :meth:`to_dict` mapping (lists back to tuples)."""
         return cls(
             entry=d["entry"],
@@ -199,7 +198,7 @@ class FrozenSignature:
             json.dump(self.to_dict(), fh, indent=2)
 
     @classmethod
-    def from_json(cls, path: str) -> "FrozenSignature":
+    def from_json(cls, path: str) -> FrozenSignature:
         """Load a snapshot previously written by :meth:`to_json`."""
         with open(path) as fh:
             return cls.from_dict(json.load(fh))
@@ -215,7 +214,7 @@ class FrozenSignature:
         may canonicalise; codegen catches concrete mismatches later.
         """
         live_arglist = sdfg.arglist()
-        live_fs = set(str(s) for s in sdfg.free_symbols)
+        live_fs = {str(s) for s in sdfg.free_symbols}
         snap_fs = set(self.free_symbols)
 
         # arglist() folds free symbols into the arg list; the snapshot
@@ -260,7 +259,7 @@ _CACHE_ATTR = "_frozen_signature_cache"
 _MAY_SHRINK = frozenset({FrozenArgKind.SCALAR, FrozenArgKind.SYMBOL})
 
 
-def get_frozen_signature(sdfg: SDFG) -> Optional["FrozenSignature"]:
+def get_frozen_signature(sdfg: SDFG) -> FrozenSignature | None:
     """Deserialise the snapshot stored on ``sdfg``; None if it carries none."""
     raw = _metadata(sdfg).get(SDFG_METADATA_KEY)
     if raw is None:
@@ -280,7 +279,7 @@ def _metadata(sdfg: SDFG) -> dict[str, Any]:
     return cast(dict[str, Any], sdfg.frontend_metadata)
 
 
-def attach_to_sdfg(sdfg: SDFG, frozen: Optional["FrozenSignature"]) -> None:
+def attach_to_sdfg(sdfg: SDFG, frozen: FrozenSignature | None) -> None:
     """Store ``frozen`` on ``sdfg`` in serialized form; None clears it."""
     if frozen is None:
         _metadata(sdfg).pop(SDFG_METADATA_KEY, None)
@@ -308,7 +307,7 @@ def _install_sdfg_accessor() -> None:
 _install_sdfg_accessor()
 
 
-def refreeze(sdfg: SDFG) -> "FrozenSignature":
+def refreeze(sdfg: SDFG) -> FrozenSignature:
     """Re-snapshot after a DELIBERATE transformation of the built SDFG (e.g. an optimization
     pipeline run between ``build()`` and ``build_fortran_library``), so the bindings regenerate
     against the live signature instead of tripping the drift check.
@@ -337,7 +336,7 @@ def refreeze(sdfg: SDFG) -> "FrozenSignature":
             f"refreeze: SDFG {sdfg.name!r} carries no _frozen_signature; it must come from SDFGBuilder.build()"
         )
     live_arglist = sdfg.arglist()
-    live_fs = set(str(s) for s in sdfg.free_symbols)
+    live_fs = {str(s) for s in sdfg.free_symbols}
     snap_fs = set(frozen.free_symbols)
 
     added = sorted(live_fs - snap_fs)

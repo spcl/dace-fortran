@@ -29,9 +29,9 @@ and follow.)
 import hashlib
 import logging
 import re
-from enum import Enum
 from dataclasses import dataclass
-from typing import List, NamedTuple, Optional, Set, Tuple
+from enum import Enum
+from typing import NamedTuple
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -39,11 +39,11 @@ from fparser.two.utils import walk
 
 from dace_fortran.inliner import ast_utils
 from dace_fortran.inliner.ast_desugaring.monomorphize import (
-    analyze,
     MonomorphizationPlan,
+    UnsupportedProgram,
+    analyze,
     parse_program,
     read_type_info,
-    UnsupportedProgram,
 )
 from dace_fortran.inliner.ast_desugaring.pruning import keep_sorted_used_modules
 from dace_fortran.inliner.ast_desugaring.utils import (
@@ -102,13 +102,13 @@ def _find_arm(plan: MonomorphizationPlan, type_name: str) -> ArmTag:
     raise KeyError(f"type `{type_name}` is not a concrete arm of `{plan.abstract_base}`")
 
 
-def _parse_decls(text: str) -> List[f03.Type_Declaration_Stmt]:
+def _parse_decls(text: str) -> list[f03.Type_Declaration_Stmt]:
     prog = parse_program(f"subroutine zz_tmp()\n{text}\nend subroutine\n")
     spec = walk(prog, f03.Specification_Part)[0]
     return [c for c in spec.children if isinstance(c, f03.Type_Declaration_Stmt)]
 
 
-def _parse_exec(text: str) -> List[f03.Base]:
+def _parse_exec(text: str) -> list[f03.Base]:
     prog = parse_program(f"subroutine zz_tmp()\n{text}\nend subroutine\n")
     exe = walk(prog, f03.Execution_Part)
     return list(exe[0].children) if exe else []
@@ -120,7 +120,7 @@ def _parse_expr(text: str) -> f03.Base:
     return rhs
 
 
-def _rewrite_allocated_queries(program: f03.Program, slot_names: Set[str]) -> None:
+def _rewrite_allocated_queries(program: f03.Program, slot_names: set[str]) -> None:
     """``ALLOCATED(<prefix>%<slot>)`` -> ``(<prefix>%<slot>__tag /= 0)``.
 
     After a component is laddered into a tag + per-arm concrete slots it has no
@@ -141,7 +141,7 @@ def _rewrite_allocated_queries(program: f03.Program, slot_names: Set[str]) -> No
         replace_node(fref, _parse_expr(f"{prefix}%{_tag_var(tail)} /= 0"))
 
 
-def _expanded_decls(var: str, plan: MonomorphizationPlan, stack_slots: bool = False) -> List[f03.Type_Declaration_Stmt]:
+def _expanded_decls(var: str, plan: MonomorphizationPlan, stack_slots: bool = False) -> list[f03.Type_Declaration_Stmt]:
     """``integer :: v__tag`` + one ``type(arm), allocatable :: v__arm`` per arm.
 
     With ``stack_slots`` the per-arm slot is a plain (non-allocatable) stack object:
@@ -157,7 +157,7 @@ def _expanded_decls(var: str, plan: MonomorphizationPlan, stack_slots: bool = Fa
 
 def _allocation_rewrite(
     var: str, alloc_type: str, plan: MonomorphizationPlan, stack_slots: bool = False
-) -> List[f03.Base]:
+) -> list[f03.Base]:
     """``allocate(concrete :: v)`` -> ``v__tag = <tag>`` + ``allocate(v__<arm>)``.
     With ``stack_slots`` the slot is a stack object, so only the tag is set (no
     ``allocate``)."""
@@ -167,7 +167,7 @@ def _allocation_rewrite(
     return _parse_exec(f"{_tag_var(var)} = {tag}\nallocate({_arm_slot(var, arm)})")
 
 
-def _dispatch_ladder(var: str, binding: str, argstr: str, plan: MonomorphizationPlan) -> List[f03.Base]:
+def _dispatch_ladder(var: str, binding: str, argstr: str, plan: MonomorphizationPlan) -> list[f03.Base]:
     """``call v%binding(args)`` -> one ``if (v__tag == k) call <arm-proc>(v__arm, args)`` per arm."""
     lines = []
     for tag, arm in enumerate(plan.arms, start=1):
@@ -181,10 +181,10 @@ def _dispatch_ladder(var: str, binding: str, argstr: str, plan: Monomorphization
 
 class ClassLocals(NamedTuple):
     declaration: f03.Type_Declaration_Stmt
-    names: List[str]
+    names: list[str]
 
 
-def _class_locals(spec: f03.Specification_Part, base: str) -> List[ClassLocals]:
+def _class_locals(spec: f03.Specification_Part, base: str) -> list[ClassLocals]:
     """``(decl, [names])`` for each ``CLASS(base), ... :: ...`` declaration in ``spec``."""
     out = []
     for decl in walk(spec, f03.Type_Declaration_Stmt):
@@ -198,13 +198,13 @@ def _class_locals(spec: f03.Specification_Part, base: str) -> List[ClassLocals]:
     return out
 
 
-def _locally_constructed(scope: f03.Base, plan: MonomorphizationPlan) -> Set[str]:
+def _locally_constructed(scope: f03.Base, plan: MonomorphizationPlan) -> set[str]:
     """Names of entities constructed *in this scope* via ``ALLOCATE(arm :: v)`` with a
     plain-name target -- the source construction sites that seed a type tag.  A
     component target (``ALLOCATE(arm :: this%act)``, a ``Data_Ref``) is excluded: that
     is the component primitive's job, not local-variable dispatch."""
     arms = {a.type_name.lower() for a in plan.arms}
-    out: Set[str] = set()
+    out: set[str] = set()
     for alloc in walk(scope, f03.Allocate_Stmt):
         alloc_type, alloc_list, _ = alloc.children
         if alloc_type is None or str(alloc_type).lower() not in arms:
@@ -267,14 +267,14 @@ def monomorphize_local_dispatch(program: f03.Program, plan: MonomorphizationPlan
     return rewritten
 
 
-def _parse_component_decls(text: str) -> List[f03.Data_Component_Def_Stmt]:
+def _parse_component_decls(text: str) -> list[f03.Data_Component_Def_Stmt]:
     prog = parse_program(f"module zz_tmp\n  type zz_t\n{text}\n  end type\nend module\n")
     return list(walk(prog, f03.Data_Component_Def_Stmt))
 
 
 def _expanded_component_decls(
     slot: str, plan: MonomorphizationPlan, stack_slots: bool = False, pointer: bool = False
-) -> List[f03.Data_Component_Def_Stmt]:
+) -> list[f03.Data_Component_Def_Stmt]:
     """``integer :: act__tag`` + one ``type(arm), allocatable :: act__arm`` component per arm.
     With ``stack_slots`` the per-arm component is a plain (non-allocatable) member -- the
     SDFG-lowerable form (see :func:`_expanded_decls`).  With ``pointer`` (an original
@@ -303,10 +303,10 @@ def _component_is_pointer(comp: f03.Data_Component_Def_Stmt) -> bool:
 
 class ComponentSlots(NamedTuple):
     component: f03.Data_Component_Def_Stmt
-    names: List[str]
+    names: list[str]
 
 
-def _component_slots(program: f03.Program, base: str) -> List[ComponentSlots]:
+def _component_slots(program: f03.Program, base: str) -> list[ComponentSlots]:
     """``(component_stmt, [names])`` for each ``CLASS(base), ... :: ...`` *component*."""
     out = []
     for comp in walk(program, f03.Data_Component_Def_Stmt):
@@ -332,7 +332,7 @@ def _ref_prefix_and_tail(ref: f03.Data_Ref) -> RefPrefixTail:
     return RefPrefixTail("%".join(str(p) for p in parts[:-1]), str(parts[-1]))
 
 
-def _member_prefix_and_tail(obj: f03.Base) -> Optional[RefPrefixTail]:
+def _member_prefix_and_tail(obj: f03.Base) -> RefPrefixTail | None:
     """Split a member reference into (``a%b`` prefix, last component), for either a
     ``Data_Ref`` (an rvalue path ``this%trans``) or a ``Data_Pointer_Object`` (a
     pointer-assign LHS ``this%op``, whose children are ``(base, '%', name)``).
@@ -347,7 +347,7 @@ def _member_prefix_and_tail(obj: f03.Base) -> Optional[RefPrefixTail]:
     return None
 
 
-def _stmt_refs_slot(node: f03.Base, slot_names: Set[str]) -> bool:
+def _stmt_refs_slot(node: f03.Base, slot_names: set[str]) -> bool:
     """True if ``node`` references a slot ``...%<slot>`` -- a ``<slot>`` appearing as
     a *component* (a non-first part of a ``Data_Ref`` / ``Data_Pointer_Object``),
     not merely a same-named local.  Used to find slot reads in an IF/else-if
@@ -381,7 +381,7 @@ def _slot_is_data_carrying(program: f03.Program, slot: str) -> bool:
     return False
 
 
-def _stmt_has_slot_dispatch(node: f03.Base, slot_names: Set[str]) -> bool:
+def _stmt_has_slot_dispatch(node: f03.Base, slot_names: set[str]) -> bool:
     """True if ``node`` contains a type-bound dispatch through a slot -- a
     ``Procedure_Designator`` ``...%slot%binding`` (a ``CALL`` or function-ref) whose
     receiver ``Data_Ref`` ends in one of ``slot_names``.  This distinguishes a
@@ -398,12 +398,12 @@ def _stmt_has_slot_dispatch(node: f03.Base, slot_names: Set[str]) -> bool:
 SLOT_STMT_TYPES = (f03.Call_Stmt, f03.Assignment_Stmt, f03.Pointer_Assignment_Stmt)
 
 
-def _component_slot_owner_types(program: f03.Program, base: str) -> Set[str]:
+def _component_slot_owner_types(program: f03.Program, base: str) -> set[str]:
     """Lower-cased names of the derived types that DECLARE a ``CLASS(base)`` component
     -- the types that OWN a laddered slot.  A component of the SAME name on any other
     type (ICON's concrete ``t_p_comm_pattern_orig%p`` vs the abstract 18-arm
     ``t_stack_op`` slot ``p``) is unrelated and must not be retargeted by the ladder."""
-    owners: Set[str] = set()
+    owners: set[str] = set()
     for comp, _ in _component_slots(program, base):
         dtd = _enclosing_of_type(comp, (f03.Derived_Type_Def,))
         if dtd is not None:
@@ -411,13 +411,13 @@ def _component_slot_owner_types(program: f03.Program, base: str) -> Set[str]:
     return owners
 
 
-def _ref_path_type(scope: f03.Base, parts: List[f03.Base], dtds: dict) -> Optional[str]:
+def _ref_path_type(scope: f03.Base, parts: list[f03.Base], dtds: dict) -> str | None:
     """Derived-type name a component path (``Data_Ref`` parts, each possibly
     array-subscripted) resolves to, or ``None`` when unresolvable (an intrinsic, a
     function result, or a name with no visible declaration).  Used to decide whether
     a ``%slot`` reference sits on a slot-owning container."""
 
-    def base_name(node: f03.Base) -> Optional[str]:
+    def base_name(node: f03.Base) -> str | None:
         if isinstance(node, f03.Name):
             return str(node)
         if isinstance(node, f03.Part_Ref) and isinstance(node.children[0], f03.Name):
@@ -438,13 +438,13 @@ def _ref_path_type(scope: f03.Base, parts: List[f03.Base], dtds: dict) -> Option
 
 def _slot_statement_ladder(
     stmt: f03.Base,
-    slot_names: Set[str],
+    slot_names: set[str],
     plan: MonomorphizationPlan,
-    owner_types: Optional[Set[str]] = None,
-    scope: Optional[f03.Base] = None,
-    dtds: Optional[dict] = None,
-    tinfos: Optional[dict] = None,
-) -> Optional[List[f03.Base]]:
+    owner_types: set[str] | None = None,
+    scope: f03.Base | None = None,
+    dtds: dict | None = None,
+    tinfos: dict | None = None,
+) -> list[f03.Base] | None:
     """If ``stmt`` references a slot ``<prefix>%<slot>`` (anywhere, even buried in a
     sub-expression), return a tag ladder that re-emits ``stmt`` once per arm with
     every ``%slot`` retargeted to ``%slot__arm``; ``None`` if it touches no slot.
@@ -457,7 +457,7 @@ def _slot_statement_ladder(
     unrelated same-named component (ICON's ``t_p_comm_pattern_orig%p``).  Conservative:
     an unresolvable container (``None``) still ladders, preserving prior behaviour."""
     prefix = slot = None
-    container_parts: Optional[Tuple[f03.Base, ...]] = None
+    container_parts: tuple[f03.Base, ...] | None = None
     for ref in walk(stmt, f03.Data_Ref):
         parts = ref.children
         for i, part in enumerate(parts):
@@ -511,8 +511,8 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
 
     # Classify each slot: a data-carrying POINTER slot is hybrid (kept CLASS); every
     # other slot is fully expanded.
-    hybrid_names: Set[str] = set()
-    full_names: Set[str] = set()
+    hybrid_names: set[str] = set()
+    full_names: set[str] = set()
     for comp, names in slots:
         pointer = _component_is_pointer(comp)
         for n in names:
@@ -574,8 +574,8 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
     #    4.  A hybrid slot's condition read (`IF (this%trans%is_solver_pe)`) is a
     #    data read that stays on the kept CLASS slot; only a hybrid *dispatch* buried
     #    in a condition (rare) needs laddering.
-    cond_units: List[f03.Base] = []
-    seen_units: Set[int] = set()
+    cond_units: list[f03.Base] = []
+    seen_units: set[int] = set()
     for carrier in walk(program, (f03.If_Then_Stmt, f03.Else_If_Stmt, f03.If_Stmt)):
         if not (_stmt_refs_slot(carrier, full_names) or _stmt_has_slot_dispatch(carrier, hybrid_names)):
             continue
@@ -627,7 +627,7 @@ def _base_nondeferred_bindings(program: f03.Program, base: str) -> dict:
     return out
 
 
-def _arm_from_slot_tail(tail: str, plan: MonomorphizationPlan) -> Optional[str]:
+def _arm_from_slot_tail(tail: str, plan: MonomorphizationPlan) -> str | None:
     """Recover the arm type from an expanded slot reference, e.g. ``act__t_gmres`` -> ``t_gmres``."""
     for arm in plan.arms:
         if tail.lower().endswith("__" + arm.type_name.lower()):
@@ -635,7 +635,7 @@ def _arm_from_slot_tail(tail: str, plan: MonomorphizationPlan) -> Optional[str]:
     return None
 
 
-def _find_subprogram(program: f03.Program, name: str) -> Optional[f03.Base]:
+def _find_subprogram(program: f03.Program, name: str) -> f03.Base | None:
     for sub in walk(program, SCOPES):
         if (find_name_of_node(sub) or "").lower() == name.lower():
             return sub
@@ -653,14 +653,14 @@ def _clone_interposer(sub: f03.Base, proc: str, base: str, arm_type: str, clone_
     return walk(prog, SCOPES)[0]
 
 
-def _enclosing_of_type(node: f03.Base, types_: tuple) -> Optional[f03.Base]:
+def _enclosing_of_type(node: f03.Base, types_: tuple) -> f03.Base | None:
     p = node.parent
     while p is not None and not isinstance(p, types_):
         p = p.parent
     return p
 
 
-def _module_name_of(node: f03.Base) -> Optional[str]:
+def _module_name_of(node: f03.Base) -> str | None:
     """Lower-cased name of the module / main program that lexically contains ``node``."""
     mod = _enclosing_of_type(node, (f03.Module, f03.Main_Program))
     if mod is None:
@@ -828,7 +828,7 @@ def retype_to_concrete(program: f03.Program, base: str, concrete: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _arm_index(plan: MonomorphizationPlan, type_name: str) -> Optional[int]:
+def _arm_index(plan: MonomorphizationPlan, type_name: str) -> int | None:
     """1-based tag value for a concrete arm type, or ``None`` if it is not an arm."""
     for i, arm in enumerate(plan.arms, start=1):
         if arm.type_name.lower() == type_name.lower():
@@ -836,7 +836,7 @@ def _arm_index(plan: MonomorphizationPlan, type_name: str) -> Optional[int]:
     return None
 
 
-def _dummy_arg_names(sub: f03.Base) -> List[str]:
+def _dummy_arg_names(sub: f03.Base) -> list[str]:
     """Ordered dummy-argument names of subprogram ``sub``."""
     stmt = ast_utils.atmost_one(ast_utils.children_of_type(sub, (f03.Subroutine_Stmt, f03.Function_Stmt)))
     if stmt is None:
@@ -854,7 +854,7 @@ class PointerAssociation(NamedTuple):
     target: str
 
 
-def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> List[PointerAssociation]:
+def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> list[PointerAssociation]:
     """``(slot, dummy)`` for each ``<prefix>%<slot> => <dummy>`` in ``scope`` whose
     ``<dummy>`` is a plain-name ``CLASS(base)`` entity -- the pointer-association
     tag sources.  Detected by the (still-``CLASS``) dummy rather than the slot name,
@@ -882,7 +882,7 @@ def _arm_ancestor_rank(tinfos: dict, type_name: str) -> dict:
     against a ``SELECT TYPE`` ``CLASS IS`` guard: an ancestor matches, the nearest
     (smallest depth) wins."""
     rank: dict = {}
-    t: Optional[str] = type_name.lower()
+    t: str | None = type_name.lower()
     depth = 0
     while t and t not in rank:
         rank[t] = depth
@@ -906,15 +906,15 @@ def _resolve_select_type_on_dummy(scope: f03.Base, dummy: str, arm_type: str, ti
         if not (isinstance(selector, f03.Name) and str(selector).lower() == dummy.lower()):
             continue
         # split the flat construct into (guard, [body statements]) groups
-        groups: List[Tuple[f03.Type_Guard_Stmt, List[f03.Base]]] = []
+        groups: list[tuple[f03.Type_Guard_Stmt, list[f03.Base]]] = []
         for ch in cst.children[1:-1]:
             if isinstance(ch, f03.Type_Guard_Stmt):
                 groups.append((ch, []))
             elif groups:
                 groups[-1][1].append(ch)
-        chosen: Optional[List[f03.Base]] = None
-        default: Optional[List[f03.Base]] = None
-        best: Optional[int] = None
+        chosen: list[f03.Base] | None = None
+        default: list[f03.Base] | None = None
+        best: int | None = None
         for guard, body in groups:
             kind = str(guard.children[0]).upper()
             gtype = str(guard.children[1]).lower() if guard.children[1] is not None else None
@@ -949,7 +949,7 @@ def _clone_ptr_constructor(
     clone_name: str,
     dummy: str,
     plan: MonomorphizationPlan,
-    hybrid_slots: Set[str],
+    hybrid_slots: set[str],
     tinfos: dict,
 ) -> f03.Base:
     """Clone constructor ``proc`` as ``clone_name`` with its ``CLASS(base)`` dummy
@@ -987,7 +987,7 @@ def _clone_ptr_constructor(
     return clone
 
 
-def _host_scope_specs(scope: f03.Base) -> List[f03.Specification_Part]:
+def _host_scope_specs(scope: f03.Base) -> list[f03.Specification_Part]:
     """Specification parts visible from ``scope`` by host association -- the scope's
     own, then each enclosing procedure's / module's, nearest first.  A concrete-arm
     typed entity passed as an actual, or a dispatch receiver, is often a *module*
@@ -995,13 +995,13 @@ def _host_scope_specs(scope: f03.Base) -> List[f03.Specification_Part]:
     local of the constructor's caller, so a type lookup must climb into the host."""
     specs = []
     node = scope
-    seen: Set[int] = set()
+    seen: set[int] = set()
     while node is not None and id(node) not in seen:
         seen.add(id(node))
         sp = ast_utils.atmost_one(ast_utils.children_of_type(node, f03.Specification_Part))
         if sp is not None:
             specs.append(sp)
-        node = _enclosing_of_type(node, SCOPES + (f03.Module, f03.Main_Program))
+        node = _enclosing_of_type(node, (*SCOPES, f03.Module, f03.Main_Program))
     return specs
 
 
@@ -1019,7 +1019,7 @@ class DerivedDeclaration(NamedTuple):
 
 class EntityType(NamedTuple):
     declared: bool
-    derived: Optional[DerivedDeclaration]
+    derived: DerivedDeclaration | None
 
 
 def _lookup_entity_type(scope: f03.Base, name: str) -> EntityType:
@@ -1038,7 +1038,7 @@ def _lookup_entity_type(scope: f03.Base, name: str) -> EntityType:
     return EntityType(False, None)
 
 
-def _entity_declared_type(scope: f03.Base, name: str) -> Optional[str]:
+def _entity_declared_type(scope: f03.Base, name: str) -> str | None:
     """Declared derived-type name of ``name`` visible from ``scope`` for a
     ``TYPE(t)`` *or* ``CLASS(t)`` declaration (the type used to resolve a
     dispatch), ``None`` for an intrinsic type or a missing declaration."""
@@ -1046,7 +1046,7 @@ def _entity_declared_type(scope: f03.Base, name: str) -> Optional[str]:
     return derived.type_name.lower() if derived is not None else None
 
 
-def _component_type(dtds: dict, type_name: str, comp: str) -> Optional[str]:
+def _component_type(dtds: dict, type_name: str, comp: str) -> str | None:
     """Derived-type name of component ``comp`` of ``type_name`` (searching its
     ``EXTENDS`` parents), ``None`` if absent or intrinsic."""
     dtd = dtds.get(type_name.lower())
@@ -1063,7 +1063,7 @@ def _component_type(dtds: dict, type_name: str, comp: str) -> Optional[str]:
     return _component_type(dtds, parent, comp) if parent else None
 
 
-def _type_of_ref(scope: f03.Base, ref: f03.Base, dtds: dict) -> Optional[str]:
+def _type_of_ref(scope: f03.Base, ref: f03.Base, dtds: dict) -> str | None:
     """Derived-type name a reference resolves to: a bare ``Name`` (local/dummy) or a
     member path ``a%b%c`` (each component's type walked through ``dtds``)."""
     if isinstance(ref, f03.Name):
@@ -1079,7 +1079,7 @@ def _type_of_ref(scope: f03.Base, ref: f03.Base, dtds: dict) -> Optional[str]:
     return None
 
 
-def _binding_target(tinfos: dict, type_name: str, binding: str) -> Optional[str]:
+def _binding_target(tinfos: dict, type_name: str, binding: str) -> str | None:
     """Concrete procedure a static ``type_name%binding`` dispatch resolves to,
     walking ``EXTENDS`` for an overriding binding.  ``None`` if the binding is
     deferred at ``type_name`` (resolved only by the dynamic type -- not a static
@@ -1096,7 +1096,7 @@ def _binding_target(tinfos: dict, type_name: str, binding: str) -> Optional[str]
     return None
 
 
-def _resolved_call_targets(program: f03.Program) -> Set[str]:
+def _resolved_call_targets(program: f03.Program) -> set[str]:
     """Lower-cased procedure names that some ``Call_Stmt`` resolves to -- a direct
     ``CALL proc`` or a statically-resolvable ``obj%binding`` dispatch.  A dispatch
     whose receiver type cannot be resolved is treated conservatively (every arm
@@ -1104,7 +1104,7 @@ def _resolved_call_targets(program: f03.Program) -> Set[str]:
     never dropped out from under a caller."""
     tinfos = {read_type_info(d).name: read_type_info(d) for d in walk(program, f03.Derived_Type_Def)}
     dtds = {read_type_info(d).name: d for d in walk(program, f03.Derived_Type_Def)}
-    targets: Set[str] = set()
+    targets: set[str] = set()
     for call in walk(program, f03.Call_Stmt):
         des = call.children[0]
         if isinstance(des, f03.Name):
@@ -1146,7 +1146,7 @@ def _drop_use_only_import(program: f03.Program, name: str) -> None:
             remove_self(use)
 
 
-def _drop_dead_constructors(program: f03.Program, procs: Set[str]) -> None:
+def _drop_dead_constructors(program: f03.Program, procs: set[str]) -> None:
     """Remove each constructor in ``procs`` and its ``binding => proc`` TBPs once no
     call resolves to it, to a fixed point (a pass-through goes dead only after the
     caller that still dispatches it is dropped).  A cloned original still holds the
@@ -1176,12 +1176,12 @@ def _drop_dead_constructors(program: f03.Program, procs: Set[str]) -> None:
 
 
 class Callee(NamedTuple):
-    name: Optional[str]
-    passed_object: Optional[f03.Base]
+    name: str | None
+    passed_object: f03.Base | None
     has_passed_object: bool
 
 
-def _callee_of(call: f03.Call_Stmt, scope: Optional[f03.Base], tinfos: dict, dtds: dict) -> Callee:
+def _callee_of(call: f03.Call_Stmt, scope: f03.Base | None, tinfos: dict, dtds: dict) -> Callee:
     """``(proc_name, passed_object_or_None, has_passed_object)`` for a call: a
     plain ``CALL proc`` (no passed object), or a type-bound dispatch ``obj%binding``
     resolved *precisely* by ``obj``'s static type (:func:`_type_of_ref` +
@@ -1423,7 +1423,7 @@ class AxisSpec:
 
     base: str
     strategy: str
-    concrete: Optional[str] = None
+    concrete: str | None = None
 
 
 @dataclass(slots=True)
@@ -1433,7 +1433,7 @@ class MonomorphizationSpec:
     Retype axes are applied before ladder axes so a cloned interposer that reads
     a retyped member already sees the concrete type."""
 
-    axes: List[AxisSpec]
+    axes: list[AxisSpec]
 
 
 @dataclass(slots=True)
@@ -1529,11 +1529,11 @@ def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: 
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_binding_names(program: f03.Program) -> Set[str]:
+def _dispatch_binding_names(program: f03.Program) -> set[str]:
     """Lower-cased binding names that appear in a live type-bound dispatch
     ``obj%binding(...)`` -- a :class:`Procedure_Designator` (a ``CALL obj%b`` or
     a function-reference ``obj%b(...)``) anywhere in the program."""
-    names: Set[str] = set()
+    names: set[str] = set()
     for des in walk(program, f03.Procedure_Designator):
         names.add(str(des.children[2]).lower())
     return names
@@ -1552,7 +1552,7 @@ def _has_inunit_construction(program: f03.Program, plan: MonomorphizationPlan) -
     return False
 
 
-def _entity_concrete_type(scope: f03.Base, name: str) -> Optional[str]:
+def _entity_concrete_type(scope: f03.Base, name: str) -> str | None:
     """The concrete ``TYPE(t)`` name declared for entity ``name`` visible from
     ``scope`` (a local, dummy, or host-associated *module* variable), or ``None``
     when it is polymorphic (``CLASS(...)``) or intrinsic.  Reads the arm type of a
@@ -1569,7 +1569,7 @@ class SlotAssociation(NamedTuple):
     dummy: str
 
 
-def _ptr_assoc_slot_sites(scope: f03.Base, base: str, slot_names: Set[str]) -> List[SlotAssociation]:
+def _ptr_assoc_slot_sites(scope: f03.Base, base: str, slot_names: set[str]) -> list[SlotAssociation]:
     """``(pointer_assign_stmt, slot, dummy_name)`` for each ``<prefix>%<slot> =>
     <dummy>`` in ``scope`` where ``slot`` is one of ``slot_names`` and ``<dummy>``
     is a plain-name entity declared ``CLASS(base)`` in ``scope`` -- the interior
@@ -1594,7 +1594,7 @@ def _ptr_assoc_slot_sites(scope: f03.Base, base: str, slot_names: Set[str]) -> L
     return out
 
 
-def _slot_component_names(program: f03.Program, base: str) -> Set[str]:
+def _slot_component_names(program: f03.Program, base: str) -> set[str]:
     """Lower-cased names of every ``CLASS(base)`` derived-type *component* (the
     stored slots a dispatch reads as ``obj%slot%binding``)."""
     return {n.lower() for _, names in _component_slots(program, base) for n in names}
@@ -1608,7 +1608,7 @@ def _has_concrete_arm_actual(program: f03.Program, plan: MonomorphizationPlan) -
     variable (ICON's ``free_sfc_solver_trans_triv``), so the arm-typed names are
     collected program-wide (any scope) rather than per call-site."""
     arms = {a.type_name.lower() for a in plan.arms}
-    arm_typed: Set[str] = set()
+    arm_typed: set[str] = set()
     for decl in walk(program, f03.Type_Declaration_Stmt):
         ts = decl.children[0]
         if (
@@ -1643,7 +1643,7 @@ def _has_pointer_assoc_construction(program: f03.Program, plan: Monomorphization
     return _has_concrete_arm_actual(program, plan)
 
 
-def discover_axes(program: f03.Program) -> List[AxisSpec]:
+def discover_axes(program: f03.Program) -> list[AxisSpec]:
     """Find every single-level abstract dispatch axis in ``program`` that the
     pass can soundly collapse, and pick a strategy for each.
 
@@ -1692,13 +1692,13 @@ def discover_axes(program: f03.Program) -> List[AxisSpec]:
 
     # Candidate bases: abstract dispatch roots (a type with deferred bindings)
     # at least one of whose deferred bindings is live.
-    candidates: List[str] = []
+    candidates: list[str] = []
     for dtd in walk(program, f03.Derived_Type_Def):
         ti = read_type_info(dtd)
         if ti.deferred and any(d in live for d in ti.deferred):
             candidates.append(ti.name)
 
-    axes: List[AxisSpec] = []
+    axes: list[AxisSpec] = []
     for base in sorted(set(candidates)):
         try:
             plans = analyze(program, only_bases=[base])
@@ -1724,7 +1724,7 @@ def discover_axes(program: f03.Program) -> List[AxisSpec]:
     return axes
 
 
-def _module_of(program: f03.Program, type_name: str) -> Optional[f03.Module]:
+def _module_of(program: f03.Program, type_name: str) -> f03.Module | None:
     """The :class:`Module` whose specification part defines ``type_name``."""
     for mod in walk(program, f03.Module):
         spec = ast_utils.atmost_one(ast_utils.children_of_type(mod, f03.Specification_Part))
@@ -1751,7 +1751,7 @@ def _toposort_type_defs(spec: f03.Specification_Part) -> None:
         return
     local = {read_type_info(d).name: d for d in dtds}
 
-    def deps(dtd: f03.Derived_Type_Def) -> Set[str]:
+    def deps(dtd: f03.Derived_Type_Def) -> set[str]:
         ti = read_type_info(dtd)
         out = {ti.parent} if ti.parent in local else set()
         for ts in walk(dtd, f03.Declaration_Type_Spec):
@@ -1762,9 +1762,9 @@ def _toposort_type_defs(spec: f03.Specification_Part) -> None:
 
     # Stable DFS post-order topo-sort (a back-edge from a self/cyclic ref is
     # ignored -- it can only be a recursive pointer, which Fortran allows).
-    ordered: List[f03.Derived_Type_Def] = []
-    seen: Set[str] = set()
-    onstack: Set[str] = set()
+    ordered: list[f03.Derived_Type_Def] = []
+    seen: set[str] = set()
+    onstack: set[str] = set()
 
     def visit(name: str) -> None:
         if name in seen:
@@ -1817,7 +1817,7 @@ def _redirect_uses(program: f03.Program, old_mod: str, new_mod: str) -> None:
             )
 
 
-def _module_scope_declared_names(mod: f03.Module) -> Set[str]:
+def _module_scope_declared_names(mod: f03.Module) -> set[str]:
     """Lower-cased names DECLARED at ``mod``'s own specification-part scope (module
     variables / named constants).  Names introduced only by ``USE`` (imports) or
     inside a contained procedure are excluded -- they are not module-scope

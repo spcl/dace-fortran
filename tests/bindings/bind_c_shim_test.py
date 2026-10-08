@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     DerivedType,
     Member,
@@ -20,7 +19,7 @@ from dace_fortran.bindings import (
     build_fortran_library,
     emit_bind_c_shim,
 )
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 # ---------------------------------------------------------------------------
 #  Emitter structural checks (text-only -- no compile, no link).
@@ -271,7 +270,7 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
         assert f"call c_f_pointer(s_pnc_{f}_p, s_pnc_{f}, [s_pnc_{f}_d0, s_pnc_{f}_d1, s_pnc_{f}_d2])" in text
     # extents ride immediately before their pointer (v1_d0..d2, v1_p, v2_d0..d2,
     # v2_p) -- emit_library's per_member_soa interleave.
-    sig = re.search(r"subroutine\s+kern_c\(([^)]*)\)", text, re.S).group(1).replace("&", " ")
+    sig = re.search(r"subroutine\s+kern_c\(([^)]*)\)", text, re.DOTALL).group(1).replace("&", " ")
     order = [a.strip() for a in sig.split(",") if a.strip()]
     assert (
         order.index("s_pnc_v1_d0") < order.index("s_pnc_v1_p") < order.index("s_pnc_v2_d0") < order.index("s_pnc_v2_p")

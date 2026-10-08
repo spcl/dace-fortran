@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 from dace_fortran.llvm_toolchain import flang_names, intrinsic_modules_path
 from dace_fortran.preprocess import MergeEngine
 
@@ -193,10 +192,8 @@ def _per_test_suffix() -> str:
     nodeid = raw.rsplit(" ", 1)[0]
     file_part, _, test_part = nodeid.partition("::")
     stem = Path(file_part).stem
-    if stem.endswith("_test"):
-        stem = stem[: -len("_test")]
-    if test_part.startswith("test_"):
-        test_part = test_part[len("test_") :]
+    stem = stem.removesuffix("_test")
+    test_part = test_part.removeprefix("test_")
     sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", f"{stem}_{test_part}").strip("_")
     return f"_{sanitized}" if sanitized else ""
 
@@ -261,7 +258,7 @@ def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
     if rank == root:
         try:
             result = build_fn()
-        except BaseException as exc:  # noqa: BLE001 -- re-raised on every rank
+        except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
     if broadcast:
         error, result = comm.bcast((error, result), root=root)

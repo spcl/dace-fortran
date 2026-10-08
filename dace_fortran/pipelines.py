@@ -22,21 +22,20 @@ defines the team-size symbol of thread-strided persistent maps at SDFG entry, wh
 """
 
 import copy
-from typing import Any, Dict, Optional, Set, Union, cast
+from typing import Any, Union, cast
 
-from dace.transformation.dataflow.map_collapse import MapCollapse
 import numpy as np
-
 from dace import SDFG
 from dace.sdfg import nodes
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
+from dace.transformation.dataflow.map_collapse import MapCollapse
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import (
-    ConvertLengthOneArraysToScalars,
     STAGING_STATE_PREFIXES,
+    ConvertLengthOneArraysToScalars,
 )
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
@@ -47,12 +46,12 @@ from dace_fortran.omp_threads import BindOmpThreadCount
 Const = Union[float, int, str]
 
 
-def accepted_call_args(sdfg: SDFG) -> Set[str]:
+def accepted_call_args(sdfg: SDFG) -> set[str]:
     """Names ``sdfg`` can be called with: its arglist plus its free symbols."""
     return set(sdfg.arglist()) | {str(s) for s in sdfg.free_symbols}
 
 
-def abi_proxy_transients(sdfg: SDFG) -> Set[str]:
+def abi_proxy_transients(sdfg: SDFG) -> set[str]:
     """Transients that exist only as the copy-in/copy-out shadow of a NON-transient.
 
     ``ConvertLengthOneArraysToScalars(preserve_abi=True)`` keeps the signature array and stages it
@@ -61,7 +60,7 @@ def abi_proxy_transients(sdfg: SDFG) -> Set[str]:
     Derived from the staging edges themselves rather than the ``scal_`` name the pass happens to mint,
     and keyed on that pass's OWN state-label constant so a rename there cannot silently unhook this.
     """
-    proxies: Set[str] = set()
+    proxies: set[str] = set()
     for state in sdfg.all_states():
         if not state.label.startswith(STAGING_STATE_PREFIXES):
             continue
@@ -74,7 +73,7 @@ def abi_proxy_transients(sdfg: SDFG) -> Set[str]:
     return proxies
 
 
-def fission_scalars(sdfg: SDFG) -> Dict[str, Set[str]]:
+def fission_scalars(sdfg: SDFG) -> dict[str, set[str]]:
     """Run ``ScalarFission`` on ``sdfg``, leaving ABI-proxy transients whole.
 
     Fissioning a proxy splits its value over several shadows while the copy-out still reads exactly
@@ -95,7 +94,7 @@ def fission_scalars(sdfg: SDFG) -> Dict[str, Set[str]]:
             sdfg.arrays[name].transient = True
 
 
-def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) -> None:
+def verify_numerics(reference: SDFG, optimized: SDFG, inputs: dict[str, Any]) -> None:
     """Run both SDFGs on the same inputs and require BIT-IDENTICAL results.
 
     The pipeline reorders statements and forms maps but never reassociates arithmetic, so anything
@@ -116,7 +115,7 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
     reference = copy.deepcopy(reference)
     cast(Any, reference).name = f"{reference.name}_preopt"  # dace declares SDFG.name as a Property
 
-    def fresh() -> Dict[str, Any]:
+    def fresh() -> dict[str, Any]:
         return {
             k: (v.copy(order="F" if v.flags.f_contiguous else "C") if isinstance(v, np.ndarray) else v)
             for k, v in inputs.items()
@@ -149,11 +148,11 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
 def optimize(
     sdfg: SDFG,
     *,
-    symbols: Optional[Dict[str, Const]] = None,
-    scalars: Optional[Dict[str, Const]] = None,
+    symbols: dict[str, Const] | None = None,
+    scalars: dict[str, Const] | None = None,
     unroll_limit: int = 8,
     validate: bool = True,
-    verify_inputs: Optional[Dict[str, Any]] = None,
+    verify_inputs: dict[str, Any] | None = None,
 ) -> SDFG:
     """Run the parallelization pipeline in place and return ``sdfg``.
 

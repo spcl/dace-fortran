@@ -80,7 +80,7 @@ def _size_derived_module_dims(binding: str):
     """
     sym_module = _module_symbol_map(binding)
     seen, out = set(), []
-    for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.M):
+    for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.MULTILINE):
         if sym in sym_module and sym not in seen:
             seen.add(sym)
             out.append((sym, sym_module[sym]))
@@ -359,7 +359,7 @@ def _parse_abi(shim: str):
     header arg (``<x>_p``) to its ``c_f_pointer`` local name -- the key
     :func:`run_kernel_e2e`'s ``array_overrides`` uses to pin a buffer.
     """
-    m = re.search(r"subroutine\s+\w+\(([^)]*)\)\s*bind", shim, re.S)
+    m = re.search(r"subroutine\s+\w+\(([^)]*)\)\s*bind", shim, re.DOTALL)
     header = [a.strip() for a in m.group(1).replace("&", " ").split(",") if a.strip()]
     value_ftype = {
         name: ftype
@@ -534,10 +534,10 @@ def build_dut_and_ref(
     """
     import dace
 
-    from tests._util import BITEXACT_CPU_ARGS
-    from dace_fortran.build import build_sdfg
     from dace_fortran.bindings import build_fortran_library
+    from dace_fortran.build import build_sdfg
     from dace_fortran.external import apply_external_functions, clear_external_registry
+    from tests._util import BITEXACT_CPU_ARGS
 
     # Drop halo/MPI/sync/timer externals from the DUT SDFG; REF keeps the real
     # bodies but its mpi_* leaves resolve to the no-op prelude impls below.
@@ -685,6 +685,7 @@ def build_dut_and_ref(
                 f"-Wl,-rpath,{sdfg_so.parent}",
                 f"-l:{sdfg_so.name}",
             ],
+            check=False,
             capture_output=True,
             text=True,
             cwd=str(out),
@@ -742,6 +743,7 @@ def build_dut_and_ref(
             str(ref_tu),
             str(ref_shim),
         ],
+        check=False,
         capture_output=True,
         text=True,
         cwd=str(out),
@@ -934,6 +936,7 @@ def run_kernel_e2e(
             json.dumps(ref_solver_allocs or []),
             json.dumps(ref_global_binds or []),
         ],
+        check=False,
         capture_output=True,
         text=True,
         env=env,

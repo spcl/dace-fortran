@@ -18,7 +18,6 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 from dace.config import Config
 from dace.sdfg import SDFG
@@ -79,7 +78,7 @@ def generated_source(sdfg: SDFG) -> Path:
     return src
 
 
-def build_flags(sdfg: SDFG) -> List[str]:
+def build_flags(sdfg: SDFG) -> list[str]:
     """The exact defines/includes/flags CMake used for the generated TU, read back from the build.
 
     Reusing the build's own flags keeps the analysis honest -- a hand-rebuilt include path analyses code the
@@ -90,7 +89,7 @@ def build_flags(sdfg: SDFG) -> List[str]:
     build = Path(sdfg.build_folder) / "build"
     makeflags = build / "CMakeFiles" / f"{sdfg.name}.dir" / "flags.make"
     if makeflags.is_file():
-        flags: List[str] = []
+        flags: list[str] = []
         for line in makeflags.read_text().splitlines():
             for key in ("CXX_DEFINES", "CXX_INCLUDES", "CXX_FLAGS"):
                 if line.startswith(key):
@@ -157,14 +156,14 @@ def require(tool: str) -> str:
 NONCRITICAL_NOISE = ("unused-but-set-variable", "unused-variable", "unused-parameter", "undefined-function-result")
 
 
-def critical_tags(clang: Optional[bool] = None) -> set:
+def critical_tags(clang: bool | None = None) -> set:
     """The ``[-Wname]`` tags that mark UB-class (critical) warnings for the active compiler."""
     if clang is None:
         clang = compiler_is_clang()
     return {f"[-W{w}]" for w in (CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS)}
 
 
-def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> List[str]:
+def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> list[str]:
     """Run ``tool`` over the generated C++ and return the diagnostic lines it reported.
 
     ``warnings`` and ``analyzer`` follow the configured compiler (gcc ``-fanalyzer`` / clang ``--analyze``);

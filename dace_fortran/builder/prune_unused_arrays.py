@@ -12,7 +12,7 @@ the bindings layer still needs.
 
 from __future__ import annotations
 
-from typing import AbstractSet, Set
+from collections.abc import Set as AbstractSet
 
 import dace
 from dace.properties import CodeBlock
@@ -29,7 +29,7 @@ def _code_text(code: CodeBlock | str | None) -> str:
     return str(code)
 
 
-def _collect_live_names(sdfg: SDFG) -> Set[str]:
+def _collect_live_names(sdfg: SDFG) -> set[str]:
     """Every array name referenced anywhere on this SDFG.  Two surfaces:
     DaCe's ``get_used_data`` per state (AccessNodes/memlets/read-write sets),
     and an identifier-grep over tasklet code / interstate assignments+conditions
@@ -41,7 +41,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     _IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z_0-9]*\b")
     from dace.sdfg.utils import get_used_data
 
-    live: Set[str] = set()
+    live: set[str] = set()
     for state in sdfg.all_states():
         live |= get_used_data(state)
     array_names = set(sdfg.arrays.keys())
@@ -77,14 +77,14 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     return live
 
 
-def _prune_one(sdfg: SDFG, binding_names: AbstractSet[str]) -> Set[str]:
+def _prune_one(sdfg: SDFG, binding_names: AbstractSet[str]) -> set[str]:
     """Drop every non-persistent, non-globally-scoped descriptor with no live
     reference and no bindings-layer reference.  Returns the set of pruned names."""
     live = _collect_live_names(sdfg)
     live |= set(sdfg.symbols.keys())  # symbol-promoted scalars
     live |= {str(s) for s in sdfg.free_symbols}  # free symbol references
     live |= binding_names  # FlattenPlan + arglist keepers
-    dropped: Set[str] = set()
+    dropped: set[str] = set()
     for name in list(sdfg.arrays.keys()):
         if name in live:
             continue
@@ -105,7 +105,7 @@ def _prune_one(sdfg: SDFG, binding_names: AbstractSet[str]) -> Set[str]:
     return dropped
 
 
-def prune_unused_arrays(sdfg: SDFG, binding_names: AbstractSet[str] = frozenset()) -> Set[str]:
+def prune_unused_arrays(sdfg: SDFG, binding_names: AbstractSet[str] = frozenset()) -> set[str]:
     """Recursively prune dead-descriptor arrays from ``sdfg`` and every
     NestedSDFG body reachable from it (mutated in place).  ``binding_names``
     keeps names the bindings layer needs regardless of dataflow visibility

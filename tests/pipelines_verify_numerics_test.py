@@ -7,10 +7,9 @@ computes something different. This checks the numerical gate both ways -- silent
 value-preserving run, loud on a corrupted one -- because a gate that never fires proves nothing.
 """
 
+import dace
 import numpy as np
 import pytest
-
-import dace
 
 from dace_fortran.pipelines import optimize, verify_numerics
 

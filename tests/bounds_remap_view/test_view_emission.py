@@ -10,8 +10,8 @@ probes catch the expected post-descriptor validation error and inspect the parti
 descriptor is emitted before validation runs).
 """
 
+import contextlib
 from pathlib import Path
-
 
 _HERE = Path(__file__).resolve().parent
 from tests._util import build_sdfg  # noqa: E402
@@ -108,10 +108,8 @@ def test_var_info_copy_probes_carry_no_remap_view_flag(tmp_path):
         "plain_slice_copy_probe.f90",
     ):
         builder = _make_builder(fname, tmp_path / fname.replace(".f90", ""))
-        try:
+        with contextlib.suppress(Exception):  # unrelated downstream gaps OK; only VarInfo flags matter
             _build_partial_sdfg(builder)
-        except Exception:
-            pass  # unrelated downstream gaps OK; only care no VarInfo got spuriously flagged
         inner = getattr(builder, "_inner", builder)
         try:
             vi_list = inner.module.get_variables()
@@ -131,7 +129,7 @@ def test_view_descriptor_is_added_for_view_probe(tmp_path):
     SDFG after the descriptors pass runs."""
     builder = _make_builder("pointer_view_bounds_remap_probe.f90", tmp_path)
     sdfg = _build_partial_sdfg(builder)
-    view_name, view_desc = _find_view(sdfg, ("prhoc",))
+    _view_name, view_desc = _find_view(sdfg, ("prhoc",))
     assert view_desc is not None, f"no View descriptor for 'prhoc' in {list(sdfg.arrays)}"
     assert len(view_desc.shape) == 1, f"View should be 1-D, got shape {view_desc.shape}"
 

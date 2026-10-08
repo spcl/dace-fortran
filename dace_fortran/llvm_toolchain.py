@@ -13,8 +13,8 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Optional, Sequence
 
 #: LLVM major versions the bridge builds against, in preference order.
 SUPPORTED_LLVM_VERSIONS = ("21", "22")
@@ -36,7 +36,7 @@ def candidate_versions() -> Sequence[str]:
     return (pinned,) if pinned else SUPPORTED_LLVM_VERSIONS
 
 
-def flang_names(version: Optional[str] = None) -> List[str]:
+def flang_names(version: str | None = None) -> list[str]:
     """flang binary names to probe, most specific first.
 
     Debian/Ubuntu ship ``flang-new-<major>`` / ``flang-<major>``; spack and upstream
@@ -60,7 +60,7 @@ def flang_major(binary: str) -> str:
     return match.group(1) if match else ""
 
 
-def find_flang(version: Optional[str] = None) -> Optional[str]:
+def find_flang(version: str | None = None) -> str | None:
     """Path to a supported flang on ``$PATH``, or ``None``.
 
     ``$FC`` wins when it points at an LLVM flang of an acceptable major.
@@ -73,14 +73,13 @@ def find_flang(version: Optional[str] = None) -> Optional[str]:
         found = shutil.which(name)
         if not found:
             continue
-        if os.path.basename(name) in _UNVERSIONED or name == override:
-            if flang_major(found) not in wanted:
-                continue
+        if (os.path.basename(name) in _UNVERSIONED or name == override) and flang_major(found) not in wanted:
+            continue
         return found
     return None
 
 
-def require_flang(version: Optional[str] = None) -> str:
+def require_flang(version: str | None = None) -> str:
     """:func:`find_flang`, or raise naming every binary and major that was tried."""
     found = find_flang(version)
     if found is None:

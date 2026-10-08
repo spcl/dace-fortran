@@ -24,8 +24,8 @@ import fparser.two.Fortran2003 as f03
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
     AxisSpec,
-    monomorphize,
     MonomorphizationSpec,
+    monomorphize,
 )
 
 _HERE = Path(__file__).resolve().parent

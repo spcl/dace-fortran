@@ -421,7 +421,10 @@ def _gfortran_compiles(text: str) -> bool:
         f = Path(td) / "m.f90"
         f.write_text(text)
         r = subprocess.run(
-            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)],
+            check=False,
+            cwd=td,
+            capture_output=True,
         )
         if r.returncode:
             print(r.stderr.decode())
@@ -441,7 +444,7 @@ def _two_module_project(tmp_path):
         "  end function dbl\n"
         "end module helper\n"
     )
-    driver = (
+    return (
         "module drv\n"
         "  use helper, only: dbl\n"
         "  implicit none\n"
@@ -452,7 +455,6 @@ def _two_module_project(tmp_path):
         "  end subroutine run\n"
         "end module drv\n"
     )
-    return driver
 
 
 def test_merge_engine_fparser_produces_compilable_single_tu(tmp_path):

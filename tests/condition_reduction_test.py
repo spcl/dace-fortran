@@ -9,7 +9,7 @@ shows as a wrong result, not an OOB crash.
 
 import numpy as np
 
-from tests._util import build_sdfg  # noqa: E402
+from tests._util import build_sdfg
 
 
 def _reduce_nodes(sdfg):

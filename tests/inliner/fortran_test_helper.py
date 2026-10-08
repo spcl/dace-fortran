@@ -12,8 +12,6 @@ import subprocess
 from dataclasses import dataclass, field
 from os import path
 from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Tuple
-
 
 from dace_fortran.fparser_inliner import parse_and_improve  # noqa: F401  (re-exported for tests)
 
@@ -28,9 +26,9 @@ class SourceCodeBuilder:
     ``{name: content}`` mapping.
     """
 
-    sources: Dict[str, str] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)
 
-    def add_file(self, content: str, name: Optional[str] = None):
+    def add_file(self, content: str, name: str | None = None):
         """Add source file contents in the order you'd pass them to ``gfortran``."""
         if not name:
             name = SourceCodeBuilder._identify_name(content)
@@ -49,30 +47,32 @@ class SourceCodeBuilder:
                     f.write(content)
             cmd = ["gfortran", "-Wall", "-shared", "-fPIC", "-ffree-line-length-none", *self.sources.keys()]
             try:
-                subprocess.run(cmd, cwd=td, capture_output=True).check_returncode()
+                subprocess.run(cmd, check=False, cwd=td, capture_output=True).check_returncode()
                 return self
             except subprocess.CalledProcessError as e:
                 print("Fortran compilation failed!")
                 print(e.stderr.decode())
-                raise e
+                raise
 
-    def get(self) -> Tuple[Dict[str, str], Optional[str]]:
+    def get(self) -> tuple[dict[str, str], str | None]:
         """Get a dictionary mapping file names to their content + the ``main`` source."""
         main = self.sources.get("main.f90")
         return self.sources, main
 
     @staticmethod
     def _identify_name(content: str) -> str:
-        PPAT = re.compile(r"^.*\bprogram\b\s*\b(?P<prog>[a-zA-Z0-9_]*)\b.*$", re.I | re.M | re.S)
+        PPAT = re.compile(r"^.*\bprogram\b\s*\b(?P<prog>[a-zA-Z0-9_]*)\b.*$", re.IGNORECASE | re.MULTILINE | re.DOTALL)
         if PPAT.match(content):
             return PPAT.search(content).group("prog") or "main"
-        MPAT = re.compile(r"^.*\bmodule\b\s*\b(?P<mod>[a-zA-Z0-9_]+)\b.*$", re.I | re.M | re.S)
+        MPAT = re.compile(r"^.*\bmodule\b\s*\b(?P<mod>[a-zA-Z0-9_]+)\b.*$", re.IGNORECASE | re.MULTILINE | re.DOTALL)
         if MPAT.match(content):
             return MPAT.search(content).group("mod")
-        FPAT = re.compile(r"^.*\bfunction\b\s*\b(?P<fn>[a-zA-Z0-9_]+)\b.*$", re.I | re.M | re.S)
+        FPAT = re.compile(r"^.*\bfunction\b\s*\b(?P<fn>[a-zA-Z0-9_]+)\b.*$", re.IGNORECASE | re.MULTILINE | re.DOTALL)
         if FPAT.match(content):
             return FPAT.search(content).group("fn")
-        SPAT = re.compile(r"^.*\bsubroutine\b\s*\b(?P<subr>[a-zA-Z0-9_]+)\b.*$", re.I | re.M | re.S)
+        SPAT = re.compile(
+            r"^.*\bsubroutine\b\s*\b(?P<subr>[a-zA-Z0-9_]+)\b.*$", re.IGNORECASE | re.MULTILINE | re.DOTALL
+        )
         if SPAT.match(content):
             return SPAT.search(content).group("subr")
         raise ValueError(f"Could not find any identifiable object in the content:\n{content}")

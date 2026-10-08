@@ -26,14 +26,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import (
     OriginalArg,
     OriginalInterface,
     build_fortran_library,
 )
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 _INNER_SRC = """
 subroutine inner_axpy(n, a, x, y)

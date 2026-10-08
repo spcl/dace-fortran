@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _M4_DIR = _REPO_ROOT / "autotools"
 
@@ -94,7 +93,7 @@ def test_configure_succeeds(tmp_path):
     """./configure succeeds -- DACE_FORTRAN_PREPROCESS macro expanded cleanly into the generated script."""
     proj = _write_project(tmp_path)
     _autoreconf(proj)
-    res = subprocess.run(["./configure"], cwd=str(proj), capture_output=True, text=True)
+    res = subprocess.run(["./configure"], check=False, cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, f"configure failed:\nstdout={res.stdout}\nstderr={res.stderr}"
     # Sanity: the configure log mentions the macro's probe.
     assert "checking whether" in res.stdout and "dace_fortran" in res.stdout, (
@@ -108,7 +107,7 @@ def test_make_runs_preprocess_and_emits_sources(tmp_path):
     proj = _write_project(tmp_path)
     _autoreconf(proj)
     subprocess.check_call(["./configure"], cwd=str(proj), stdout=subprocess.DEVNULL)
-    res = subprocess.run(["make"], cwd=str(proj), capture_output=True, text=True)
+    res = subprocess.run(["make"], check=False, cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, f"make failed:\nstdout={res.stdout}\nstderr={res.stderr}"
     # default DACE_FORTRAN_BUILD_DIR = $(top_builddir)/dace_fortran_preprocessed; in-tree top_builddir = '.'.
     out = proj / "dace_fortran_preprocessed" / "src" / "kernel.preprocessed.f90"

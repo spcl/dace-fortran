@@ -40,28 +40,28 @@ from dace_fortran.bindings.frozen_signature import (
 )
 
 __all__ = [
+    "DerivedType",
+    "FlattenEntry",
+    "FlattenPlan",
+    # Flatten plan
+    "FlattenRecipe",
+    "FortranLibrary",
     # Frozen signature
     "FrozenArg",
     "FrozenSignature",
-    "SignatureDriftError",
+    "Member",
+    "OriginalArg",
     # Outer interface
     "OriginalInterface",
-    "OriginalArg",
-    "DerivedType",
-    "Member",
-    # Flatten plan
-    "FlattenRecipe",
-    "FlattenEntry",
-    "FlattenPlan",
+    "SignatureDriftError",
     "SyntheticGlobal",
-    "substitute_indices",
-    "strip_index_args",
-    # Emitter
-    "emit_bindings",
-    # bind(c) shim auto-gen (Phase 2.4)
-    "emit_bind_c_shim",
     "UnsupportedShimInterfaceError",
     # Fortran-callable library builder
     "build_fortran_library",
-    "FortranLibrary",
+    # bind(c) shim auto-gen (Phase 2.4)
+    "emit_bind_c_shim",
+    # Emitter
+    "emit_bindings",
+    "strip_index_args",
+    "substitute_indices",
 ]

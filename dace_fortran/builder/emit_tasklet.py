@@ -10,7 +10,8 @@ is the predicate ``emit_assign`` uses to pick between them.
 from __future__ import annotations
 
 import re
-from typing import Container, NamedTuple, Sequence, TYPE_CHECKING
+from collections.abc import Container, Sequence
+from typing import TYPE_CHECKING, NamedTuple
 
 from dace import Memlet
 
@@ -24,12 +25,13 @@ from dace_fortran.builder.access import (
     resolve_object_member_expr,
     resolve_section_alias,
 )
-from dace_fortran.dace_types import MapRanges, connectors
 from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticVar, VarLike
+from dace_fortran.dace_types import MapRanges, connectors
 
 if TYPE_CHECKING:
     from dace.sdfg.nodes import AccessNode
     from dace.sdfg.state import SDFGState
+
     from dace_fortran.builder import SDFGBuilder
 
 # Excludes the imaginary-unit suffix of a complex literal (``1j`` in
@@ -135,10 +137,7 @@ def assign_reads_array(assign_node: NodeLike, arrays: Container[str]) -> bool:
     """True iff any ``accesses`` entry on ``assign_node`` reads an array.
     Promotes a nominally-scalar assign (``s = d(i) + 1``) onto the
     per-occurrence-connector tasklet path so the read gets a real memlet."""
-    for ac in assign_node.accesses:
-        if ac.is_read and ac.array_name in arrays:
-            return True
-    return False
+    return any(ac.is_read and ac.array_name in arrays for ac in assign_node.accesses)
 
 
 def _rewrite_read_connectors(
@@ -240,7 +239,7 @@ def emit_tasklet(
 
     # Connector substitution: scalars -> ``_in_<name>``, Nth array occurrence
     # -> ``_in_<name>_<N>`` (see ``_rewrite_read_connectors``).
-    occ = {nm: 0 for nm in r_arr}
+    occ = dict.fromkeys(r_arr, 0)
     sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
 
     # Connector dicts, not sets: ``add_tasklet`` turns a set into a dict anyway, and doing it here
@@ -574,7 +573,7 @@ def emit_complex_component_assign(
     for ac in accesses:
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)
-    occ = {nm: 0 for nm in r_arr}
+    occ = dict.fromkeys(r_arr, 0)
     sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
     rhs_code = _rewrite_read_connectors(rhs, sorted_tokens, r_scl, occ)
     if "?" in rhs_code:

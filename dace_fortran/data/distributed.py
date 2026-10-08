@@ -9,7 +9,8 @@ the parent communicator from an SDFG symbol (populated by the bindings layer
 via ``MPI_Comm_f2c``).  ``exit_code()`` is inherited unchanged.
 """
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from dace.data.distributed import ProcessGrid
 from dace.properties import Property, make_properties

@@ -9,11 +9,10 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
-from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
 from dace_fortran.bindings.flatten_plan import FlattenPlan
-
+from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
+from tests._util import build_sdfg
 
 _N = 4
 
@@ -127,7 +126,7 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
     y_ref, reads_ref = _invoke(ref_lib, x.copy(order="F"), set_vals, len(read_pairs))
 
     np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="binding output disagrees with reference")
-    for nm, dval, rval in zip(reads, reads_dace, reads_ref):
+    for nm, dval, rval in zip(reads, reads_dace, reads_ref, strict=False):
         np.testing.assert_allclose(
             dval, rval, rtol=1e-12, err_msg=f"module global {nm!r} write-back disagrees with reference"
         )

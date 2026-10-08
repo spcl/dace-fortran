@@ -31,9 +31,10 @@ by construction.  Comment/string safety shared via ``_scan_line``.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from collections.abc import Iterable, Iterator, Sequence
 from enum import Enum
-from typing import Iterable, Iterator, NamedTuple, Optional, Sequence, TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from dace_fortran.external_functions import ExternalFunction
@@ -578,9 +579,8 @@ def _balance_cpp(block: str) -> str:
                 open_idx.pop()
             else:
                 drop.add(i)  # orphan #endif
-        elif _CPP_MID_RE.match(ln):
-            if not open_idx:
-                drop.add(i)  # orphan #else / #elif
+        elif _CPP_MID_RE.match(ln) and not open_idx:
+            drop.add(i)  # orphan #else / #elif
     drop.update(open_idx)  # unmatched #if openers
     if not drop:
         return block
@@ -1234,7 +1234,7 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
 
     out = []
     for i, raw in enumerate(lines):
-        out.append(delete_idx[i] if i in delete_idx else raw)
+        out.append(delete_idx.get(i, raw))
     return "".join(out), enum_maps
 
 
@@ -1242,7 +1242,7 @@ def fparser_merge(
     source: str,
     *,
     search_dirs: Sequence[str | Path] = (),
-    entry: Optional[str] = None,
+    entry: str | None = None,
     external_names: Iterable[str] = (),
     keep_acc_directives: bool = False,
 ) -> str:
@@ -1305,7 +1305,7 @@ def preprocess_fortran_source(
     search_dirs: Sequence[str | Path] = (),
     merge: bool = True,
     merge_engine: MergeEngine = MergeEngine.REGEX,
-    merge_entry: Optional[str] = None,
+    merge_entry: str | None = None,
     external_names: Iterable[str] = (),
     if_intvar: bool = False,
     kind_map: dict | None = None,

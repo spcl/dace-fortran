@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tests._util import flang_binary
 from dace_fortran.builder import SDFGBuilder
+from tests._util import flang_binary
 
 
 def _hlfir(src: str, out: Path) -> Path:
@@ -95,7 +95,7 @@ end subroutine
 """,
         tmp_path / "foo.hlfir",
     )
-    with pytest.raises(RuntimeError, match="no Fortran procedure|not found|dropped"):
+    with pytest.raises(RuntimeError, match=r"no Fortran procedure|not found|dropped"):
         SDFGBuilder.from_files([str(tmp_path / "foo.hlfir")], entry="nonexistent")
 
 

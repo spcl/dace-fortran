@@ -36,7 +36,6 @@ Still pending (xfail / TODO):
 
 from tests._util import build_sdfg
 
-
 # ---------------------------------------------------------------
 # Module-level: scalar struct of struct of scalars
 # ---------------------------------------------------------------

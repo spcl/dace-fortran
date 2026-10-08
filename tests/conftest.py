@@ -3,7 +3,6 @@
 import os
 from pathlib import Path
 
-
 # hwloc's GL/X11 probe (run during MPI_Init, before any mpi4py import) hangs forever on
 # GNOME-on-Wayland: gnome-shell's abstract X11 socket accepts the connection but never
 # completes the handshake. -gl disables only the GL/X11 GPU probe; setdefault keeps user overrides.
@@ -57,7 +56,7 @@ if _worker:
     # the env var itself so both the caller's isolation and the per-worker split survive.
     _base = os.environ.get("DACE_default_build_folder")
     if _base:
-        os.environ["DACE_default_build_folder"] = f"{_base}_{_worker}"
+        os.environ["DACE_DEFAULT_BUILD_FOLDER"] = f"{_base}_{_worker}"
     Config.set("default_build_folder", value=f".dacecache_{_worker}")
 else:
     # Master-only: force the hlfir_bridge .so build/staleness-check here, single-threaded,
@@ -65,9 +64,9 @@ else:
     # CMake build into the shared output path and one loads a partial .so (ImportError).
     import dace_fortran.build_bridge  # noqa: F401
 
-import pytest
+import contextlib
 
-from dace_fortran.external import clear_external_registry
+import pytest
 
 # --- generated-C++ sanity check ------------------------------------------
 # Every SDFG a test compiles gets its generated C++ scanned for the UB-class warnings in
@@ -77,6 +76,7 @@ from dace_fortran.external import clear_external_registry
 # that compiled the offending TU hundreds of times without ever reading a warning.
 from dace.sdfg import SDFG
 
+from dace_fortran.external import clear_external_registry
 from tests.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
 
 compile_without_check = SDFG.compile
@@ -152,7 +152,7 @@ def icon_build():
 
     ``ICON_SRC``/``ICON_BUILD`` override source/build location. A missing submodule fails the test.
     """
-    from tests.icon.full._icon_build import ensure_icon_built, default_build_dir
+    from tests.icon.full._icon_build import default_build_dir, ensure_icon_built
 
     icon_src = Path(os.environ.get("ICON_SRC", str(Path(__file__).resolve().parent / "icon" / "full" / "icon-model")))
     # builds into TMP by default (no repo-tree pollution); ICON_BUILD overrides to a persistent location
@@ -179,10 +179,8 @@ def _clean_stray_mods():
     crashed run's residue) and at session finish.
     """
     for mod in _REPO_ROOT.glob("*.mod"):
-        try:
+        with contextlib.suppress(OSError):
             mod.unlink()
-        except OSError:
-            pass
 
 
 # defensive pre-clean: a prior crashed/os._exit-ed run may have left poison .mod files

@@ -116,7 +116,9 @@ def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
 
     # f2py returns INTENT(OUT) arrays as a tuple; only IN/scalars positional; klon/klev auto-derived.
     out_tuple = ref.compute_saturation_values(kidia, kfdia, ztp1, pap, **consts)
-    outs_ref = dict(zip(("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq"), out_tuple))
+    outs_ref = dict(
+        zip(("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq"), out_tuple, strict=False)
+    )
 
     kw = dict(ztp1=ztp1, pap=pap, **outs_sdfg, **consts)
     kw.update(sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, klev=klev)))

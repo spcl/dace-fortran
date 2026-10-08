@@ -40,8 +40,8 @@ end subroutine elementwise_add
 def test_read_after_write_shares_access_node(tmp_path):
     """RAW within a loop body: exactly one AccessNode for ``tmp`` in the innermost
     state (single-access-node rule); numerical check catches a dropped RAW edge."""
-    from dace.sdfg.state import LoopRegion
     from dace.sdfg import nodes as nd
+    from dace.sdfg.state import LoopRegion
 
     src = """
 subroutine chained(a, out, n)

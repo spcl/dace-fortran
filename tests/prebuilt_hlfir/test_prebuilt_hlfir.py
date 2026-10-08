@@ -10,7 +10,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 from dace_fortran import build_sdfg_from_project
 
 _HERE = Path(__file__).resolve().parent

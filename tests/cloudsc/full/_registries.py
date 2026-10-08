@@ -8,7 +8,7 @@ port.  Unified under one key ``cloudscexp2`` (= ``CLOUDSCOUTER``/``_QPcloudscout
 
 import os
 from numbers import Integral, Number
-from typing import Dict, Union
+from typing import Union
 
 import numpy as np
 
@@ -824,8 +824,7 @@ def _pressure_half_levels(klev: int) -> np.ndarray:
     eta = np.linspace(0.0, 1.0, klev + 1)
     # Blend a cubic (fine resolution aloft) with a linear term so the
     # profile is monotone and smooth across the whole column.
-    paph = p_top + (p_sfc - p_top) * (0.85 * eta**3 + 0.15 * eta)
-    return paph
+    return p_top + (p_sfc - p_top) * (0.85 * eta**3 + 0.15 * eta)
 
 
 def _temperature_profile(klev: int, rng: np.random.Generator) -> np.ndarray:
@@ -846,7 +845,7 @@ def _temperature_profile(klev: int, rng: np.random.Generator) -> np.ndarray:
     return np.clip(prof, 180.0, 320.0)
 
 
-def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.ndarray]]:
+def get_inputs_physical(rng: np.random.Generator) -> dict[str, Union[Number, np.ndarray]]:
     """Physically-plausible input dict for one CLOUDSCOUTER call: constants at their
     canonical ECMWF/dwarf-p-cloudsc values, profiles (PT/PAP/PAPH) from the helpers
     above, everything else sampled in-regime (PQ/PCLV non-negative, PA in [0,1],
@@ -858,7 +857,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
     nblk = parameters["NBLOCKS"]
     nclv = parameters["NCLV"]
 
-    inp: Dict[str, Union[Number, np.ndarray]] = dict()
+    inp: dict[str, Union[Number, np.ndarray]] = dict()
     for p in program_parameters:
         inp[p] = parameters[p]
 
@@ -967,12 +966,11 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
             # Cumulative/local/tmp tendencies: small signed; CLD species is rank-4.
             tshape = (klon, klev, nclv, nblk) if name.endswith("_cld") else (klon, klev, nblk)
             inp[name] = np.asfortranarray(rng.uniform(-1.0e-7, 1.0e-7, tshape))
+        # Any remaining float input: small non-negative fallback.
+        elif shape == (0,):
+            inp[name] = float(rng.uniform(0.0, 1.0))
         else:
-            # Any remaining float input: small non-negative fallback.
-            if shape == (0,):
-                inp[name] = float(rng.uniform(0.0, 1.0))
-            else:
-                inp[name] = np.asfortranarray(rng.uniform(0.0, 1.0e-4, shape))
+            inp[name] = np.asfortranarray(rng.uniform(0.0, 1.0e-4, shape))
 
     # Never hand an exact 0.0 to a continuous float field -- nudge to a tiny
     # same-signed epsilon so no degenerate zero/0-division branch is exercised.
@@ -988,7 +986,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
     return inp
 
 
-def get_outputs(rng: np.random.Generator) -> Dict[str, np.ndarray]:
+def get_outputs(rng: np.random.Generator) -> dict[str, np.ndarray]:
     """Output dict for one CLOUDSCOUTER call: pre-allocated with random data so the
     assertion catches anything the kernel forgets to overwrite."""
     out_data = dict()

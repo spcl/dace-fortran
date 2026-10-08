@@ -14,7 +14,6 @@ and compares to a plain-gfortran reference.
 
 from pathlib import Path
 
-
 # --- READ: out(:) += becxx(1)%k(:, jb), via an inlined callee ---------------
 _SRC_READ = """
 module bec_read_mod
@@ -102,9 +101,9 @@ def _compile_so(out_so, *sources, mod_dir, link_so=None):
 
 def _build_module(src, name, entry, tmp_path):
     """Build the SDFG, emit the Fortran binding, return ``(builder, sdfg, so_path, binding_path)``."""
-    from tests._util import build_sdfg
-    from dace_fortran.bindings import emit_bindings, FlattenPlan
+    from dace_fortran.bindings import FlattenPlan, emit_bindings
     from dace_fortran.bindings.fortran_interface import build_auto_interface
+    from tests._util import build_sdfg
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -468,7 +467,7 @@ def test_allocated_module_global_presence_e2e(tmp_path):
 
     import numpy as np
 
-    builder, _sdfg, so_path, binding = _build_module(
+    _builder, _sdfg, so_path, binding = _build_module(
         _SRC_ALLOC_PRESENT, "sum_if_present", _ENTRY_ALLOC_PRESENT, tmp_path
     )
 
@@ -581,7 +580,9 @@ def test_associated_pointer_module_global_presence_e2e(tmp_path):
 
     import numpy as np
 
-    builder, _sdfg, so_path, binding = _build_module(_SRC_ASSOC_PRESENT, "sum_if_assoc", _ENTRY_ASSOC_PRESENT, tmp_path)
+    _builder, _sdfg, so_path, binding = _build_module(
+        _SRC_ASSOC_PRESENT, "sum_if_assoc", _ENTRY_ASSOC_PRESENT, tmp_path
+    )
 
     text = binding.read_text()
     assert "gptr_allocated = int(merge(1, 0, associated(" in text, (

@@ -6,9 +6,8 @@ single ordinary rebind.
 """
 
 from dace_fortran.inliner.ast_desugaring import optimizations, pruning
-from dace_fortran.inliner.ast_desugaring.specialize_at_source import inline_named_functions, inline_named_subprograms
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
-
+from dace_fortran.inliner.ast_desugaring.specialize_at_source import inline_named_functions, inline_named_subprograms
 from tests._util import build_sdfg
 
 _LADDER_SRC = """

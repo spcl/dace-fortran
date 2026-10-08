@@ -20,7 +20,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 module mo_test_types
   implicit none

@@ -29,7 +29,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 import netCDF4
 import numpy as np
@@ -45,7 +44,7 @@ _TESTS_ICON_FULL = _DACE_FORTRAN / "tests" / "icon" / "full"
 _EXP = "exclaim_ape_R02B04"
 
 
-def _run(cmd: list, cwd: Optional[Path] = None, env: Optional[dict] = None, check: bool = True):
+def _run(cmd: list, cwd: Path | None = None, env: dict | None = None, check: bool = True):
     """Run a command, printing it first."""
     print(f"+ {' '.join(str(c) for c in cmd)}", flush=True)
     subprocess.run(cmd, cwd=cwd, env=env, check=check)
@@ -74,7 +73,7 @@ def _build_icon(
     label: str,
     icon_src: Path,
     build_dir: Path,
-    dace_libs_dir: Optional[Path] = None,
+    dace_libs_dir: Path | None = None,
     patched: bool = False,
     dace_only: bool = True,
     fresh: bool = False,
@@ -131,22 +130,22 @@ def _make_experiment(icon_src: Path, build_dir: Path, exp_name: str, grid_dir: P
     # Point the experiment at the local grid cache.  ``atmo_dyn_grid`` is
     # expressed in terms of ``input_folder`` in the EXCLAIM template, so updating
     # ``input_folder`` is sufficient.
-    text = re.sub(r"^input_folder=.*", f'input_folder="{grid_dir}"', text, flags=re.M)
+    text = re.sub(r"^input_folder=.*", f'input_folder="{grid_dir}"', text, flags=re.MULTILINE)
     # Short run + frequent output so the test finishes quickly and has dumps.
-    text = re.sub(r"^end_date=.*", 'end_date="2000-01-01T00:00:10Z"', text, flags=re.M)
-    text = re.sub(r"^start_output=.*", 'start_output="2000-01-01T00:00:02Z"', text, flags=re.M)
-    text = re.sub(r"^atm_file_interval=.*", 'atm_file_interval="PT2S"', text, flags=re.M)
-    text = re.sub(r"^atm_output_interval=.*", 'atm_output_interval="PT2S"', text, flags=re.M)
+    text = re.sub(r"^end_date=.*", 'end_date="2000-01-01T00:00:10Z"', text, flags=re.MULTILINE)
+    text = re.sub(r"^start_output=.*", 'start_output="2000-01-01T00:00:02Z"', text, flags=re.MULTILINE)
+    text = re.sub(r"^atm_file_interval=.*", 'atm_file_interval="PT2S"', text, flags=re.MULTILINE)
+    text = re.sub(r"^atm_output_interval=.*", 'atm_output_interval="PT2S"', text, flags=re.MULTILINE)
     # pinit_seed guard: force 0 to avoid the unallocated soil-temp perturbation segfault.
-    text = re.sub(r"pinit_seed\s*=\s*[-]?[0-9]+", "pinit_seed = 0", text, flags=re.M)
-    text = re.sub(r"init_seed\s*=\s*[-]?[0-9]+", "init_seed = 0", text, flags=re.M)
-    text = re.sub(r"seed\s*=\s*[-]?[0-9]+", "seed = 0", text, flags=re.M)
+    text = re.sub(r"pinit_seed\s*=\s*[-]?[0-9]+", "pinit_seed = 0", text, flags=re.MULTILINE)
+    text = re.sub(r"init_seed\s*=\s*[-]?[0-9]+", "init_seed = 0", text, flags=re.MULTILINE)
+    text = re.sub(r"seed\s*=\s*[-]?[0-9]+", "seed = 0", text, flags=re.MULTILINE)
     # Pure compute run so the halo exchange is exercised at low rank count.
-    text = re.sub(r"num_io_procs\s*=\s*[0-9]+", "num_io_procs = 0", text, flags=re.M)
+    text = re.sub(r"num_io_procs\s*=\s*[0-9]+", "num_io_procs = 0", text, flags=re.MULTILINE)
     # The default EXCLAIM APE experiment selects ecRad (inwp_radiation=4), but the
     # CPU-only ICON build in this lane does not include ECRAD.  Disable radiation so
     # the run reaches the dycore without aborting in mo_nwp_phy_init.
-    text = re.sub(r"inwp_radiation\s*=\s*[0-9]+", "inwp_radiation = 0", text, flags=re.M)
+    text = re.sub(r"inwp_radiation\s*=\s*[0-9]+", "inwp_radiation = 0", text, flags=re.MULTILINE)
     # EXCLAIM aquaplanet template does not contain pinit_seed / num_io_procs; append
     # them to the experiment section so the namelist still sees them.
     if "pinit_seed" not in text:
@@ -198,7 +197,9 @@ def _run_icon(label: str, build_dir: Path, icon_src: Path, exp_name: str, nranks
     # The generated script names ${basedir}/bin/icon; point it at the labelled
     # binary so we never overwrite a running executable (text file busy).
     run_script.write_text(
-        re.sub(r'^export MODEL=.*bin/icon".*$', f'export MODEL="{icon_bin}"', run_script.read_text(), flags=re.M)
+        re.sub(
+            r'^export MODEL=.*bin/icon".*$', f'export MODEL="{icon_bin}"', run_script.read_text(), flags=re.MULTILINE
+        )
     )
     log = build_dir / f"icon_run.{label}.log"
 

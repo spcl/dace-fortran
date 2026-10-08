@@ -23,7 +23,7 @@ from dace_fortran.bindings.acc_transfers import (
     render_host_data_open,
 )
 from dace_fortran.bindings.block_builders import splice_acc_staging
-from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenArgKind, FrozenSignature, HOST_STORAGE, refreeze
+from dace_fortran.bindings.frozen_signature import HOST_STORAGE, FrozenArg, FrozenArgKind, FrozenSignature, refreeze
 
 _ENTRY = "compute"
 

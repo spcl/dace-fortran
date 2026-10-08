@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import dace_fortran
-from dace_fortran.bindings import emit_bindings, FlattenPlan
+from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
 HERE = Path(__file__).resolve().parent

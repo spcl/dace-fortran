@@ -30,7 +30,7 @@ import pytest
 
 from tests._util import build_on_root
 from tests.icon._halo_modes import _MPI_NOOP_IMPL, _MPI_STUB
-from tests.icon.ocean._ocean_e2e import build_dut_and_ref, synth_call_inputs, _invoke
+from tests.icon.ocean._ocean_e2e import _invoke, build_dut_and_ref, synth_call_inputs
 
 pytestmark = [
     pytest.mark.long,
@@ -104,7 +104,7 @@ def _sync_body(field: str, rank: int) -> str:
     halo = "(:, 2)" if rank == 2 else "(:, :, 2)"
     count = "sync_n1" if rank == 2 else "sync_n1 * sync_n2"
     blk = "2" if rank == 2 else "3"
-    n2 = "" if rank == 2 else "\n    sync_n2 = SIZE(%s, 2)" % field
+    n2 = "" if rank == 2 else f"\n    sync_n2 = SIZE({field}, 2)"
     return f"""
     INTEGER :: sync_rank, sync_np, sync_neigh, sync_ierr, sync_cnt, sync_n1, sync_n2, sync_nb
     ! Real status buffer: SYNC_COMM=0 / SYNC_DP=17 match OpenMPI's MPI_COMM_WORLD / MPI_DOUBLE_PRECISION

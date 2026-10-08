@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import NamedTuple, Sequence, TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, NamedTuple
 
 import dace
 from dace import InterstateEdge
-from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
+from dace.sdfg.state import ConditionalBlock, ControlFlowRegion, LoopRegion
 
 from dace_fortran.builder.access import (
     acc,
@@ -38,6 +39,7 @@ from dace_fortran.builder.records import AccessLike, NodeLike, SyntheticNode, Sy
 if TYPE_CHECKING:
     from dace import SDFG
     from dace.sdfg.state import SDFGState
+
     from dace_fortran.builder import SDFGBuilder
 
 _DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
@@ -159,7 +161,7 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
     return out
 
 
-def emit_assign(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_assign(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Scalar or symbol assignment.
 
     Routes by target kind:
@@ -255,8 +257,8 @@ def emit_assign(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFl
         # Here ``has_structured`` / IF-body emission processes children
         # one at a time and would otherwise share the current state, so
         # the check runs against ``ctx.cur``'s already-built nodes.
+        from dace.sdfg.nodes import AccessNode, Tasklet
         from dace.sdfg.state import SDFGState
-        from dace.sdfg.nodes import Tasklet, AccessNode
 
         if isinstance(ctx.cur, SDFGState):
             prior_writes = set()
@@ -309,7 +311,7 @@ def emit_assign(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFl
     ctx.pending.append((n.target, n.expr))
 
 
-def emit_symbol_init(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_symbol_init(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Stage a position-array -> SDFG-symbol read at SDFG entry.
 
     The bridge mints one of these for every ``arr(consts)`` it sees used
@@ -461,7 +463,7 @@ def cond_reuse_key(builder: SDFGBuilder, cond: str) -> str | None:
     reassigned per statement, and reusing across one of those rotates the read
     exactly like the bug this file's hoisting rules already guard against.
     """
-    names = {tok for tok in re.findall(r"\b([A-Za-z_]\w*)\b", cond)}
+    names = set(re.findall(r"\b([A-Za-z_]\w*)\b", cond))
     # Drop the literals ``buildBoolExpr`` emits; everything else must resolve.
     names -= {"True", "False", "true", "false", "and", "or", "not"}
     if not names:
@@ -668,7 +670,7 @@ def _scalar_reassign_in_state(state: SDFGState, a: NodeLike, builder: SDFGBuilde
     tgt = a.target
     if tgt is None or tgt not in builder.scalars:
         return False
-    from dace.sdfg.nodes import Tasklet, AccessNode
+    from dace.sdfg.nodes import AccessNode, Tasklet
 
     for nd in state.nodes():
         if isinstance(nd, AccessNode) and nd.data == tgt:
@@ -681,7 +683,7 @@ def _scalar_reassign_in_state(state: SDFGState, a: NodeLike, builder: SDFGBuilde
 
 
 def emit_loop(
-    builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion, iter_map: dict[str, str] | None = None
+    builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion, iter_map: dict[str, str] | None = None
 ) -> None:
     """Fortran DO loop -> LoopRegion with exact Fortran bounds."""
     # Flush any pending scalar assigns from earlier siblings INTO the
@@ -1068,7 +1070,7 @@ def _stage_cond_scalar(
     return StagedCondition(nxt, sym)
 
 
-def emit_while(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_while(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Fortran ``DO WHILE``  --  lifted by ``lift-cf-to-scf`` into scf.while
     and extracted as ``kind="while"``.  Emit a DaCe LoopRegion whose
     condition is ``True`` (the bridge's faithful walker folds any
@@ -1208,7 +1210,7 @@ def _prepare_cond_expr(
     return StagedCondition(pre, cond)
 
 
-def emit_cond(builder: SDFGBuilder, ctx: "Ctx", n: NodeLike, region: ControlFlowRegion) -> None:
+def emit_cond(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.

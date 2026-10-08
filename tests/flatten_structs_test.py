@@ -8,7 +8,6 @@ import numpy as np
 
 from tests._util import build_sdfg, run_passes_dump
 
-
 _HERE = Path(__file__).resolve().parent
 _SRC = (_HERE / "complex_struct.f90").read_text()
 _VELOCITY_SRC = (_HERE / "velocity_struct.f90").read_text()

@@ -22,7 +22,6 @@ import pytest
 
 from tests._util import build_sdfg
 
-
 # ``use mpi``-style runtime handles: non-``parameter`` module integers, so the
 # bridge traces the op argument to its NAME (``mpi_prod`` / ``mpi_maxloc`` / ...)
 # instead of a folded constant.  Real ``use mpi`` declares the handles the same

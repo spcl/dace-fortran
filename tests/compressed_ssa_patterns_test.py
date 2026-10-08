@@ -8,8 +8,8 @@ f2py reference compiled from the same source (``feedback_e2e_numerical``).
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py, sdfg_call_args
+from tests._util import build_sdfg
 
 
 def _build_and_run(tmp_path, *, src: str, name: str, entry: str, int_args=None):

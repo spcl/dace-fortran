@@ -4,9 +4,8 @@
 
 import os
 
-import pytest
-
 import dace
+import pytest
 
 from tests._util import BITEXACT_CPU_ARGS
 

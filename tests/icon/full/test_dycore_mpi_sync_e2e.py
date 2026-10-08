@@ -23,10 +23,10 @@ import dace
 import numpy as np
 import pytest
 
-from tests._util import build_on_root, build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
+from tests._util import build_on_root, build_sdfg
 
 pytestmark = pytest.mark.mpi
 

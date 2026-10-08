@@ -23,7 +23,6 @@ import pytest
 
 from tests.icon.full._solve_nh_min_types import MIN_STATE_TYPES_F90
 
-
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_solve_nh_diff.f90"
 
@@ -217,6 +216,7 @@ def diff_exe(tmp_path_factory) -> Path:
             "-o",
             str(exe),
         ],
+        check=False,
         cwd=str(build),
         capture_output=True,
         text=True,
@@ -228,7 +228,7 @@ def diff_exe(tmp_path_factory) -> Path:
 def test_solve_nh_diff_deepcopy_and_compare(diff_exe: Path):
     """Clone independence (both directions), scalar preservation, exact
     bit-level diff counts across prog / diag / prep_adv."""
-    run = subprocess.run([str(diff_exe)], cwd=str(diff_exe.parent), capture_output=True, text=True)
+    run = subprocess.run([str(diff_exe)], check=False, cwd=str(diff_exe.parent), capture_output=True, text=True)
     assert run.returncode == 0 and "PASS" in run.stdout, (
         f"differential helper driver failed:\nstdout={run.stdout}\nstderr={run.stderr}"
     )
@@ -238,6 +238,7 @@ def test_solve_nh_diff_frees_cleanly(diff_exe: Path):
     """free_state_clone/free_prepadv_clone leak-free under valgrind (definite leaks only -- gfortran's I/O buffers stay reachable)."""
     run = subprocess.run(
         ["valgrind", "--error-exitcode=42", "--leak-check=full", "--errors-for-leak-kinds=definite", str(diff_exe)],
+        check=False,
         cwd=str(diff_exe.parent),
         capture_output=True,
         text=True,

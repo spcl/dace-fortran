@@ -10,17 +10,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from dace import InterstateEdge, SDFG
+from dace import SDFG, InterstateEdge
 
 if TYPE_CHECKING:
     from dace.sdfg.state import ControlFlowRegion, SDFGState
+
     from dace_fortran.builder import SDFGBuilder
 
 
 class Ctx:
     """Tracks the current state and pending scalar assignments."""
 
-    __slots__ = ("sdfg", "builder", "cur", "pending", "iter_map", "mpi_req_posts", "cond_cache")
+    __slots__ = ("builder", "cond_cache", "cur", "iter_map", "mpi_req_posts", "pending", "sdfg")
 
     sdfg: SDFG
     builder: Any

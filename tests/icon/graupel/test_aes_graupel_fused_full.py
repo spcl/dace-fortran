@@ -20,6 +20,7 @@ from ._graupel_harness import (
     DEP_SOURCES,
     ENTRY,
     FUSED_SOURCE,
+    ORIGINAL_SOURCE,
     SCENARIOS,
     Config,
     assert_families_fire,
@@ -31,7 +32,6 @@ from ._graupel_harness import (
     run_reference,
     run_sdfg,
     zero_outputs,
-    ORIGINAL_SOURCE,
 )
 
 pytestmark = pytest.mark.long

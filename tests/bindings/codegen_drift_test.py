@@ -10,13 +10,13 @@ synthetic kernel, but never with SignatureDriftError.
 import dace
 import pytest
 
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings import (
     FrozenArg,
     FrozenSignature,
     SignatureDriftError,
     build_fortran_library,
 )
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 
 
 def _demo_sdfg() -> dace.SDFG:

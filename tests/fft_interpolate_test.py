@@ -7,10 +7,10 @@ node and verifies the output matches a numpy reference produced by the
 same pipeline (FFT in numpy, zero-pad / truncate the spectrum, IFFT).
 """
 
+import dace
 import numpy as np
 import pytest
 
-import dace
 from dace_fortran.libraries.fft.nodes import FFTInterpolate
 
 
@@ -105,7 +105,7 @@ def _numpy_reference_nd(x, out_shape, dtype_kind):
     for combo in itertools.product(("low", "high"), repeat=rank):
         in_slc, out_slc = [], []
         skip = False
-        for part, (lo, hi), nin_d, nout_d in zip(combo, cuts, in_shape, out_shape):
+        for part, (lo, hi), nin_d, nout_d in zip(combo, cuts, in_shape, out_shape, strict=False):
             if part == "low":
                 if lo == 0:
                     skip = True

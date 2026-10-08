@@ -17,7 +17,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Parent is a POINTER member so contiguity is unknown at the call site and flang guards it with
 # copy_in/copy_out; a plain contiguous local would be passed by reference with no copy at all.
 _SRC_TRAILING = """

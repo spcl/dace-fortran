@@ -39,8 +39,7 @@ def _has_view(sdfg):
 def _all_conditions(sdfg):
     out = []
     for edge in sdfg.all_interstate_edges():
-        for _, value in (edge.data.assignments or {}).items():
-            out.append(value)
+        out.extend((edge.data.assignments or {}).values())
     return out
 
 

@@ -37,15 +37,15 @@ def _guard_block(guard, sym, shape):
 
 def test_buffer_guarded_block_moves_late_intact():
     # Guard AND true-branch both read the flat buffer 'hbuf' -> the whole block is late.
-    sym_lines = (
-        ["    a = int(othermod, c_int)"]
-        + _guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)")
-        + ["    c = int(modval, c_int)"]
-    )
+    sym_lines = [
+        "    a = int(othermod, c_int)",
+        *_guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)"),
+        "    c = int(modval, c_int)",
+    ]
     early, late = partition_symbol_blocks(sym_lines, {"hbuf"})
     assert _balanced(early) and _balanced(late), (early, late)
     # Whole guard block lands in late (no partial block in either half).
-    assert _guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)") == [ln for ln in late]
+    assert _guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)") == list(late)
     assert early == ["    a = int(othermod, c_int)", "    c = int(modval, c_int)"]
 
 
@@ -59,11 +59,11 @@ def test_non_buffer_guarded_block_stays_early_intact():
 
 
 def test_multiple_interleaved_buffer_guard_blocks():
-    sym_lines = (
-        _guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)")
-        + ["    n = int(nproma, c_int)"]
-        + _guard_block("associated(vnbuf)", "vn_d0", "size(vnbuf, dim=1)")
-    )
+    sym_lines = [
+        *_guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)"),
+        "    n = int(nproma, c_int)",
+        *_guard_block("associated(vnbuf)", "vn_d0", "size(vnbuf, dim=1)"),
+    ]
     early, late = partition_symbol_blocks(sym_lines, {"hbuf", "vnbuf"})
     assert _balanced(early) and _balanced(late)
     assert early == ["    n = int(nproma, c_int)"]

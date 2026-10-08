@@ -8,14 +8,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
-
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
+from tests._util import build_sdfg, gfortran_compile_so
 
 
 def _build_sdfg_binding_lib(tmp_path, *, kernel_src, entry, sdfg_name, iface, sdfg_driver_src, drv_name, types_src=""):

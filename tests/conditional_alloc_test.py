@@ -24,7 +24,7 @@ def _run(tmp_path, src, cases, argnames):
     for args in cases:
         s = np.zeros(10, dtype=np.float64)
         r = np.zeros(10, dtype=np.float64)
-        kw = {k: np.int32(v) for k, v in zip(argnames, args)}
+        kw = {k: np.int32(v) for k, v in zip(argnames, args, strict=False)}
         sdfg(out=s, **kw)
         # probe lives in probe_mod, so f2py exposes it under the module's submodule namespace.
         mod.probe_mod.probe(*args, r)

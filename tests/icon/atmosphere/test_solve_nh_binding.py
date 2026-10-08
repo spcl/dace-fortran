@@ -17,10 +17,9 @@ from pathlib import Path
 
 import pytest
 
+from dace_fortran.bindings import build_fortran_library
 from tests._util import build_sdfg
 from tests.icon._halo_modes import _MPI_STUB
-
-from dace_fortran.bindings import build_fortran_library
 
 pytestmark = pytest.mark.long
 

@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 import pytest
 
@@ -26,7 +25,7 @@ def _looks_like_llvm_flang(path: str) -> bool:
     return "flang version" in out
 
 
-def _find_flang() -> Optional[Path]:
+def _find_flang() -> Path | None:
     """Locate an LLVM-flang binary: ``$FC`` if set and self-identifying as flang, else the first ``_FLANG_NAMES`` hit on PATH."""
     fc = os.environ.get("FC")
     if fc:
@@ -40,7 +39,7 @@ def _find_flang() -> Optional[Path]:
     return None
 
 
-def _find_gfortran() -> Optional[Path]:
+def _find_gfortran() -> Path | None:
     p = shutil.which("gfortran")
     return Path(p) if p else None
 
@@ -59,7 +58,7 @@ def discover_fortran_compilers() -> dict:
     return out
 
 
-def _make_params() -> List:
+def _make_params() -> list:
     """Build the ``pytest.param(...)`` list for the discovered set."""
     found = discover_fortran_compilers()
     if not found:
@@ -72,14 +71,14 @@ def _make_params() -> List:
 FORTRAN_COMPILERS = _make_params()
 
 
-def fortran_compiler_flags(fc_name: str) -> List[str]:
+def fortran_compiler_flags(fc_name: str) -> list[str]:
     """Per-compiler base flags for wrapper-syntax checks: gfortran needs -ffree-line-length-none (default 132-col limit) for long generated lines; flang-new/nvfortran need nothing (no limit, and flang rejects the gfortran flag)."""
     if fc_name == "gfortran":
         return ["-ffree-line-length-none"]
     return []
 
 
-def syntax_check_argv(fc_name: str, scratch_dir: Path) -> List[str]:
+def syntax_check_argv(fc_name: str, scratch_dir: Path) -> list[str]:
     """Per-compiler argv tail for a parse+semantic-check pass: gfortran/flang-new use -fsyntax-only; nvfortran has no equivalent, falls back to bare -c (no -o -- it refuses -c -o single.o with multiple sources; caller's cwd=scratch_dir keeps per-source .o files xdist-safe)."""
     del scratch_dir  # reserved for future single-output compilers
     if fc_name == "nvfortran":
@@ -101,7 +100,7 @@ _FLANG_RT_DIRS = (
 )
 
 
-def find_flang_runtime_dir() -> Optional[str]:
+def find_flang_runtime_dir() -> str | None:
     """First directory with libflang_rt.runtime.a (flang-21's -lflang_rt.runtime archive), or None.  Tests linking with flang-new-21 use this to skip cleanly or inject LIBRARY_PATH."""
     for d in _FLANG_RT_DIRS:
         if (Path(d) / "libflang_rt.runtime.a").is_file():

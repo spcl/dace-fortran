@@ -12,7 +12,8 @@ classification.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, cast
 
 import dace
 from dace import SDFG
@@ -22,6 +23,7 @@ from dace_fortran.builder.records import NodeLike, SyntheticVar, VarLike
 
 if TYPE_CHECKING:
     from dace.sdfg.state import ControlFlowRegion
+
     from dace_fortran.builder import SDFGBuilder
     from dace_fortran.builder.context import Ctx
 
@@ -374,8 +376,7 @@ def scan_object_aliases(builder: SDFGBuilder) -> None:
     source_aliases = _pointer_aliases_from_source(builder, builder.fortran_source)
     inferred_aliases = _infer_component_aliases(builder)
     all_aliases: dict[str, str] = {**inferred_aliases, **source_aliases}
-    for prefix, real_prefix in all_aliases.items():
-        aliases[prefix] = real_prefix
+    aliases.update(all_aliases)
 
     # Stash the recovered alias tables on ``builder`` so emit-time member
     # resolution (``access.resolve_object_member`` and the expression rewrite
@@ -647,7 +648,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         # target rather than a genuine concrete-shape array copied whole.
         elif (
             v.fortran_name in ptr_rebind_src
-            and all(s == "?" or s == f"{v.fortran_name}_d{i}" for i, s in enumerate(syms))
+            and all(s in ("?", f"{v.fortran_name}_d{i}") for i, s in enumerate(syms))
             and len(syms) == len(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)
         ):
             syms = list(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)
@@ -672,7 +673,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         for i, ext in enumerate(syms):
             syn = f"{v.fortran_name}_d{i}"
             # A section dummy's extent is the section's, often a literal (``f_in(:, 1:1)``) or a closed form.
-            if ext == syn or ext == "?" or (not ext.isidentifier() and v.role not in ("section_alias", "view_alias")):
+            if ext in (syn, "?") or (not ext.isidentifier() and v.role not in ("section_alias", "view_alias")):
                 continue
             builder.extent_aliases[syn] = resolve_object_member_expr(builder, str(ext))
 
@@ -1168,7 +1169,7 @@ def auto_declare_synth(builder: SDFGBuilder, name: str, ctx: Ctx) -> None:
     # ``__brk_<N>`` is the pre-body snapshot of a PURE-SCALAR / counter-only
     # break continuation (no array reads) -- a plain symbol assignment is
     # exact, so it is a SYMBOL too.
-    is_sym = name.startswith("__brk_") or name.startswith("__al_")
+    is_sym = name.startswith(("__brk_", "__al_"))
     # ``__brkc_<N>`` is the array-dependent break continuation (see
     # dispatch.cpp): a tasklet writes the boolean into it and the break
     # guard reads it by its BARE name.  It is a SCALAR transient (verified

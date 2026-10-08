@@ -1,12 +1,10 @@
 """Repro for an IF-block elision bug (bisected from NPB LU's ``ssor``): inside a do-loop, an
 ``if (<cond>) then ... end if`` followed by ``if (<other-cond>) return`` silently drops the IF body's writes."""
 
+import dace.data
 import numpy as np
 
 from tests._util import build_sdfg
-
-import dace.data
-
 
 _SRC = """\
 module m

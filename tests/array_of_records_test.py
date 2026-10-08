@@ -9,7 +9,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # L1: static AoR, scalar member
 
 

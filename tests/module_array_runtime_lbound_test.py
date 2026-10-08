@@ -29,7 +29,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Minimal QE eigts shape: deferred-shape module allocatable, caller allocates
 # with lbound -nmax, kernel reads through an indirect (Miller-style) index.
 _KERNEL = """

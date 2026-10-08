@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 
+from dace_fortran.pipelines import accepted_call_args, verify_numerics
 from tests._util import build_sdfg
 from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
-from dace_fortran.pipelines import accepted_call_args, verify_numerics
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
 _ENTRY = "cloudscouter"

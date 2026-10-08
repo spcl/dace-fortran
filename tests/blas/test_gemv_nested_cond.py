@@ -15,7 +15,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 subroutine probe_gemv_cond(A, x, y, alpha, n, flag)
   implicit none

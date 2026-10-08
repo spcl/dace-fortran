@@ -29,11 +29,13 @@ treats every entry uniformly.
 """
 
 from __future__ import annotations
+
 import re
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Collection, Dict, Mapping, Iterable, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import dace
 import dace.library
@@ -42,6 +44,7 @@ import dace.sdfg.nodes
 from dace import SDFGState
 from dace.sdfg.nodes import LibraryNode
 from dace.transformation.transformation import ExpandTransformation
+
 from dace_fortran.dace_types import library_node
 
 if TYPE_CHECKING:
@@ -185,7 +188,7 @@ class Arg:
     kind: ArgKind
     dtype: str = ""  # ignored when kind is COMM or AOS
     intent: Intent = Intent.INOUT
-    c_abi: Optional[CAbi] = None
+    c_abi: CAbi | None = None
 
     def resolved_c_abi(self) -> CAbi:
         """The :ivar:`c_abi` choice resolved to its concrete value
@@ -255,8 +258,8 @@ class ExternalSignature:
     """
 
     c_name: str
-    args: Tuple[Arg, ...] = field(default_factory=tuple)
-    libraries: Tuple[str, ...] = field(default_factory=tuple)
+    args: tuple[Arg, ...] = field(default_factory=tuple)
+    libraries: tuple[str, ...] = field(default_factory=tuple)
     stub: bool = False
     # Fortran module globals to forward into the callee's library
     # before each call.  Each entry is a :class:`ModuleSymbolForward`:
@@ -282,7 +285,7 @@ class ExternalSignature:
     # outer's caller wrote.  See the velocity e2e ASan ODR-violation
     # diagnostic for the per-library Fortran-module-globals issue
     # this contract addresses.
-    module_symbol_forward: Tuple[ModuleSymbolForward, ...] = field(default_factory=tuple)
+    module_symbol_forward: tuple[ModuleSymbolForward, ...] = field(default_factory=tuple)
     # When true, ``emit_call`` prepends one ``int`` extent per
     # dynamic-shape dim ahead of every dynamic-shape leaf -- the C
     # ABI :func:`dace_fortran.bindings.emit_bind_c_shim` exports
@@ -318,14 +321,14 @@ class ExternalSignature:
 class _RegistryState:
     """Process-wide external registry: the signatures plus the linker config they mutated."""
 
-    __slots__ = ("signatures", "orig_linker_args")
+    __slots__ = ("orig_linker_args", "signatures")
 
-    signatures: Dict[str, ExternalSignature]
+    signatures: dict[str, ExternalSignature]
     #: Snapshot of ``compiler.linker.args`` before the first registration
     #: that contributes libraries -- restored by
     #: :func:`clear_external_registry` so the global config mutation does
     #: not leak past the registry's lifetime.
-    orig_linker_args: Optional[str]
+    orig_linker_args: str | None
 
     def __init__(self) -> None:
         self.signatures = {}
@@ -335,7 +338,7 @@ class _RegistryState:
 _STATE = _RegistryState()
 
 
-def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
+def _link_flags(libraries: tuple[str, ...]) -> list[str]:
     """Build the shared-linker flags for ``libraries``.
 
     For each registered ``.so`` the absolute path is passed verbatim
@@ -366,7 +369,7 @@ def _apply_linker_config() -> None:
     if orig_args is None:
         orig_args = str(dace.Config.get("compiler", "linker", "args") or "")
         _STATE.orig_linker_args = orig_args
-    flags: List[str] = []
+    flags: list[str] = []
     for sig in _STATE.signatures.values():
         flags += _link_flags(sig.libraries)
     merged = (orig_args + " " + " ".join(dict.fromkeys(flags))).strip()
@@ -394,12 +397,12 @@ def register_external(name: str, signature: ExternalSignature) -> None:
 def keep_external(
     name: str,
     *,
-    c_name: Optional[str] = None,
-    args: Tuple[Arg, ...] = (),
-    libraries: Tuple[str, ...] = (),
+    c_name: str | None = None,
+    args: tuple[Arg, ...] = (),
+    libraries: tuple[str, ...] = (),
     stub: bool = False,
     dynamic_extents_abi: bool = False,
-    module_symbol_forward: Tuple[ModuleSymbolForward, ...] = (),
+    module_symbol_forward: tuple[ModuleSymbolForward, ...] = (),
     callee_ptr_scalar_members: frozenset = frozenset(),
 ) -> None:
     """Mark ``name`` to be left external -- the bridge emits an
@@ -465,7 +468,7 @@ def keep_external(
 
 
 def apply_external_functions(
-    external_functions: Iterable["ExternalFunction"] = (), do_not_emit: Iterable[str] = ()
+    external_functions: Iterable[ExternalFunction] = (), do_not_emit: Iterable[str] = ()
 ) -> None:
     """Register the bridge half of the unified external-function policy.
 
@@ -506,7 +509,7 @@ def apply_external_functions(
         keep_external(name, stub=True)
 
 
-def lookup_external(name: str) -> Optional[ExternalSignature]:
+def lookup_external(name: str) -> ExternalSignature | None:
     """Return the registered signature for ``name``, or ``None``."""
     return _STATE.signatures.get(name)
 
@@ -516,7 +519,7 @@ def require_external(name: str) -> ExternalSignature:
     return _STATE.signatures[name]
 
 
-def registered_names() -> List[str]:
+def registered_names() -> list[str]:
     """Names registered as external (``keep_external`` / ``register_external``).
 
     The builder passes these to ``HLFIRModule.externalize_symbols`` so a
@@ -529,7 +532,7 @@ def registered_names() -> List[str]:
     return list(_STATE.signatures)
 
 
-def inline_external(sdfg: "dace.SDFG", name: str, callee_sdfg: "dace.SDFG") -> int:
+def inline_external(sdfg: dace.SDFG, name: str, callee_sdfg: dace.SDFG) -> int:
     """Swap every ``ExternalCall`` library node for ``name`` in ``sdfg``
     with a :class:`dace.sdfg.nodes.NestedSDFG` wrapping ``callee_sdfg``.
 
@@ -581,8 +584,7 @@ def inline_external(sdfg: "dace.SDFG", name: str, callee_sdfg: "dace.SDFG") -> i
         for e in out_edges:
             # ``_a{i}_o`` -> strip ``_a`` prefix and the trailing ``_o``.
             tail = e.src_conn[2:]
-            if tail.endswith("_o"):
-                tail = tail[:-2]
+            tail = tail.removesuffix("_o")
             i = int(tail)
             out_map.setdefault(callee_args[i], e)
         # Symbol mapping: every callee free symbol that's also live in
@@ -637,7 +639,7 @@ class ExpandExternalCallPure(ExpandTransformation):
         assert isinstance(node, ExternalCall)
         if node.c_decl:
             parent_sdfg.append_global_code(node.c_decl)
-        tasklet = dace.sdfg.nodes.Tasklet(
+        return dace.sdfg.nodes.Tasklet(
             node.label,
             dict(node.in_connectors),
             dict(node.out_connectors),
@@ -645,7 +647,6 @@ class ExpandExternalCallPure(ExpandTransformation):
             language=dace.dtypes.Language.CPP,
             side_effects=True,
         )
-        return tasklet
 
 
 @library_node

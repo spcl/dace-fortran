@@ -16,7 +16,6 @@ is only needed for a dummy shape the snapshot can't name (e.g.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
 
 from dace_fortran.bindings.frozen_signature import ModuleOrigin
 
@@ -62,11 +61,11 @@ class Member:
     rank: int
     # Extents as declared; assumed-shape falls back to '?' (wrapper uses
     # size(st%u, dim=d) at call time).
-    shape: Tuple[str, ...] = field(default_factory=tuple)
+    shape: tuple[str, ...] = field(default_factory=tuple)
     # Nested-derived-type member: names the type so bind_c_shim can look
     # up its layout in OriginalInterface.struct_types and recurse.  Empty
     # for scalar/box-of-array/inline-flat members.
-    struct_name: Optional[str] = None
+    struct_name: str | None = None
     # 'allocatable' | 'pointer' | ''.  Unallocated/disassociated bounds are
     # undefined, so every marshal of this member must be presence-guarded --
     # gfortran's internal_pack at an unguarded site reads the garbage
@@ -80,8 +79,8 @@ class DerivedType:
     """Layout of one Fortran derived type referenced by the entry."""
 
     name: str  # 't_state'
-    module: Optional[str]  # 'mo_state' if defined in a module
-    members: Tuple[Member, ...] = field(default_factory=tuple)
+    module: str | None  # 'mo_state' if defined in a module
+    members: tuple[Member, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,13 +90,13 @@ class OriginalArg:
     name: str  # 'st'  --  Fortran-source name
     fortran_type: str  # 'real(c_double)' / 'type(t_state)' / 'logical' / ...
     rank: int
-    shape: Tuple[str, ...] = field(default_factory=tuple)
+    shape: tuple[str, ...] = field(default_factory=tuple)
     intent: str = ""  # 'in' | 'out' | 'inout' | ''
     # OPTIONAL dummy: wrapper forwards present(<name>) into the kernel's
     # <name>_present symbol, rather than defaulting it absent.
     optional: bool = False
     # fortran_type == 'type(<name>)' -> points at OriginalInterface.struct_types.
-    struct_type: Optional[str] = None
+    struct_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,15 +105,15 @@ class OriginalInterface:
     derived type referenced by its dummies (transitively)."""
 
     entry: str  # 'compute_tendencies'
-    args: Tuple[OriginalArg, ...]
-    struct_types: Dict[str, DerivedType] = field(default_factory=dict)
+    args: tuple[OriginalArg, ...]
+    struct_types: dict[str, DerivedType] = field(default_factory=dict)
     # Modules to `use <mod>, only: <syms>` so derived types resolve at compile time.
-    used_modules: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    used_modules: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Free SDFG symbols the kernel reads from Fortran module data (e.g.
     # ICON's mo_parallel_config::nproma) rather than a dummy arg.  Maps
     # sym -> (module, member); emitter imports as <sym>__mod => <member>
     # and assigns <sym> = int(<sym>__mod, c_int).  Empty = no-op for flat kernels.
-    module_symbol_sources: Dict[str, ModuleOrigin] = field(default_factory=dict)
+    module_symbol_sources: dict[str, ModuleOrigin] = field(default_factory=dict)
 
 
 def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
@@ -168,13 +167,9 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
         members = []
         for m in st["members"]:
             nested_name = m.get("struct_name") or ""
-            if nested_name:
-                # Nested derived-type member: declared type(<nested>),
-                # consistent with a top-level derived-type arg; bind_c_shim
-                # follows struct_name to recurse.
-                fortran_type = f"type({nested_name})"
-            else:
-                fortran_type = FORTRAN_C_TYPE.get(m["dtype"], "??")
+            # Nested derived-type member: declared type(<nested>), consistent with a top-level derived-type arg;
+            # bind_c_shim follows struct_name to recurse.
+            fortran_type = f"type({nested_name})" if nested_name else FORTRAN_C_TYPE.get(m["dtype"], "??")
             members.append(
                 Member(
                     name=m["name"],

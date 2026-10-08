@@ -22,7 +22,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 subroutine probe_ddot(a, s, e, b, n, r)
   implicit none

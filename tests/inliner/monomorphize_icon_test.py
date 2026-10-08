@@ -20,13 +20,12 @@ import os
 import re
 from pathlib import Path
 
-import pytest
-
 import fparser.two.Fortran2003 as f03
+import pytest
 from fparser.two.utils import walk
 
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program
-from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, monomorphize, MonomorphizationSpec
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, MonomorphizationSpec, monomorphize
 
 pytestmark = pytest.mark.long
 
@@ -112,7 +111,7 @@ _TYPEDEF_MODULES = [
 def _typedef_program() -> f03.Program:
     """All axis type definitions in one synthetic module -- for analysis only."""
     typedefs = "\n".join(
-        _extract_types(_src(m)) for m in ["mo_ocean_solve_backend.f90", "mo_ocean_solve.f90"] + _TYPEDEF_MODULES
+        _extract_types(_src(m)) for m in ["mo_ocean_solve_backend.f90", "mo_ocean_solve.f90", *_TYPEDEF_MODULES]
     )
     return parse_program(f"module zz_icon_typedefs\n{typedefs}\nend module\n")
 

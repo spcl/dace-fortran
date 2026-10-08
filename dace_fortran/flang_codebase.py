@@ -8,19 +8,20 @@ and replays the project's own ``-D``/``-I`` flags.
 """
 
 from __future__ import annotations
+
 import os
 import re
 import shutil
 import subprocess
 import tarfile
 import urllib.request
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, NamedTuple
 
 from .llvm_toolchain import require_flang
 from .preprocess import merge_used_modules
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # 1. Library stubs.
@@ -74,14 +75,14 @@ _MPI_INCDIR_PROBES = (
 )
 
 
-def openmpi_include_candidates() -> Tuple[str, ...]:
+def openmpi_include_candidates() -> tuple[str, ...]:
     """Every directory that might hold OpenMPI's ``mpif-*.h``, best guess first.
 
     Asks the installed wrapper (``mpicc --showme:incdirs``) before falling back to
     ``MPI_HOME``/``OPAL_PREFIX`` and finally the hardcoded distro paths, so a module-loaded
     or site-local OpenMPI is found rather than whichever one the distro happens to ship.
     """
-    found: List[str] = []
+    found: list[str] = []
     for exe, flag in _MPI_INCDIR_PROBES:
         if shutil.which(exe) is None:
             continue
@@ -102,7 +103,7 @@ def openmpi_include_candidates() -> Tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
-def find_openmpi_include() -> Optional[str]:
+def find_openmpi_include() -> str | None:
     """Returns the first candidate directory that contains ``mpif-config.h``, or ``None``."""
     for d in openmpi_include_candidates():
         if (Path(d) / "mpif-config.h").is_file():
@@ -181,10 +182,10 @@ class LibraryStub:
     #: Returns Fortran source defining the library's module(s).
     source: Callable[..., str]
     #: Returns ``-I<dir>`` flags flang needs alongside the source.
-    flags: Callable[..., List[str]]
+    flags: Callable[..., list[str]]
 
 
-def _mpi_flags(openmpi_include: Optional[str] = None, **_: Any) -> List[str]:
+def _mpi_flags(openmpi_include: str | None = None, **_: Any) -> list[str]:
     """``-I`` flags for the MPI stub.  Auto-probes a standard OpenMPI
     install when ``openmpi_include`` isn't passed."""
     inc = openmpi_include or find_openmpi_include()
@@ -197,7 +198,7 @@ def _mpi_flags(openmpi_include: Optional[str] = None, **_: Any) -> List[str]:
     return [f"-I{inc}"]
 
 
-def _netcdf_source(cache_dir: Optional[Path] = None, **_: Any) -> str:
+def _netcdf_source(cache_dir: Path | None = None, **_: Any) -> str:
     """Source for the netcdf stub.  Requires ``cache_dir`` to vendor
     the upstream tarball."""
     if cache_dir is None:
@@ -205,7 +206,7 @@ def _netcdf_source(cache_dir: Optional[Path] = None, **_: Any) -> str:
     return netcdf_stub_source(vendor_netcdf_fortran(cache_dir))
 
 
-def _netcdf_flags(cache_dir: Optional[Path] = None, **_: Any) -> List[str]:
+def _netcdf_flags(cache_dir: Path | None = None, **_: Any) -> list[str]:
     """``-I`` flags for the netcdf stub.  Same ``cache_dir`` as
     :func:`_netcdf_source`."""
     if cache_dir is None:
@@ -213,7 +214,7 @@ def _netcdf_flags(cache_dir: Optional[Path] = None, **_: Any) -> List[str]:
     return [f"-I{vendor_netcdf_fortran(cache_dir)}"]
 
 
-LIBRARY_STUBS: Dict[str, LibraryStub] = {
+LIBRARY_STUBS: dict[str, LibraryStub] = {
     "mpi": LibraryStub(name="mpi", source=lambda **_: mpi_stub_source(), flags=_mpi_flags),
     "netcdf": LibraryStub(name="netcdf", source=_netcdf_source, flags=_netcdf_flags),
 }
@@ -251,7 +252,7 @@ def patch_mpi_sizeof(source: str) -> str:
 
 
 # Patch registry: name -> source-to-source transform.
-FLANG_BUG_PATCHES: Dict[str, Callable[[str], str]] = {
+FLANG_BUG_PATCHES: dict[str, Callable[[str], str]] = {
     "mpi_sizeof": patch_mpi_sizeof,
 }
 
@@ -334,7 +335,7 @@ def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str
 
 class TranslationUnit(NamedTuple):
     source: str
-    flags: List[str]
+    flags: list[str]
 
 
 def prepare_flang_translation_unit(
@@ -345,8 +346,8 @@ def prepare_flang_translation_unit(
     patches: Sequence[str] = ("mpi_sizeof",),
     defines: Sequence[str] = (),
     include_dirs: Sequence[Path] = (),
-    cache_dir: Optional[Path] = None,
-    openmpi_include: Optional[str] = None,
+    cache_dir: Path | None = None,
+    openmpi_include: str | None = None,
 ) -> TranslationUnit:
     """Stitch a flang-ready translation unit from a real-world Fortran
     codebase.  Composes four steps:
@@ -386,8 +387,8 @@ def prepare_flang_translation_unit(
         yourself.
     :raises KeyError: an unknown library stub or patch name.
     """
-    pieces: List[str] = []
-    flags: List[str] = list(f"-D{d}" for d in defines)
+    pieces: list[str] = []
+    flags: list[str] = [f"-D{d}" for d in defines]
     flags.extend(f"-I{p}" for p in include_dirs)
 
     for name in library_stubs:
@@ -424,9 +425,9 @@ def emit_hlfir_from_codebase(
     patches: Sequence[str] = ("mpi_sizeof",),
     defines: Sequence[str] = (),
     include_dirs: Sequence[Path] = (),
-    cache_dir: Optional[Path] = None,
-    openmpi_include: Optional[str] = None,
-    flang_program: Optional[str] = None,
+    cache_dir: Path | None = None,
+    openmpi_include: str | None = None,
+    flang_program: str | None = None,
     extra_flang_flags: Sequence[str] = (),
 ) -> Path:
     """Compose a translation unit for ``entry_source`` via

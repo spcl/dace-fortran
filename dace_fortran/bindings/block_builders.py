@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
+from collections.abc import Collection, Container, Sequence
 from enum import Enum
-from typing import Collection, Container, Dict, List, NamedTuple, Optional, Sequence, TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
 
+from dace_fortran.bindings.acc_transfers import Directive
 from dace_fortran.bindings.flatten_plan import (
     FlattenPlan,
     FlattenRecipe,
@@ -34,7 +36,6 @@ from dace_fortran.bindings.loop_copy import (
     render_copy_in_loop,
     render_copy_out_loop,
 )
-from dace_fortran.bindings.acc_transfers import Directive
 
 if TYPE_CHECKING:
     from dace_fortran.bindings.acc_transfers import AccTransferPlan
@@ -52,7 +53,7 @@ def _shorten_long_idents(src: str, limit: int = _FORTRAN_IDENT_LIMIT) -> str:
     if not long_idents:
         return src
     used = set(all_idents)
-    rename: Dict[str, str] = {}
+    rename: dict[str, str] = {}
     for name in long_idents:
         digest = hashlib.blake2b(name.encode(), digest_size=4).hexdigest()  # 8 hex chars
         short = f"{name[: limit - 9]}_{digest}"
@@ -87,8 +88,8 @@ def build_c_interface(
     """Render the ``interface ... end interface`` block declaring the three C
     entry points the compiled SDFG exports (template: ``templates/c_interface.f90.in``)."""
     tpl = _load("c_interface.f90.in")
-    header_lines: List[str] = []
-    body_lines: List[str] = []
+    header_lines: list[str] = []
+    body_lines: list[str] = []
     for a in _dace_call_order(frozen, dace_arglist):
         if isinstance(a, str):
             # Shape-only free symbol: pass-by-value int, except pgrid symbols
@@ -232,9 +233,7 @@ def _module_arg_aliasable(a: FrozenArg) -> bool:
         return False
     if not (a.module_origin_allocatable or a.module_origin_pointer):
         return False
-    if a.intent == "out":
-        return False
-    return True
+    return a.intent != "out"
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +358,8 @@ def build_wrapper_head(
         f"    integer(c_int) :: {_enum_local_name(a.name)}" for a in iface.args if a.name.lower() in enum_args
     )
 
-    flat_ptr_lines: List[str] = []
-    scratch_lines: List[str] = []
+    flat_ptr_lines: list[str] = []
+    scratch_lines: list[str] = []
     # Dtypes needing a presence_scratch_<dtype>(1) target: the degenerate binding
     # an ABSENT member's flat POINTER remaps onto (copy-in guard's ELSE branch).
     guard_scratch_dtypes: set = set()
@@ -494,11 +493,11 @@ def build_wrapper_head(
 
 
 class SymbolBlocks(NamedTuple):
-    early: List[str]
-    late: List[str]
+    early: list[str]
+    late: list[str]
 
 
-def partition_symbol_blocks(sym_lines: List[str], buffer_names: Collection[str]) -> SymbolBlocks:
+def partition_symbol_blocks(sym_lines: list[str], buffer_names: Collection[str]) -> SymbolBlocks:
     """Split symbol-population lines into ``(early, late)`` by buffer dependency.
 
     A shape sym read from a module global/dummy/constant is assigned BEFORE the
@@ -538,7 +537,7 @@ def build_wrapper_body(
     symbols from size(...) on the outer storage."""
     outer_dummy_set = {a.name for a in iface.args}
     enum_args = _enum_args(iface, enum_maps or {})
-    body: List[str] = []
+    body: list[str] = []
     # Enum CHARACTER -> SELECT CASE -> INTEGER scratch; runs FIRST so the value is
     # ready before the symbol-population block (which may reference it).
     if enum_args:
@@ -563,7 +562,7 @@ def build_wrapper_body(
     # reconstruction blocks below. A double-buffer alias subscripts a record array
     # with a module-global time-level symbol (nold/nnew) seeded only by that block;
     # emitting the alias first subscripts an unallocated nold -> SIGSEGV.
-    copyin: List[str] = []
+    copyin: list[str] = []
     copyin.append("    ! ----- Copy-in / alias per flatten entry -----")
     for entry in live_entries(frozen, plan):
         r = entry.recipe
@@ -698,10 +697,7 @@ def build_wrapper_body(
             # LOCAL, and a degenerate (1,1,..) local overruns on a mesh-sized write.
             # Fall back to (1,..) only when the shape isn't symbol-recoverable.
             shape = tuple(str(s) for s in (a.shape or ()))
-            if len(shape) == a.rank and all(shape):
-                dims = ", ".join(shape)
-            else:
-                dims = ", ".join("1" for _ in range(a.rank))
+            dims = ", ".join(shape) if len(shape) == a.rank and all(shape) else ", ".join("1" for _ in range(a.rank))
             body.append(f"    allocate({a.sdfg_name}({dims}))")
             body.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
 
@@ -785,7 +781,7 @@ def build_wrapper_tail(
     # Enum dummies pass their SELECT CASE INTEGER scratch, not the outer CHARACTER.
     # Extend name_override so _call_actual picks up the swap.
     enum_args = _enum_args(iface, enum_maps or {})
-    name_override: Dict[str, str] = {}
+    name_override: dict[str, str] = {}
     if enum_args:
         # name_override is keyed by FrozenArg.sdfg_name; map each iface arg's outer
         # name to its frozen sdfg_name (defensive against a future flatten-rename).
@@ -822,7 +818,7 @@ def build_wrapper_tail(
         entry=iface.entry, call_arg_list=call_args, init_call_args=", ".join(_init_sym_names(frozen, init_symbols))
     )
 
-    copy_out_lines: List[str] = []
+    copy_out_lines: list[str] = []
     for entry in live_entries(frozen, plan):
         r = entry.recipe
         if r.aos_alloc:
@@ -850,7 +846,7 @@ def build_wrapper_tail(
     # arg's final value back to the host module var (symmetric to copy-in). A
     # scalar source was lifted to a length-1 array, so write back element (1).
     # Aliased arrays already write through the host pointer, so no copy-back is needed.
-    module_writeback_lines: List[str] = []
+    module_writeback_lines: list[str] = []
     for oa, _mod, _member in _orphan_module_args(frozen, iface, plan):
         if not oa.is_written:
             continue
@@ -863,7 +859,7 @@ def build_wrapper_tail(
 
     # AoS-struct components: pack the SoA buffer back into the host struct only if
     # WRITTEN, always deallocate the buffer allocated in the body's copy-in.
-    aos_out_lines: List[str] = []
+    aos_out_lines: list[str] = []
     for a in _aos_module_args(frozen):
         if a.is_written:
             aos_out_lines.extend(_render_aos_copy_out(a))
@@ -901,8 +897,8 @@ _ACC_INDENT = "    "
 
 
 class AccStaging(NamedTuple):
-    pre: List[str]
-    post: List[str]
+    pre: list[str]
+    post: list[str]
 
 
 def build_acc_staging(plan: AccTransferPlan, directive: Directive = Directive.OPENACC) -> AccStaging:
@@ -922,8 +918,8 @@ def build_acc_staging(plan: AccTransferPlan, directive: Directive = Directive.OP
 
 
 def splice_acc_staging(
-    blocks: Dict[str, str], entry: str, plan: AccTransferPlan, directive: Directive = Directive.OPENACC
-) -> Dict[str, str]:
+    blocks: dict[str, str], entry: str, plan: AccTransferPlan, directive: Directive = Directive.OPENACC
+) -> dict[str, str]:
     """Return ``blocks`` with the staging of ``plan`` spliced in, in ``directive``'s language:
     pre-staging at the top of ``wrapper_body``, the ``DATA``/``HOST_DATA USE_DEVICE``
     regions around the SDFG invocation, post-staging before the wrapper's end statement.
@@ -942,7 +938,7 @@ def splice_acc_staging(
     out = dict(blocks)
     if pre:
         out["wrapper_body"] = (
-            "\n".join([_ACC_INDENT + f"! ----- {language} staging (device -> host) -----"] + pre + [""])
+            "\n".join([_ACC_INDENT + f"! ----- {language} staging (device -> host) -----", *pre, ""])
             + out["wrapper_body"]
         )
     tail_lines = out["wrapper_tail"].splitlines()
@@ -964,7 +960,7 @@ def splice_acc_staging(
         )
     if post:
         end_at = next(i for i, ln in enumerate(tail_lines) if ln.strip() == f"end subroutine {entry}_dace")
-        post_block = [_ACC_INDENT + f"! ----- {language} staging (host -> device) -----"] + post
+        post_block = [_ACC_INDENT + f"! ----- {language} staging (host -> device) -----", *post]
         tail_lines = tail_lines[:end_at] + post_block + tail_lines[end_at:]
     out["wrapper_tail"] = "\n".join(tail_lines)
     return out
@@ -1088,13 +1084,13 @@ class OrphanModuleArg(NamedTuple):
     entity: str
 
 
-def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[IntrinsicExtent]:
+def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> IntrinsicExtent | None:
     """Map a free SDFG symbol to the Fortran intrinsic that populates it:
     offset_<arr>_d<i> -> LBOUND of dim i+1; <arr>_d<i> -> SIZE of dim i+1.
     None when sym isn't an offset/extent of a known array arg."""
     by_sdfg = {a.sdfg_name: a for a in frozen.args}
 
-    def _expr(arr: str) -> Optional[str]:
+    def _expr(arr: str) -> str | None:
         a = by_sdfg.get(arr)
         if a is None or a.kind is not FrozenArgKind.ARRAY:
             return None
@@ -1113,7 +1109,7 @@ def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Intrinsic
 
 def _sym_from_array_extent(
     sym: str, frozen: FrozenSignature, exclude: Container[str] | None = None
-) -> Optional[ArrayExtent]:
+) -> ArrayExtent | None:
     """A free symbol that's a NAMED extent of an array arg (e.g. n_zlev is dim 2 of
     vn(nproma, n_zlev, nblks_e)). Must take precedence over a same-named module
     global: ICON's n_zlev is unset (0) in an extracted kernel, and using it would
@@ -1139,14 +1135,14 @@ def _module_symbol_alias(sym: str) -> str:
     return f"{sym}__mod"
 
 
-def _synthetic_members(plan: FlattenPlan | None) -> Dict[str, str]:
+def _synthetic_members(plan: FlattenPlan | None) -> dict[str, str]:
     """SDFG name -> struct member for every ``hlfir-flatten-global-scalar-reads``
     lift.  The host entity, not the lifted scalar, is what the binding imports;
     this map says which component to read off it."""
     return {s.sdfg_name: s.member for s in (plan.synthetic_globals if plan is not None else ())}
 
 
-def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
+def _module_value_expr(sym: str, members: dict[str, str]) -> str:
     """Fortran expression for a module-sourced symbol's caller-side value.  A
     lifted struct member reads through its host entity's import alias; every
     other module symbol IS its alias."""
@@ -1156,7 +1152,7 @@ def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
 
 def effective_module_sources(
     frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan | None = None
-) -> Dict[str, ModuleOrigin]:
+) -> dict[str, ModuleOrigin]:
     """Merge bridge-auto-detected module-global provenance (the primary source,
     FrozenSignature.module_symbol_origins) with the flatten plan's synthetic-global
     side table and hand-authored iface.module_symbol_sources, which wins on conflict
@@ -1166,21 +1162,21 @@ def effective_module_sources(
     not exist (``_QM<mod>E<entity>_<member>`` reads as a variable named
     ``<entity>_<member>``), so the side table's ``(module, entity)`` must displace the
     bridge's decode -- the ``%<member>`` step is applied by :func:`_module_value_expr`."""
-    merged: Dict[str, ModuleOrigin] = dict(frozen.module_symbol_origins)
+    merged: dict[str, ModuleOrigin] = dict(frozen.module_symbol_origins)
     for s in plan.synthetic_globals if plan is not None else ():
         merged[s.sdfg_name] = ModuleOrigin(s.module, s.entity)
     merged.update(iface.module_symbol_sources)  # explicit override wins
     return merged
 
 
-def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> List[OrphanModuleArg]:
+def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> list[OrphanModuleArg]:
     """SDFG args that are neither an outer dummy, flat companion, nor extent/offset
     symbol -- Fortran module globals the kernel reads directly (ICON's nrdmax,
     i_am_accel_node, timer handles)."""
     sources = effective_module_sources(frozen, iface, plan)
     dummy = {a.name for a in iface.args}
     flat = {f for e in plan.entries for f in e.recipe.flat_names}
-    out: List[OrphanModuleArg] = []
+    out: list[OrphanModuleArg] = []
     for a in frozen.args:
         n = a.sdfg_name
         if n in dummy or n in flat:
@@ -1273,7 +1269,7 @@ def _present(expr: str, is_pointer: bool) -> str:
     return f"associated({expr})" if is_pointer else f"allocated({expr})"
 
 
-def live_entries(frozen: FrozenSignature, plan: FlattenPlan) -> List:
+def live_entries(frozen: FrozenSignature, plan: FlattenPlan) -> list:
     """Flatten entries the kernel actually consumes. hlfir-flatten-structs emits
     one entry per describable struct member, including ones no SDFG arg/symbol
     reads (real ICON t_nh_diag: 668 entries vs 508 kernel args). Marshalling a
@@ -1284,7 +1280,7 @@ def live_entries(frozen: FrozenSignature, plan: FlattenPlan) -> List:
     return [e for e in plan.entries if any(f in live_names for f in e.recipe.flat_names)]
 
 
-def _guarded_copy_out(lines: List[str], guard: str, recipe: FlattenRecipe) -> List[str]:
+def _guarded_copy_out(lines: list[str], guard: str, recipe: FlattenRecipe) -> list[str]:
     """Wrap a non-aliased entry's copy-out in its presence guard; the ABSENT branch
     releases the degenerate scratch the guarded copy-in allocated."""
     if not guard:
@@ -1341,8 +1337,8 @@ def _recipe_presence_guard(iface: OriginalInterface, recipe: FlattenRecipe) -> s
 
 
 class AosLoopPieces(NamedTuple):
-    loop_vars: List[str]
-    cap_vars: List[str]
+    loop_vars: list[str]
+    cap_vars: list[str]
     member_rank: int
     accessor: str
 
@@ -1373,7 +1369,7 @@ def _aos_member_is_static(a: FrozenArg) -> bool:
     return bool(member_dims) and all(str(d).isdigit() for d in member_dims)
 
 
-def _render_aos_copy_in(a: FrozenArg) -> List[str]:
+def _render_aos_copy_in(a: FrozenArg) -> list[str]:
     """Allocate the SoA buffer (per-member-dim cap = max over elements) + pack the
     host AoS component in. Skips the data copy when global_alloc_inside (kernel
     allocates the component itself; host has no data yet)."""
@@ -1481,10 +1477,10 @@ def _render_aos_copy_in(a: FrozenArg) -> List[str]:
     return out
 
 
-def _render_aos_copy_out(a: FrozenArg) -> List[str]:
+def _render_aos_copy_out(a: FrozenArg) -> list[str]:
     """Pack the SoA buffer back into the host AoS component (only when the arg
     is WRITTEN), allocating each component first if the kernel created it."""
-    its, caps, mrank, elem = _aos_loop_pieces(a)
+    its, _caps, mrank, elem = _aos_loop_pieces(a)
     if a.aos_outer_rank == 0:
         # Scalar-struct member: pack writes back when the host member is defined
         # (companion was sized from it in copy-in); undefined -> nothing to write.
@@ -1545,8 +1541,8 @@ def _render_aos_copy_out(a: FrozenArg) -> List[str]:
 
 
 class MemberSymbolSources(NamedTuple):
-    sources: Dict[str, str]
-    member_paths: Dict[str, str]
+    sources: dict[str, str]
+    member_paths: dict[str, str]
 
 
 def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSources:
@@ -1557,8 +1553,8 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSourc
     -> d_a_d<i> = size(d%a, dim=i+1); lbound -> offset_d_a_d<i>. Nested types recurse
     (d_inner_m <- d%inner%m). Returns (sources, member_paths); the latter backs
     _build_symbol_assigns' _allocated fold for nested struct-member pointers."""
-    sources: Dict[str, str] = {}
-    member_paths: Dict[str, str] = {}
+    sources: dict[str, str] = {}
+    member_paths: dict[str, str] = {}
 
     def walk(st: DerivedType, sym_prefix: str, access: str) -> None:
         for m in st.members:
@@ -1592,7 +1588,7 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSourc
 
 def _build_symbol_assigns(
     frozen: FrozenSignature, plan: FlattenPlan, outer_dummy_set: set, iface: OriginalInterface
-) -> List[str]:
+) -> list[str]:
     """Emit one assignment per free SDFG symbol from the caller's actual storage:
     offset_<arr>_d<i> -> lbound, <arr>_d<i> -> extent/size. Flatten-plan expr
     preferred when available; falls back to lbound/size on the arg's own Fortran
@@ -1657,7 +1653,7 @@ def _build_symbol_assigns(
         if r.rank == 0 and len(r.flat_names) == 1 and r.read_exprs:
             scalar_member[r.flat_names[0]] = strip_index_args(r.read_exprs[0])
 
-    def _guarded_assign(sym: str, rhs: str, guard: str, absent: str = "0") -> List[str]:
+    def _guarded_assign(sym: str, rhs: str, guard: str, absent: str = "0") -> list[str]:
         if not guard:
             return [f"    {sym} = int({rhs}, c_int)"]
         return [
@@ -1670,14 +1666,14 @@ def _build_symbol_assigns(
 
     def _member_sym_guard(sym: str) -> str:
         # Maps offset_<flat>_d<i> / <flat>_d<i> / <flat> to its leaf member path.
-        base = sym[len("offset_") :] if sym.startswith("offset_") else sym
+        base = sym.removeprefix("offset_")
         m = _EXTENT_SYM_RE.match(base)
         if m and not _OFFSET_SYM_RE.match(base):
             base = m.group(1)
         path = _struct_member_paths.get(base)
         return _entry_presence_guard(iface, path) if path else ""
 
-    out: List[str] = []
+    out: list[str] = []
     for sym in frozen.free_symbols:
         if sym in outer_dummy_set:
             continue

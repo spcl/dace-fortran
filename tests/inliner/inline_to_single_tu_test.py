@@ -23,7 +23,10 @@ def _compiles(src_text: str) -> bool:
         f = Path(td) / "single.f90"
         f.write_text(src_text)
         r = subprocess.run(
-            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)], cwd=td, capture_output=True
+            ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c", str(f)],
+            check=False,
+            cwd=td,
+            capture_output=True,
         )
         if r.returncode != 0:
             print(r.stderr.decode())
@@ -659,7 +662,7 @@ end subroutine run
     }
     out = _inline_text(sources, "run", include_builtins=False)
     # Pointer component (and the type it points at) must survive in the type definition, not just the constructor body.
-    tdef = re.search(r"EXTENDS\(t_lhs_base\) :: t_lhs\b.*?END TYPE t_lhs\b", out, re.S)
+    tdef = re.search(r"EXTENDS\(t_lhs_base\) :: t_lhs\b.*?END TYPE t_lhs\b", out, re.DOTALL)
     assert tdef and "GRID" in tdef.group(0).upper(), f"pointer component pruned from t_lhs:\n{out}"
     assert _compiles(out)
 

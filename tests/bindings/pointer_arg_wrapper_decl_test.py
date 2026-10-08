@@ -12,7 +12,6 @@ synthetic kernel via ``build_fortran_library`` and inspects the wrapper decl.
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import make_builder
 
-
 # Minimal shape that mints a v_allocated presence guard: POINTER arg gated on ASSOCIATED(...).
 _SRC = """
 subroutine kern(v, n)

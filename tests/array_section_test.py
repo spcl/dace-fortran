@@ -8,7 +8,6 @@ import pytest
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 subroutine fill_range(res, a, b)
   implicit none
@@ -40,8 +39,8 @@ def test_section_assign_ast_shape(tmp_path: Path):
 
 def test_section_assign_sdfg_structure(tmp_path: Path):
     """One LoopRegion driven by ``a..b`` and a single tasklet writing the 42 constant."""
-    from dace.sdfg.state import LoopRegion
     from dace.sdfg import nodes as nd
+    from dace.sdfg.state import LoopRegion
 
     sdfg = build_sdfg(_SRC, tmp_path, name="fill_range", pipeline="hlfir-propagate-shapes").build()
     loops = [n for n in sdfg.nodes() if isinstance(n, LoopRegion)]

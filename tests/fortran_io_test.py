@@ -7,9 +7,9 @@ node, asserting the values survive the file round-trip.  Needs a Fortran
 compiler, since the wrappers must be compiled + linked.
 """
 
+import dace
 import numpy as np
 
-import dace
 from dace_fortran.libraries.fortran_io.nodes.namelist import NamelistRead
 from dace_fortran.libraries.fortran_io.nodes.read import Read
 from dace_fortran.libraries.fortran_io.nodes.write import Write
@@ -124,7 +124,7 @@ def _namelist_sdfg(path, group, members, dtypes_, shapes, tag=""):
     state = sdfg.add_state()
     node = NamelistRead("nml", filename=path, group=group, members=members)
     state.add_node(node)
-    for i, (shape, dt) in enumerate(zip(shapes, dtypes_)):
+    for i, (shape, dt) in enumerate(zip(shapes, dtypes_, strict=False)):
         name = f"m{i}"
         sdfg.add_array(name, shape, dt)
         state.add_edge(node, f"_out_{i}", state.add_access(name), None, dace.Memlet.from_array(name, sdfg.arrays[name]))

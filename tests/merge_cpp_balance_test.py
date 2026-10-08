@@ -12,10 +12,8 @@ This is the shape ICON's ~150-module USE-closure hits; reproduced minimally here
 import re
 from pathlib import Path
 
-
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.preprocess import merge_used_modules
-
 
 # mo_dbl shares a file with a preceding module wrapped in a whole-module #ifdef:
 # mo_dbl's extracted block picks up the orphan #endif, the wrapped block an orphan #if.

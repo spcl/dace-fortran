@@ -139,8 +139,8 @@ end module kernel_mod
 def test_step_expr_field_is_populated_on_symbolic_step(tmp_path: Path):
     """``ASTNode.loop_step_expr`` carries the symbolic-step string; drives AST extraction
     directly so the contract is pinned independent of any downstream emit path."""
-    from dace_fortran.build_bridge import hb
     from dace_fortran import DEFAULT_PIPELINE
+    from dace_fortran.build_bridge import hb
 
     src = """
 subroutine kernel(jstart, jend, batch)

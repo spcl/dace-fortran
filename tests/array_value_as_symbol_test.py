@@ -9,7 +9,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 _SRC = """
 module array_value_as_dim_mod
   implicit none

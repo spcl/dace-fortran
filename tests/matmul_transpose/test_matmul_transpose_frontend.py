@@ -8,7 +8,6 @@ surfaced libcall miss until a dedicated lowering lands.
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
@@ -53,7 +52,7 @@ def test_matmul_with_transpose_rhs(tmp_path):
     assert _count(sdfg, "Transpose") == 0, (
         f"expected zero Transpose libcalls (B-transpose folds via transB), got {_count(sdfg, 'Transpose')}"
     )
-    mm = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"][0]
+    mm = next(n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     assert mm.transB is True, f"expected transB=True, got {mm.transB}"
 
 

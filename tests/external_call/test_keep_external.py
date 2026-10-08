@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -23,7 +22,7 @@ from dace_fortran.external import (
     lookup_external,
 )
 from dace_fortran.external_functions import ExternalFunction
-
+from tests._util import build_sdfg
 
 # increments every element by 1; bind(c, name="bar") -> stable unmangled C symbol
 _BAR_F90 = """

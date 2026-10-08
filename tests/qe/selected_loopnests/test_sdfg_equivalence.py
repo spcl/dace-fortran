@@ -14,7 +14,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 _LOOPNESTS_DIR = Path(__file__).parent
 
 

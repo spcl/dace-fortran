@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim, scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.build import make_builder
@@ -35,6 +34,7 @@ from dace_fortran.external import (
     clear_external_registry,
     keep_external,
 )
+from tests._util import build_sdfg
 
 pytestmark = pytest.mark.long
 
@@ -142,7 +142,7 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
     inner_builder.build()
     iface = build_auto_interface(inner_builder._fortran_interface_raw, "velocity_tendencies")
     shim = emit_bind_c_shim(iface, str(tmp_path / "vel_c.f90")).read_text()
-    header = re.search(r"subroutine\s+velocity_tendencies_c\s*\(([^)]*)\)", shim, re.S)
+    header = re.search(r"subroutine\s+velocity_tendencies_c\s*\(([^)]*)\)", shim, re.DOTALL)
     inner_slots = [a.strip() for a in header.group(1).replace("&", " ").split(",") if a.strip()]
     ptr_members = scalar_pointer_members(iface)
 

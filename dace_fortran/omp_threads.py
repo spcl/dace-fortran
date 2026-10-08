@@ -12,11 +12,12 @@ effects that reads ``omp_get_max_threads()`` into a transient scalar, and the in
 state assigns the scalar to the symbol.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 import dace
 from dace import dtypes
 from dace.transformation import pass_pipeline as ppl
+
 from dace_fortran.dace_types import explicit_cf_compatible
 
 #: The name the code generator already gives the team size inside a ``CPU_Persistent`` scope.
@@ -42,7 +43,7 @@ class BindOmpThreadCount(ppl.Pass):
         """One-shot: the symbol is bound once and is no longer free."""
         return False
 
-    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: Dict[str, Any]) -> Optional[str]:
+    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: dict[str, Any]) -> str | None:
         """Bind ``self.symbol``. Returns the name of the scalar holding the thread count, or ``None`` if unchanged."""
         if self.symbol not in {str(s) for s in sdfg.free_symbols}:
             return None

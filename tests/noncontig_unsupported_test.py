@@ -26,7 +26,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 
 def test_placeholder_for_future_unsupported_cases(tmp_path: Path):
     """Stub -- add bail-out tests here when new deliberately-unsupported patterns are introduced."""
-    pass
 
 
 def test_virtual_dispatch_bails_loudly(tmp_path: Path):

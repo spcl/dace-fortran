@@ -31,7 +31,7 @@ BYTES_PER_KB = 1024
 def staged_files() -> list[str]:
     """Return the repo's currently-staged file paths (added / copied / modified)."""
     out = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], check=False, capture_output=True, text=True
     )
     if out.returncode != 0:
         return []

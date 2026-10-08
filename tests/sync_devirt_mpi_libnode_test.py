@@ -7,10 +7,9 @@ externalising the whole sync: ``monomorphize`` the abstract pattern to its concr
 body in -- the bridge auto-recognises the MPI calls and lowers them to
 ``dace.libraries.mpi`` nodes."""
 
-from tests._util import build_sdfg
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
-from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, monomorphize, MonomorphizationSpec
-
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import AxisSpec, MonomorphizationSpec, monomorphize
+from tests._util import build_sdfg
 
 #: Abstract comm_pattern (deferred exchange) + concrete comm_orig whose exchange packs then
 #: issues raw MPI. `external` MPI decls so it lowers with no mpi.mod (bridge recognises the
@@ -262,6 +261,7 @@ def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
     ``dace.libraries.mpi`` nodes -- no ExternalCall for the sync."""
     import dace
     from dace.libraries.mpi.nodes.node import MPINode
+
     from dace_fortran.external import ExternalCall
 
     prog = parse_program(_DYCORE_STEP_SRC)
@@ -322,9 +322,10 @@ def test_full_dycore_timestep_sync_not_external(tmp_path):
     for any sync, only MPI primitives external (>=2 Isend/Irecv/Wait each). Controlled
     stand-in for ICON's ``mo_solve_nonhydro``."""
     import dace
-    from dace.libraries.mpi.nodes.node import MPINode
-    from dace.libraries.mpi.nodes.isend import Isend
     from dace.libraries.mpi.nodes.irecv import Irecv
+    from dace.libraries.mpi.nodes.isend import Isend
+    from dace.libraries.mpi.nodes.node import MPINode
+
     from dace_fortran.external import ExternalCall
 
     prog = parse_program(_DYCORE_TIMESTEP_SRC)
@@ -353,6 +354,7 @@ def test_sync_patch_array_is_not_external_anymore(tmp_path):
     inlined, no ``ExternalCall`` node for them. Only external boundary is the MPI
     primitives, as MPI library nodes (not opaque external calls)."""
     from dace.libraries.mpi.nodes.node import MPINode
+
     from dace_fortran.external import ExternalCall
 
     sdfg = _devirt_build_atmo(tmp_path)

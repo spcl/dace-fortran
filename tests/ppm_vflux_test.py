@@ -11,10 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
-
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
-
+from tests._util import build_sdfg
 
 _SRC = Path(__file__).parent / "ppm_vflux_single_tu.f90"
 _ENTRY = "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onblock"

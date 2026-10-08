@@ -10,8 +10,8 @@ an f2py-compiled reference.
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
+from tests._util import build_sdfg
 
 
 def _run(tmp_path, name: str, src: str, *, expected: int, n: int):

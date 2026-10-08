@@ -13,7 +13,6 @@ Pure emitter test -- no SDFG build / no f2py run.
 
 from pathlib import Path
 
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings import (
     FlattenPlan,
     FrozenArg,
@@ -22,6 +21,7 @@ from dace_fortran.bindings import (
     OriginalInterface,
     emit_bindings,
 )
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 
 # ---------------------------------------------------------------------------
 # Fixtures: a kernel ``run(out_val, flag)`` where ``flag`` is the enum dummy
@@ -66,7 +66,7 @@ def _enum_kernel_signature(tmp_path: Path) -> tuple:
     return frozen, iface, plan
 
 
-def _emit(tmp_path: Path, enum_maps: dict = None) -> str:
+def _emit(tmp_path: Path, enum_maps: dict | None = None) -> str:
     """Run ``emit_bindings`` and return the rendered source text."""
     frozen, iface, plan = _enum_kernel_signature(tmp_path)
     out = tmp_path / "run_bindings.f90"
@@ -136,7 +136,7 @@ def test_body_contains_select_case_with_both_casings(tmp_path):
     assert "select case (flag)" in src_lower, f"expected ``select case (flag)``.  got:\n{src}"
     # CASE ('c', 'C') / ('r', 'R') / ('i', 'I').
     assert (
-        "case ('c', 'c')" in src_lower or "case ('c','c')" in src_lower or "case ('c'" in src_lower and "'C'" in src
+        "case ('c', 'c')" in src_lower or "case ('c','c')" in src_lower or ("case ('c'" in src_lower and "'C'" in src)
     ), "expected case-insensitive CASE clause for 'c'"
     # The converted assignment ``dace_enum_flag = N`` follows.
     assert "dace_enum_flag = 0" in src_lower

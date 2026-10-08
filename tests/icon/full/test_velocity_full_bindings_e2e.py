@@ -27,10 +27,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_sdfg
-from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
-
-from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -38,6 +34,9 @@ from dace_fortran.bindings import (
     build_fortran_library,
     emit_bindings,
 )
+from dace_fortran.bindings.frozen_signature import ModuleOrigin
+from tests._util import build_sdfg
+from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 #: Single source for the Fortran compiler that builds BOTH the reference .so and the .so that
 #: links the SDFG.  ICON and the binding it dispatches into must be the same compiler, so the
@@ -127,12 +126,11 @@ def _make_sdfg_driver(caller_src: str) -> str:
     # retarget the kernel call (reference call spans continuation lines; swap just the callee name)
     shim = shim.replace("CALL velocity_tendencies(p_prog, p_patch", "CALL velocity_tendencies_dace(p_prog, p_patch")
     # finalize the ref-counted SDFG handle before returning
-    shim = re.sub(
+    return re.sub(
         r"(?i)\bEND\s+SUBROUTINE\s+run_velocity_flat_sdfg",
         "  CALL velocity_tendencies_dace_finalize()\nEND SUBROUTINE run_velocity_flat_sdfg",
         shim,
     )
-    return shim
 
 
 def _gfortran(out_so: Path, *sources, mod_dir: Path, link_so: Path | None = None):
@@ -265,7 +263,7 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     _run(ref_lib, "run_velocity_flat_c", dims, bufs_ref, z_ref)
     _run(sdfg_lib, "run_velocity_flat_sdfg", dims, bufs_sdfg, z_sdfg)
 
-    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref)))
+    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref, strict=False), strict=False))
     mismatches = []
     mutated = False
     for nm in _OUTPUT_NAMES:

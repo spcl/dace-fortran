@@ -33,9 +33,9 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from tests.icon.atmosphere._atmo_harness import atmo_config, SRC, atmo_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
+    from tests.icon.atmosphere._atmo_harness import SRC, atmo_config, atmo_search_dirs
 
     cfg = atmo_config(halo_mode, entry, loop_exchange=loop_exchange)
 
@@ -106,6 +106,7 @@ def main(argv):
         # -fallow-argument-mismatch: inlined halo leaves raw, interface-less mpi_* calls with varying buffer types across wrappers -- same as any real MPI build needs.
         r = subprocess.run(
             ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
+            check=False,
             cwd=str(cdir),
             capture_output=True,
             text=True,

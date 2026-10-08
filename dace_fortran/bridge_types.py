@@ -9,7 +9,8 @@ protocols mirror the bound fields and methods the emitter reads; the emitter-sid
 
 from __future__ import annotations
 
-from typing import Any, Protocol, Sequence
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 
 class VarRecord(Protocol):

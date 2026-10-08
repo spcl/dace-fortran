@@ -21,7 +21,6 @@ from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
     retype_to_concrete,
 )
 
-
 # --- LOCAL dispatch: run(sel, x) allocates one of two arms and dispatches -------
 _LOCAL_SRC = """
 module m

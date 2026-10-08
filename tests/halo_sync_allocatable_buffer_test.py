@@ -20,7 +20,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # ``h`` is a POINTER member so the section is passed by copy-in/out and the dummy is assumed-shape;
 # the buffer is ALLOCATABLE so its RHS box is a ``fir.load``, the shape the fix keys on.
 _SRC = """

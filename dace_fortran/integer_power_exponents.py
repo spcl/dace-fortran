@@ -9,10 +9,10 @@ Only the exponent literal is rewritten; base and fractional exponents are untouc
 from __future__ import annotations
 
 import ast
-from typing import Optional
 
 import dace
 from dace.transformation import pass_pipeline as ppl
+
 from dace_fortran.dace_types import explicit_cf_compatible
 
 
@@ -23,7 +23,7 @@ class _ExponentIntegerizer(ast.NodeTransformer):
         self.rewrites = 0
 
     @staticmethod
-    def _as_int_constant(node: ast.expr) -> Optional[ast.expr]:
+    def _as_int_constant(node: ast.expr) -> ast.expr | None:
         """Int-valued replacement for a float ``**`` exponent (``2.0`` or
         ``-2.0``), or ``None`` if not integer-valued. Sign folds into the int."""
         if (
@@ -65,7 +65,7 @@ class IntegerizePowerExponents(ppl.Pass):
         """One-shot: the retype doesn't re-trigger the pass."""
         return False
 
-    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: dict) -> Optional[int]:
+    def apply_pass(self, sdfg: dace.SDFG, pipeline_results: dict) -> int | None:
         """Rewrite every Python tasklet's integer-valued float ``**`` exponents
         to ``int``, recursively including nested SDFGs. Returns rewrite count, or ``None`` if unchanged."""
         total = 0

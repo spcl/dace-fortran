@@ -11,7 +11,6 @@ companion (which 1-D-only dot_product rejects)."""
 
 from tests._util import build_sdfg
 
-
 _SRC = """\
 module m
   implicit none

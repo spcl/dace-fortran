@@ -13,7 +13,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 # Mirrors the cloudsc trigger: explicit-shape local 3-D array, PARAMETER
 # last extent, written with a constant PARAMETER 3rd index in one loop
 # nest and a loop 3rd index in another.

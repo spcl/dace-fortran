@@ -14,15 +14,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
-
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 # Loop-carried flux recurrence from cloudsc.F90 Section-8 (see cloudsc_flux_recurrence_repro):
 # PFSQLF(JK+1)=PFSQLF(JK) then accumulate; cross-array PFSQRF<-PFSQLF(JK).

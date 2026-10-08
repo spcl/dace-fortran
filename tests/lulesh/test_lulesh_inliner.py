@@ -15,10 +15,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from tests._util import build_sdfg
 
 from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.preprocess import MergeEngine, merge_used_modules
+from tests._util import build_sdfg
 
 _HERE = Path(__file__).parent
 _KERNELS = _HERE / "lulesh_comp_kernels.f90"

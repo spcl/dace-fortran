@@ -11,10 +11,10 @@ Tier 1: DaCe-level tests pin the re/im codegen mechanism.  Tier 2: Fortran-level
 tests drive the bridge end-to-end on the seq-assoc pattern.
 """
 
+import dace
 import numpy as np
 import pytest
 
-import dace
 from tests._util import build_sdfg
 
 

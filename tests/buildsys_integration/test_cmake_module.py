@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CMAKE_MODULE_DIR = _REPO_ROOT / "cmake"
 
@@ -72,7 +71,9 @@ def test_cmake_configure_succeeds(tmp_path):
     """``cmake -S . -B build`` returns 0 -- DaceFortran.cmake imports
     cleanly and the ``dace_fortran_preprocess`` call is well-formed."""
     proj = _write_project(tmp_path)
-    res = subprocess.run(["cmake", "-S", str(proj), "-B", str(proj / "build")], capture_output=True, text=True)
+    res = subprocess.run(
+        ["cmake", "-S", str(proj), "-B", str(proj / "build")], check=False, capture_output=True, text=True
+    )
     assert res.returncode == 0, f"cmake -S failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
 
@@ -81,7 +82,7 @@ def test_cmake_build_runs_preprocess_and_emits_sources(tmp_path):
     in the build tree reflecting every requested pass."""
     proj = _write_project(tmp_path)
     subprocess.check_call(["cmake", "-S", str(proj), "-B", str(proj / "build")], stdout=subprocess.DEVNULL)
-    res = subprocess.run(["cmake", "--build", str(proj / "build")], capture_output=True, text=True)
+    res = subprocess.run(["cmake", "--build", str(proj / "build")], check=False, capture_output=True, text=True)
     assert res.returncode == 0, f"cmake --build failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
     out = proj / "build" / "dace_fortran_preprocessed" / "src" / "kernel.f90"

@@ -102,7 +102,7 @@ END SUBROUTINE multiple_ranges_subset_function
         input1[i] = i + 1
     res = np.full([3], 42, order="F", dtype=np.float64)
     sdfg(input1=input1, res=res)
-    for idx, val in enumerate(res):
+    for _idx, val in enumerate(res):
         assert val == -3.0
 
 
@@ -330,7 +330,7 @@ END SUBROUTINE multiple_ranges_ecrad_bug_function
     length = pos[1] - pos[0] + 1
 
     i = pos[0] - 1
-    for j in range(length):
+    for _ in range(length):
         assert res[i, iter_1 - 1] == input1[i, iter_2 - 1]
         iter_1 += 1
         iter_2 += 1

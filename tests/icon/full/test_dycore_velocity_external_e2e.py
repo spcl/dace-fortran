@@ -21,13 +21,9 @@ import re
 import subprocess
 from pathlib import Path
 
+import dace
 import numpy as np
 
-import dace
-from tests._util import build_sdfg
-from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
-
-from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -35,7 +31,10 @@ from dace_fortran.bindings import (
     build_fortran_library,
 )
 from dace_fortran.bindings.fortran_interface import build_auto_interface
+from dace_fortran.bindings.frozen_signature import ModuleOrigin
 from dace_fortran.external import Arg, ArgKind, CAbi, Intent, clear_external_registry, keep_external
+from tests._util import build_sdfg
+from tests.icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 # ``-O0 -fno-fast-math -ffp-contract=off`` matched across every build layer so the
 # SDFG path's arithmetic order matches gfortran exactly.  Without this DaCe's default
@@ -278,12 +277,11 @@ def _make_sdfg_shim_for_outer(caller_src: str) -> str:
         "USE dycore_wrapper_dace_bindings, ONLY: dycore_wrapper_dace, dycore_wrapper_dace_finalize",
     )
     shim = shim.replace("CALL velocity_tendencies(p_prog, p_patch", "CALL dycore_wrapper_dace(p_prog, p_patch")
-    shim = re.sub(
+    return re.sub(
         r"(?i)\bEND\s+SUBROUTINE\s+run_velocity_flat_sdfg",
         "  CALL dycore_wrapper_dace_finalize()\nEND SUBROUTINE run_velocity_flat_sdfg",
         shim,
     )
-    return shim
 
 
 def _gfortran(out_so: Path, *sources, mod_dir: Path, link_so: Path | None = None):
@@ -310,7 +308,7 @@ def _run(lib, fn, dims, bufs, z_arrays):
     SIGABRT instead of it terminating pytest."""
     import multiprocessing as mp
 
-    nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v = dims
+    _nproma, _nlev, _nlevp1, _nblks_c, _nblks_e, _nblks_v = dims
     buf_views = {k: (np.asarray(v).tobytes(), v.shape, v.dtype.str) for k, v in bufs.items()}
     z_views = [(z.tobytes(), z.shape, z.dtype.str) for z in z_arrays]
     ctx = mp.get_context("fork")
@@ -593,7 +591,7 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
     # codegen regression trips it immediately); assert_array_equal pins byte-exactness
     # on this exact source -- relax it first if a future flang reorders a reduction.
     one_ulp_rtol = 2**-52  # ~2.22e-16
-    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref)))
+    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref, strict=False), strict=False))
     per_output_max_rel = {}
     for nm in _OUTPUT_NAMES:
         sd, rf = extras[nm] if nm in extras else (bufs_sdfg[nm], bufs_ref[nm])

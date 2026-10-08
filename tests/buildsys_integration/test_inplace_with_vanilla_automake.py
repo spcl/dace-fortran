@@ -5,7 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # Vanilla project sources -- no dace-fortran-specific anything.
 _CONFIGURE_AC = """\
 AC_INIT([dace_fortran_inplace_smoke], [0.1])
@@ -92,7 +91,7 @@ def _preprocess_inplace(proj: Path):
     ]
     for f in inputs:
         cmd.extend(["--in", str(f)])
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert res.returncode == 0, f"preprocess CLI failed:\nstdout={res.stdout}\nstderr={res.stderr}"
 
 
@@ -113,10 +112,10 @@ def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
 
     # steps 2-4: vanilla autotools chain, no dace-fortran flags.
     _autoreconf(proj)
-    res = subprocess.run(["./configure"], cwd=str(proj), capture_output=True, text=True)
+    res = subprocess.run(["./configure"], check=False, cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, f"configure failed:\nstdout={res.stdout}\nstderr={res.stderr}"
     # plain make -- Makefile.am lists both sources in libfoo_la_SOURCES, module-first order.
-    res = subprocess.run(["make"], cwd=str(proj), capture_output=True, text=True)
+    res = subprocess.run(["make"], check=False, cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, f"make failed:\nstdout={res.stdout[-2000:]}\nstderr={res.stderr[-2000:]}"
 
     # step 5: assert the .so is on disk and exports the kernel symbol.

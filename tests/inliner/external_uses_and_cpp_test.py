@@ -26,7 +26,7 @@ def _gfortran_compiles(src_text: str) -> bool:
         f = Path(td) / "tu.f90"
         f.write_text(src_text)
         r = subprocess.run(
-            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)], cwd=td, capture_output=True
+            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)], check=False, cwd=td, capture_output=True
         )
         if r.returncode != 0:
             print(r.stderr.decode())
@@ -100,7 +100,7 @@ def test_cpp_expand_sources_resolves_include_and_macro(tmp_path):
     (tmp_path / "defs.inc").write_text("#define WP 8\n")
     src = '#include "defs.inc"\nmodule mo_kindy\n  real(WP) :: x\nend module mo_kindy\n'
     out = cpp_expand_sources({"mo_kindy.F90": src}, include_dirs=[tmp_path])
-    text = list(out.values())[0]
+    text = next(iter(out.values()))
     assert "#include" not in text
     assert not any(ln.lstrip().startswith("#") for ln in text.splitlines())
     assert "real(8)" in text.lower()
@@ -112,7 +112,7 @@ def test_inline_with_cpp_include(tmp_path):
     (tmp_path / "kinds.inc").write_text("#define WP 8\n")
     src = (
         '#include "kinds.inc"\n'
-        + """
+        """
 module mo_calc
   implicit none
 contains

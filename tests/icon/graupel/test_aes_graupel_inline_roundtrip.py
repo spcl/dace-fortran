@@ -21,7 +21,6 @@ from ._graupel_harness import (
     zero_outputs,
 )
 
-
 _SOURCES = [ORIGINAL_SOURCE, *DEP_SOURCES]
 
 

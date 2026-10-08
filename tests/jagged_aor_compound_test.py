@@ -12,7 +12,6 @@ prog struct shape).
 
 from tests._util import build_sdfg
 
-
 # -----------------------------------------------------------------
 # L_A -- jagged AoR (records with heterogeneous-extent members)
 # -----------------------------------------------------------------

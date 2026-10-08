@@ -21,7 +21,6 @@ import numpy as np
 
 from tests._util import build_sdfg, f2py_compile
 
-
 SRC = """
 module vps_mod
 contains

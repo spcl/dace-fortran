@@ -15,10 +15,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import dace
 import numpy as np
 import pytest
-
-import dace
 
 from dace_fortran.bindings.acc_transfers import Directive
 from dace_fortran.bindings.build_fortran_library import CompilerFamily, FortranCompiler, build_fortran_library

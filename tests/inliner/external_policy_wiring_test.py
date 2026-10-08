@@ -28,7 +28,7 @@ def _gfortran_compiles(src_text: str) -> bool:
         f = Path(td) / "tu.f90"
         f.write_text(src_text)
         r = subprocess.run(
-            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)], cwd=td, capture_output=True
+            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)], check=False, cwd=td, capture_output=True
         )
         if r.returncode != 0:
             print(r.stderr.decode())

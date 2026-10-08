@@ -184,6 +184,7 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
             "-o",
             str(out),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -310,10 +311,10 @@ def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
 
     import numpy as np
 
-    from tests._util import build_sdfg
     from dace_fortran.bindings.build_fortran_library import build_fortran_library
     from dace_fortran.bindings.flatten_plan import FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
+    from tests._util import build_sdfg
 
     lda, n, m, npol, max_ibands = 4, 4, 1, 1, 1
 

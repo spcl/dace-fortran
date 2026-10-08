@@ -19,11 +19,10 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
+from tests._util import build_sdfg
 from tests.bindings.struct_bindings_e2e_test import _build_reference_lib, _build_sdfg_lib
-
 
 _TYPES_SRC = """
 module mo_opt_state

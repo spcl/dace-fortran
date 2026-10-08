@@ -7,9 +7,8 @@ frontend only finds out when a kernel that needs one is built.
 
 import ast
 import importlib
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, List, Tuple
-
 
 PACKAGE = Path(__file__).resolve().parents[1] / "dace_fortran"
 
@@ -21,14 +20,18 @@ def python_files() -> Iterator[Path]:
     return (path for path in sorted(PACKAGE.rglob("*.py")) if "build" not in path.relative_to(PACKAGE).parts)
 
 
-def dace_imports() -> List[Tuple[Path, int, str, str]]:
+def dace_imports() -> list[tuple[Path, int, str, str]]:
     """``(file, line, module, name)`` for every ``from dace[.x] import name`` in the package."""
     found = []
     for path in python_files():
         for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                if node.module == "dace" or node.module.startswith("dace."):
-                    found.extend((path, node.lineno, node.module, alias.name) for alias in node.names)
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module
+                and (node.module == "dace" or node.module.startswith("dace."))
+            ):
+                found.extend((path, node.lineno, node.module, alias.name) for alias in node.names)
     return found
 
 

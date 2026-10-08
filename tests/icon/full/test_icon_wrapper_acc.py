@@ -16,15 +16,14 @@ from pathlib import Path
 import dace
 import pytest
 
-from tests._util import build_sdfg
-
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings.acc_transfers import (
     AccResidency,
     AccResidencyError,
     plan_acc_transfers,
     validate_acc_mappability,
 )
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
+from tests._util import build_sdfg
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
@@ -157,21 +156,21 @@ def test_no_sidecar_renders_the_cpu_only_wrapper():
 
 
 def test_host_args_on_host_sdfg_emit_nothing():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     plan = plan_acc_transfers(sdfg, _sidecar(host=_ARRAY_ARGS + _SCALAR_ARGS), _ARGS)
     assert not plan.active
     assert "!$ACC" not in _bil.render_icon_wrapper(plan).upper()
 
 
 def test_unclassified_array_without_device_args_stays_host():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(host=_ARRAY_ARGS[1:], unclassified=(_ARRAY_ARGS[0],))
     assert not plan_acc_transfers(sdfg, residency, _ARGS).active
 
 
 def test_scalar_args_need_no_classification():
     """The shape the real extractor produces: 8 device arrays, 6 bare scalars."""
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag",))
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap), written=("p_diag",))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, unclassified=_SCALAR_ARGS), _ARGS)
     assert plan.update_host == _ARRAY_ARGS
     assert plan.update_device == ("p_diag",)
@@ -179,7 +178,7 @@ def test_scalar_args_need_no_classification():
 
 
 def test_drift_rule_passes_the_device_pointer_through():
-    storages = {name: dace.StorageType.GPU_Global for name in _ARRAY_ARGS}
+    storages = dict.fromkeys(_ARRAY_ARGS, dace.StorageType.GPU_Global)
     sdfg = _toy_sdfg(storages, written=("p_diag", "z_kin_hor_e"))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
 
@@ -197,7 +196,7 @@ def test_drift_rule_passes_the_device_pointer_through():
 
 
 def test_mixed_device_and_host_storage_splits_the_two_paths():
-    storages = {name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}
+    storages = dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap)
     storages["z_kin_hor_e"] = dace.StorageType.GPU_Global
     sdfg = _toy_sdfg(storages, written=("p_diag", "z_kin_hor_e", "z_vt_ie"))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
@@ -208,7 +207,7 @@ def test_mixed_device_and_host_storage_splits_the_two_paths():
 
 
 def test_render_is_deterministic():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag",))
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap), written=("p_diag",))
     residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS)
     first = _bil.render_icon_wrapper(plan_acc_transfers(sdfg, residency, _ARGS))
     second = _bil.render_icon_wrapper(plan_acc_transfers(sdfg, residency, _ARGS))
@@ -219,7 +218,7 @@ def test_render_is_deterministic():
 
 
 def test_host_arg_on_gpu_array_is_an_error():
-    storages = {name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}
+    storages = dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap)
     storages["p_metrics"] = dace.StorageType.GPU_Global
     sdfg = _toy_sdfg(storages)
     with pytest.raises(AccResidencyError, match="p_metrics"):
@@ -227,14 +226,14 @@ def test_host_arg_on_gpu_array_is_an_error():
 
 
 def test_unclassified_array_with_device_args_is_an_error():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(device=_ARRAY_ARGS[1:], host=_SCALAR_ARGS, unclassified=(_ARRAY_ARGS[0],))
     with pytest.raises(AccResidencyError, match="unclassified"):
         plan_acc_transfers(sdfg, residency, _ARGS)
 
 
 def test_arg_missing_from_the_sidecar_is_an_error():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(device=_ARRAY_ARGS[1:], host=_SCALAR_ARGS)
     with pytest.raises(AccResidencyError, match="p_prog"):
         plan_acc_transfers(sdfg, residency, _ARGS)
@@ -248,7 +247,7 @@ def test_arg_with_no_sdfg_container_is_an_error():
 
 
 def test_arg_split_across_host_and_gpu_containers_is_an_error():
-    storages = {name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}
+    storages = dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap)
     storages["p_diag_vt"] = dace.StorageType.GPU_Global
     sdfg = _toy_sdfg(storages)
     with pytest.raises(AccResidencyError, match="mixed host/GPU storage"):
@@ -268,7 +267,7 @@ def test_component_ref_resolves_through_the_flatten_plan():
 
 def test_unmappable_device_component_ref_is_an_error():
     """``p_diag%vt`` device-resident but no ``p_diag_vt`` flat exists."""
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_diag": "p_diag%vt"})
     with pytest.raises(AccResidencyError, match=r"p_diag%vt.*must be mappable"):
         plan_acc_transfers(sdfg, residency, _ARGS)
@@ -276,7 +275,7 @@ def test_unmappable_device_component_ref_is_an_error():
 
 def test_validate_acc_mappability_is_callable_pre_plan():
     """The additive helper raises on its own, before any plan is built."""
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_metrics": "p_metrics%wgtfac_c"})
     with pytest.raises(AccResidencyError, match="pointer on GPU must be mappable"):
         validate_acc_mappability(sdfg, residency, _ARGS)
@@ -286,7 +285,7 @@ def test_validate_acc_mappability_is_callable_pre_plan():
 
 def test_host_resident_component_ref_is_not_checked():
     """Host-resident and unmentioned args keep today's behaviour."""
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap))
     residency = _sidecar(host=_ARRAY_ARGS + _SCALAR_ARGS, refs={"p_diag": "p_diag%vt"})
     assert not plan_acc_transfers(sdfg, residency, _ARGS).active
 
@@ -372,7 +371,7 @@ def test_real_velocity_sdfg_gpu_storage_takes_the_drift_path(velocity_sdfg):
 
 
 def _staged_wrapper() -> str:
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag", "z_kin_hor_e"))
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap), written=("p_diag", "z_kin_hor_e"))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
     assert plan.update_host and plan.update_device
     return _bil.render_icon_wrapper(plan)
@@ -442,7 +441,7 @@ def _emit_fixture(tmp_path: Path, name: str, acc=None) -> str:
 
 
 def _staging_plan():
-    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag", "z_kin_hor_e"))
+    sdfg = _toy_sdfg(dict.fromkeys(_ARRAY_ARGS, dace.StorageType.CPU_Heap), written=("p_diag", "z_kin_hor_e"))
     return plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
 
 
@@ -473,7 +472,7 @@ def test_emit_bindings_acc_staging_brackets_the_wrapper_body(tmp_path):
 
 
 def test_emit_bindings_acc_host_data_wraps_the_sdfg_call(tmp_path):
-    storages = {name: dace.StorageType.GPU_Global for name in _ARRAY_ARGS}
+    storages = dict.fromkeys(_ARRAY_ARGS, dace.StorageType.GPU_Global)
     sdfg = _toy_sdfg(storages, written=("p_diag",))
     plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
     assert plan.use_device == _ARRAY_ARGS

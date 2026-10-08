@@ -11,7 +11,6 @@ by an early return in one outer loop.
 
 from tests._util import build_sdfg
 
-
 _SRC = """\
 module m
   implicit none

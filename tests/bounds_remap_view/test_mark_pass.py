@@ -7,9 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-
 from tests._util import flang_binary, flang_intrinsic_modules_path
-
 
 _HERE = Path(__file__).resolve().parent
 

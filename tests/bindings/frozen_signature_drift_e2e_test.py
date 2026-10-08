@@ -11,9 +11,8 @@ from pathlib import Path
 import dace
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.bindings import SignatureDriftError, build_fortran_library
-
+from tests._util import build_sdfg
 
 _SRC = """
 module axpy_mod

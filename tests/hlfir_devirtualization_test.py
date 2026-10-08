@@ -14,9 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 from tests._util import _FLANG
-
 
 # Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
 # the override could only mean genuine devirtualisation (no concrete-TYPE call to muddy the

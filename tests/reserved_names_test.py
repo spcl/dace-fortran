@@ -8,9 +8,9 @@ it, any interstate-edge expression mentioning the array crashes sympy with
 
 from pathlib import Path
 
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import numpy as np
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from tests._util import build_sdfg
 
 
@@ -123,9 +123,9 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
     wrapper file -- the surface downstream Fortran callers see; without it the
     SDFG side is fixed but the binding side stays broken."""
     from dace_fortran.bindings import emit_bindings
-    from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
-    from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
     from dace_fortran.bindings.flatten_plan import FlattenPlan
+    from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
+    from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
     fs = FrozenSignature(
         entry="main",

@@ -8,9 +8,8 @@ config explicitly; the source's #ifdef branch selection proves cpp ran before HL
 
 import json
 
-
-from tests._util import build_sdfg
 from dace_fortran.emit_hlfir import parse_compile_commands
+from tests._util import build_sdfg
 
 
 def test_parse_compile_commands_cmake_command_string(tmp_path):

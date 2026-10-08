@@ -8,10 +8,9 @@ unit, so a single-precision complex literal produces an uncompilable
 ``complex128 * float32`` expression -- see ``test_single_complex_literal_codegen_raises``.
 """
 
+import dace
 import numpy as np
 import pytest
-
-import dace
 from dace.codegen.exceptions import CompilationError
 
 from tests._util import build_sdfg

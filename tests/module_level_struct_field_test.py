@@ -66,7 +66,7 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "vcut_a" in sdfg.arrays
-    pass  # transient or kwarg, both work
+    # transient or kwarg, both work
 
 
 def test_module_level_struct_multiple_array_fields(tmp_path):

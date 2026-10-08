@@ -11,42 +11,42 @@ README "Building an SDFG from a real project" for worked examples.
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from dace_fortran.acc_residency import extract_acc_residency, write_acc_residency_sidecar
     from dace_fortran.build import build_sdfg, build_sdfg_from_files, build_sdfg_from_hlfir, build_sdfg_from_project
+    from dace_fortran.builder import DEFAULT_PIPELINE, MULTI_FILE_PIPELINE, SDFGBuilder
     from dace_fortran.external import (
-        register_external,
-        keep_external,
-        apply_external_functions,
-        ExternalSignature,
         Arg,
         ArgKind,
         CAbi,
+        ExternalSignature,
         Intent,
+        apply_external_functions,
         clear_external_registry,
+        keep_external,
+        register_external,
     )
     from dace_fortran.external_functions import ExternalFunction
-    from dace_fortran.builder import SDFGBuilder, DEFAULT_PIPELINE, MULTI_FILE_PIPELINE
-    from dace_fortran.preprocess import (
-        MergeEngine,
-        preprocess_fortran_source,
-        merge_used_modules,
-        preprocess_fortran,
-        rewrite_integer_powers,
-        normalize_kind_parameters,
-        replace_external_with_modules,
-        rewrite_string_enum_to_integer,
-    )
-    from dace_fortran.fparser_inliner import inline_to_single_tu, inline_to_ast
     from dace_fortran.flang_codebase import (
-        prepare_flang_translation_unit,
+        FLANG_BUG_PATCHES,
+        LIBRARY_STUBS,
         emit_hlfir_from_codebase,
         extract_make_compile_args,
-        vendor_netcdf_fortran,
-        mpi_stub_source,
         find_openmpi_include,
-        LIBRARY_STUBS,
-        FLANG_BUG_PATCHES,
+        mpi_stub_source,
+        prepare_flang_translation_unit,
+        vendor_netcdf_fortran,
     )
-    from dace_fortran.acc_residency import extract_acc_residency, write_acc_residency_sidecar
+    from dace_fortran.fparser_inliner import inline_to_ast, inline_to_single_tu
+    from dace_fortran.preprocess import (
+        MergeEngine,
+        merge_used_modules,
+        normalize_kind_parameters,
+        preprocess_fortran,
+        preprocess_fortran_source,
+        replace_external_with_modules,
+        rewrite_integer_powers,
+        rewrite_string_enum_to_integer,
+    )
 
 _LAZY = {
     # Public build entry points (the documented surface).
@@ -97,42 +97,42 @@ _LAZY = {
 }
 
 __all__ = [
+    "DEFAULT_PIPELINE",
+    "FLANG_BUG_PATCHES",
+    "LIBRARY_STUBS",
+    "MULTI_FILE_PIPELINE",
+    "Arg",
+    "ArgKind",
+    "CAbi",
+    "ExternalFunction",
+    "ExternalSignature",
+    "Intent",
+    "MergeEngine",
+    "SDFGBuilder",
+    "apply_external_functions",
     "build_sdfg",
     "build_sdfg_from_files",
     "build_sdfg_from_hlfir",
     "build_sdfg_from_project",
-    "register_external",
-    "keep_external",
-    "apply_external_functions",
-    "ExternalSignature",
-    "Arg",
-    "ArgKind",
-    "CAbi",
-    "Intent",
     "clear_external_registry",
-    "ExternalFunction",
-    "SDFGBuilder",
-    "DEFAULT_PIPELINE",
-    "MULTI_FILE_PIPELINE",
-    "MergeEngine",
-    "preprocess_fortran_source",
-    "merge_used_modules",
-    "inline_to_single_tu",
-    "inline_to_ast",
-    "preprocess_fortran",
-    "rewrite_integer_powers",
-    "normalize_kind_parameters",
-    "replace_external_with_modules",
-    "rewrite_string_enum_to_integer",
-    "prepare_flang_translation_unit",
     "emit_hlfir_from_codebase",
-    "extract_make_compile_args",
-    "vendor_netcdf_fortran",
-    "mpi_stub_source",
-    "find_openmpi_include",
-    "LIBRARY_STUBS",
-    "FLANG_BUG_PATCHES",
     "extract_acc_residency",
+    "extract_make_compile_args",
+    "find_openmpi_include",
+    "inline_to_ast",
+    "inline_to_single_tu",
+    "keep_external",
+    "merge_used_modules",
+    "mpi_stub_source",
+    "normalize_kind_parameters",
+    "prepare_flang_translation_unit",
+    "preprocess_fortran",
+    "preprocess_fortran_source",
+    "register_external",
+    "replace_external_with_modules",
+    "rewrite_integer_powers",
+    "rewrite_string_enum_to_integer",
+    "vendor_netcdf_fortran",
     "write_acc_residency_sidecar",
 ]
 

@@ -10,10 +10,12 @@ Exit codes: 0 success, 2 argument error, 3 pass refusal.
 """
 
 import argparse
+import contextlib
 import json
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, NamedTuple, Sequence
+from typing import NamedTuple
 
 from dace_fortran.preprocess import (
     MergeEngine,
@@ -200,10 +202,8 @@ def _rewrite_inplace(in_path: Path, args: argparse.Namespace) -> dict:
             fh.write(rewritten)
         os.replace(tmp, str(in_path))
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
     if emaps:
         sidecar = in_path.with_name(in_path.name + ".enum_maps.json")
@@ -235,10 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("warning: multiple --in without --inplace -- using last", file=sys.stderr)
     in_path_str = args.in_path[-1]
 
-    if in_path_str == "-":
-        source = sys.stdin.read()
-    else:
-        source = Path(in_path_str).read_text()
+    source = sys.stdin.read() if in_path_str == "-" else Path(in_path_str).read_text()
 
     source, enum_maps = _apply_passes(source, args)
 

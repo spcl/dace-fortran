@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import build_sdfg
 from dace_fortran.external import (
     Arg,
     ArgKind,
@@ -25,6 +24,7 @@ from dace_fortran.external import (
     keep_external,
 )
 from dace_fortran.external_functions import ExternalFunction
+from tests._util import build_sdfg
 
 #: Standalone "fake" mo_velocity_advection (full velocity_tendencies + its USE
 #: closure as one file).  Vendored in-repo at

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 from dace_fortran import build_sdfg_from_files
 
 _HERE = Path(__file__).resolve().parent

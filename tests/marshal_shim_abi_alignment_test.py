@@ -10,12 +10,10 @@ Build-only, no gfortran link/run."""
 
 import re
 
-
-from tests._util import build_sdfg
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, CAbi, ExternalCall, Intent, clear_external_registry, keep_external
-
+from tests._util import build_sdfg
 
 # The shared UNION type text, identical on both sides.  ``t_patch`` carries one
 # member of every class the real ICON type mixes.
@@ -160,7 +158,7 @@ def _inner_patch_slot_order(tmp_path):
         sdfg.validate()
         iface = build_auto_interface(sdfg._fortran_interface_raw, "velo")
         text = emit_bind_c_shim(iface, str(tmp_path / "velo_c.f90")).read_text()
-        sig = re.search(r"subroutine\s+velo_c\(([^)]*)\)", text, re.S)
+        sig = re.search(r"subroutine\s+velo_c\(([^)]*)\)", text, re.DOTALL)
         args = [a.strip() for a in sig.group(1).replace("&", " ").split(",") if a.strip()]
         order = []
         seen = set()
@@ -276,7 +274,7 @@ def _neg_lb_inner_shim_slots(tmp_path):
         builder.build()
         iface = build_auto_interface(builder._fortran_interface_raw, "velo")
         shim = emit_bind_c_shim(iface, str(tmp_path / "velo_c.f90")).read_text()
-        hdr = re.search(r"subroutine\s+velo_c\s*\(([^)]*)\)", shim, re.S)
+        hdr = re.search(r"subroutine\s+velo_c\s*\(([^)]*)\)", shim, re.DOTALL)
         return [a.strip() for a in hdr.group(1).replace("&", " ").split(",") if a.strip()]
     finally:
         clear_external_registry()

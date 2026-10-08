@@ -11,8 +11,6 @@ binding end-to-end.
 
 from pathlib import Path
 
-
-from tests._util import build_sdfg
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import (
     Member,
@@ -20,6 +18,7 @@ from dace_fortran.bindings.fortran_interface import (
     OriginalInterface,
     build_auto_interface,
 )
+from tests._util import build_sdfg
 
 
 def _auto(src: str, tmp_path: Path, name: str, entry: str) -> OriginalInterface:

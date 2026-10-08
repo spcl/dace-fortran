@@ -10,6 +10,7 @@ Real work lives in sibling modules (``flatten_plan.py`` data model,
 
 from pathlib import Path
 
+from dace_fortran.bindings.acc_transfers import AccTransferPlan, Directive
 from dace_fortran.bindings.block_builders import (
     assemble_module,
     build_c_interface,
@@ -20,7 +21,6 @@ from dace_fortran.bindings.block_builders import (
     build_wrapper_tail,
     splice_acc_staging,
 )
-from dace_fortran.bindings.acc_transfers import AccTransferPlan, Directive
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalInterface
 from dace_fortran.bindings.frozen_signature import FrozenSignature

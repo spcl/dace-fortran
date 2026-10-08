@@ -8,19 +8,20 @@ runtime performs the transfer.
 """
 
 from __future__ import annotations
+
+from typing import Any
+
 import dace.library
 import dace.properties
-from dace import dtypes
+from dace import SDFG, SDFGState, dtypes
 from dace.sdfg import nodes
 from dace.sdfg.nodes import LibraryNode
 from dace.transformation.transformation import ExpandTransformation
 
-from .node import FortranIONode, fio_type
-from .. import environments
-from typing import Any
-
-from dace import SDFG, SDFGState
 from dace_fortran.dace_types import library_node
+
+from .. import environments
+from .node import FortranIONode, fio_type
 
 
 def c_string(text: str) -> str:

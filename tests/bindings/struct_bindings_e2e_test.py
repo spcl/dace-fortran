@@ -11,13 +11,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalInterface,
     emit_bindings,
 )
 from dace_fortran.bindings.fortran_interface import build_auto_interface
+from tests._util import build_sdfg
 
 
 def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):

@@ -10,9 +10,8 @@ an interstate edge). E2e against an f2py-compiled reference.
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
-
+from tests._util import build_sdfg
 
 _DRIVER_PROLOGUE_HEAD = """
 MODULE kernel_mod

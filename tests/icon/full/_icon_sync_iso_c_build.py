@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 _WRAPPER_SRC = _HERE / "icon_sync_iso_c.f90"
@@ -15,8 +14,8 @@ def build_icon_sync_iso_c_so(
     icon_build: Path,
     out_dir: Path,
     *,
-    fc: Optional[str] = None,
-) -> Optional[Path]:
+    fc: str | None = None,
+) -> Path | None:
     """Compile and link the wrapper into ``out_dir/libicon_sync_iso_c.so`` against
     ``icon_build``'s ``.mod`` files. ``fc`` defaults to ``$FC``/gfortran; pass an explicit
     compiler to target ICON's GPU build or a non-default toolchain. Returns ``None`` if the

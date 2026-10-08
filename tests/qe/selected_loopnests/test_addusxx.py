@@ -34,7 +34,6 @@ import pytest
 from tests._prng import complex_stream
 from tests._util import build_sdfg
 
-
 # Small symbolic problem sizes -- a correctness test, not a benchmark.
 # ``ncol = nh*nh`` qgm columns, ``nbeta = nat*nh`` projector entries.
 _NGMS, _NH, _NAT, _NT, _NM, _NRHO = 5, 3, 3, 2, 7, 9

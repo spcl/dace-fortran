@@ -6,9 +6,8 @@ rename) so each call site gets its own VarInfo."""
 
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
-
+from tests._util import build_sdfg
 
 _BAR_DEF = """
 SUBROUTINE bar(x)

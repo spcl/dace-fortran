@@ -23,11 +23,12 @@ on the freshly emitted graph, before anything renumbers nodes.
 """
 
 from __future__ import annotations
+
 from collections import defaultdict
+from typing import TYPE_CHECKING, NamedTuple
 
 from dace import Memlet
 from dace.sdfg import nodes
-from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from dace import SDFG

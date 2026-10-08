@@ -18,7 +18,6 @@ import pytest
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.preprocess import MergeEngine
 
-
 _HELPER = """
 module mo_clamp
   implicit none

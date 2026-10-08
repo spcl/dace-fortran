@@ -5,7 +5,6 @@ Only the short ones so far; allocate-based/PROGRAM-wrapper cases wait on matchin
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # tests/fortran/fortran_loops_test.py  --  simplest nested-loop case.
 # ---------------------------------------------------------------------------

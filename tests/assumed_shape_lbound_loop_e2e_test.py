@@ -9,7 +9,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # ``a(10:)`` -> ``fir.shift %c10`` shape operand; ``ubound(a,1)`` lowers to
 # ``box_dims#0(lb) + box_dims#1(extent) - 1`` -- lb must resolve to ``offset_a_d0``, not ``?``.
 _SRC = """
@@ -36,7 +35,7 @@ def _bind_free_syms(sdfg, n: int) -> dict:
     for k in sdfg.arglist():
         if k.startswith("offset_") and k.endswith(tuple(f"_d{i}" for i in range(4))):
             out[k] = np.int64(1)
-        elif k == "a" or k == "out":
+        elif k in {"a", "out"}:
             continue
         elif k.endswith(tuple(f"_d{i}" for i in range(4))):
             out[k] = np.int64(n)

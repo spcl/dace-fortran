@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent

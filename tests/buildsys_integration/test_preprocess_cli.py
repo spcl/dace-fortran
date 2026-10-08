@@ -10,7 +10,7 @@ import sys
 def _run_cli(*argv: str, expect_rc: int = 0) -> tuple:
     """Run the CLI in a fresh subprocess; returns (stdout, stderr)."""
     cmd = [sys.executable, "-m", "dace_fortran.preprocess_cli", *argv]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert res.returncode == expect_rc, (
         f"CLI rc={res.returncode} (expected {expect_rc})\nargv={argv}\nstdout={res.stdout}\nstderr={res.stderr}"
     )
@@ -172,6 +172,7 @@ def test_stdin_to_stdout_works(tmp_path):
     cmd = [sys.executable, "-m", "dace_fortran.preprocess_cli", "--all-defaults", "--in", "-"]
     res = subprocess.run(
         cmd,
+        check=False,
         input=_STRING_ENUM_KERNEL.replace(
             "CHARACTER(LEN=1), INTENT(IN) :: action", "REAL(KIND=wp), INTENT(IN) :: dummy"
         ),
@@ -191,7 +192,7 @@ def test_stdin_to_stdout_works(tmp_path):
 def test_missing_in_flag_is_an_argument_error():
     """Without ``--in`` argparse exits rc=2 (its standard error code)."""
     cmd = [sys.executable, "-m", "dace_fortran.preprocess_cli", "--all-defaults"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert res.returncode == 2
 
 
@@ -267,7 +268,7 @@ def test_inplace_and_out_are_mutually_exclusive(tmp_path):
         "--out",
         str(out),
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert res.returncode != 0
     assert "mutually exclusive" in res.stderr.lower() or "mutually exclusive" in res.stdout.lower()
 

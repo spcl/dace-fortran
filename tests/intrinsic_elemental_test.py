@@ -25,7 +25,7 @@ end subroutine main
     sdfg(arg1=arg1, res1=res)
 
     py_res = np.exp(arg1)
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -49,7 +49,7 @@ end subroutine main
     sdfg(arg1=arg1, res1=res)
 
     py_res = np.exp(arg1)
-    for f_res, p_res in zip(res, py_res):
+    for f_res, p_res in zip(res, py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -75,7 +75,7 @@ end subroutine main
     assert res[0] == 0
     assert res[4] == 0
     py_res = np.exp(arg1[1:4])
-    for f_res, p_res in zip(res[1:4], py_res):
+    for f_res, p_res in zip(res[1:4], py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -123,7 +123,7 @@ END MODULE
     assert res[0] == 0
     assert res[4] == 0
     py_res = np.exp(arg1[1:4])
-    for f_res, p_res in zip(res[1:4], py_res):
+    for f_res, p_res in zip(res[1:4], py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -149,7 +149,7 @@ end subroutine main
     assert res[0] == 0
     assert res[4] == 0
     py_res = 1.0 - np.exp(arg1[1:4])
-    for f_res, p_res in zip(res[1:4], py_res):
+    for f_res, p_res in zip(res[1:4], py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 
@@ -175,7 +175,7 @@ end subroutine main
     assert res[0] == 0
     assert res[4] == 0
     py_res = arg1[1:4] - np.exp(arg1[1:4])
-    for f_res, p_res in zip(res[1:4], py_res):
+    for f_res, p_res in zip(res[1:4], py_res, strict=False):
         assert abs(f_res - p_res) < 10**-9
 
 

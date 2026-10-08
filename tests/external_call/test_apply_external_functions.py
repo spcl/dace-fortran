@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from tests._util import build_sdfg
 
 from dace_fortran.external import (
     Arg,
@@ -25,6 +24,7 @@ from dace_fortran.external import (
     registered_names,
 )
 from dace_fortran.external_functions import ExternalFunction
+from tests._util import build_sdfg
 
 # ---------------------------------------------------------------------------
 # contract -- registry population (no toolchain needed)

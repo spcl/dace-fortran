@@ -12,7 +12,7 @@ from dace_fortran.bindings import (
     FrozenSignature,
     SignatureDriftError,
 )
-from dace_fortran.bindings.frozen_signature import FrozenArgKind, HOST_STORAGE, ModuleOrigin, refreeze
+from dace_fortran.bindings.frozen_signature import HOST_STORAGE, FrozenArgKind, ModuleOrigin, refreeze
 
 
 def _demo_signature() -> FrozenSignature:

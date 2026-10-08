@@ -4,7 +4,6 @@ Numerical correctness is covered separately (d-face's blas_extensions_openblas_t
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent

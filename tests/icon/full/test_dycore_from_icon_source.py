@@ -29,6 +29,8 @@ from ._fc import (
 )
 from ._icon_sync_iso_c_build import (
     _WRAPPER_SRC as _SYNC_WRAPPER_SRC,
+)
+from ._icon_sync_iso_c_build import (
     build_icon_sync_iso_c_so,
 )
 

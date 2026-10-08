@@ -15,7 +15,6 @@ is dropped (the lib node's expansion owns the plan lifecycle).
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent

@@ -37,40 +37,39 @@ import contextlib
 import re
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import Union
 
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
+from dace_fortran.builder import DEFAULT_PIPELINE, SDFGBuilder
 from dace_fortran.entry_names import (
     procedure_definitions,
     require_fortran_name,
     resolve_entry_name,
     split_qualified_entry,
 )
-from dace_fortran.preprocess import MergeEngine
 from dace_fortran.external import (
     Arg,
     ExternalSignature,
     keep_external,
-    register_external,  # noqa: F401
+    register_external,
     registered_names,
 )
-from dace_fortran.builder import DEFAULT_PIPELINE, SDFGBuilder
 from dace_fortran.llvm_toolchain import require_flang
-from dace_fortran.preprocess import preprocess_fortran_source
+from dace_fortran.preprocess import MergeEngine, preprocess_fortran_source
 
 __all__ = [
+    "Arg",
+    "ExternalSignature",
     "build_sdfg",
     "build_sdfg_from_files",
     "build_sdfg_from_hlfir",
     "build_sdfg_from_project",
-    "register_external",
     "keep_external",
-    "ExternalSignature",
-    "Arg",
+    "register_external",
 ]
 
 
@@ -79,7 +78,7 @@ def _find_flang() -> str:
     return require_flang()
 
 
-def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
+def _flang_intrinsic_modules_path(flang_bin: str) -> Path | None:
     """Locate the LLVM-flang intrinsic-modules directory shipped beside ``flang_bin``.
 
     Probed paths (first match wins):
@@ -116,7 +115,7 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
 
 
 @contextlib.contextmanager
-def _scratch_dir(out_dir: Optional[Union[str, Path]], prefix: str) -> Iterator[Path]:
+def _scratch_dir(out_dir: Union[str, Path] | None, prefix: str) -> Iterator[Path]:
     """``out_dir`` when given, else a temporary directory removed on exit."""
     if out_dir is not None:
         yield Path(out_dir)
@@ -125,7 +124,7 @@ def _scratch_dir(out_dir: Optional[Union[str, Path]], prefix: str) -> Iterator[P
         yield Path(td)
 
 
-def _merge_external_names(external_names: Sequence[str] = ()) -> List[str]:
+def _merge_external_names(external_names: Sequence[str] = ()) -> list[str]:
     """The procedure names the module-merge must keep external (NOT inline) =
     any explicit ``external_names`` unioned with every name in the bridge's
     external registry (:func:`dace_fortran.external.registered_names`).
@@ -144,7 +143,7 @@ def _emit_hlfir(
     *,
     merge: bool,
     preprocess: bool,
-    merge_entry: Optional[str] = None,
+    merge_entry: str | None = None,
     merge_engine: MergeEngine = MergeEngine.REGEX,
     external_names: Sequence[str] = (),
     defines: Sequence[str] = (),
@@ -225,10 +224,10 @@ def _emit_hlfir(
 def make_builder(
     source: str,
     *,
-    entry: Optional[str] = None,
+    entry: str | None = None,
     name: str = "sdfg",
-    pipeline: Optional[str] = None,
-    out_dir: Optional[Union[str, Path]] = None,
+    pipeline: str | None = None,
+    out_dir: Union[str, Path] | None = None,
     preprocess: bool = False,
     defines: Sequence[str] = (),
     kind_map: dict | None = None,
@@ -280,10 +279,10 @@ def make_builder(
 def build_sdfg(
     source: str,
     *,
-    entry: Optional[str] = None,
+    entry: str | None = None,
     name: str = "sdfg",
-    pipeline: Optional[str] = None,
-    out_dir: Optional[Union[str, Path]] = None,
+    pipeline: str | None = None,
+    out_dir: Union[str, Path] | None = None,
     preprocess: bool = False,
     defines: Sequence[str] = (),
     kind_map: dict | None = None,
@@ -393,7 +392,7 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
 
 
 def build_sdfg_from_hlfir(
-    hlfir_path: Union[str, Path], *, entry: Optional[str] = None, pipeline: Optional[str] = None
+    hlfir_path: Union[str, Path], *, entry: str | None = None, pipeline: str | None = None
 ) -> SDFG:
     """Build a :class:`dace.SDFG` from a pre-emitted ``.hlfir`` file
     produced by the project's own build system (the tier-3 path; see
@@ -444,9 +443,9 @@ def build_sdfg_from_project(
     *,
     entry: str,
     stubs: Sequence[Union[str, Path]] = (),
-    out_dir: Optional[Union[str, Path]] = None,
-    pipeline: Optional[str] = None,
-    flang: Optional[str] = None,
+    out_dir: Union[str, Path] | None = None,
+    pipeline: str | None = None,
+    flang: str | None = None,
 ) -> SDFG:
     """Build a :class:`dace.SDFG` from a built project's
     ``compile_commands.json`` in one call -- tier 3.
@@ -500,10 +499,10 @@ def build_sdfg_from_project(
 def build_sdfg_from_files(
     files: Sequence[Union[str, Path]],
     *,
-    entry: Optional[str] = None,
+    entry: str | None = None,
     name: str = "sdfg",
-    pipeline: Optional[str] = None,
-    out_dir: Optional[Union[str, Path]] = None,
+    pipeline: str | None = None,
+    out_dir: Union[str, Path] | None = None,
     preprocess: bool = False,
     merge_engine: MergeEngine = MergeEngine.REGEX,
 ) -> SDFG:

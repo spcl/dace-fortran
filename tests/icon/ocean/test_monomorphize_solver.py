@@ -13,9 +13,8 @@ rewrite stats, synthesised ``act__tag`` + per-arm clones, zero surviving
 
 import re
 
-import pytest
-
 import fparser.two.Fortran2003 as f03
+import pytest
 from fparser.two.utils import walk
 
 from tests.icon.ocean._monomorphize_solver import ARTIFACT, depolymorphize_solver, parse_program

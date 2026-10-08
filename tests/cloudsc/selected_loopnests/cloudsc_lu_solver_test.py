@@ -17,8 +17,8 @@ E2e against an f2py-compiled reference of the same source.
 import dace
 import numpy as np
 
-from tests._util import build_sdfg
 from tests._helpers import f2py
+from tests._util import build_sdfg
 
 
 def test_fortran_frontend_cloudsc_lu_solver(tmp_path):

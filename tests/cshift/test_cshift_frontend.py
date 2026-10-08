@@ -5,7 +5,6 @@ dimension.  Tests stop at SDFG-build time -- the lib node's pure expansion stub
 
 from pathlib import Path
 
-
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent

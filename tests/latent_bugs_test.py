@@ -8,6 +8,7 @@ Convention: NaN==NaN and +/-inf==+/-inf for round-trip purposes -- printer emits
 assert via np.isnan/np.isinf + sign rather than equality."""
 
 import math
+
 import numpy as np
 
 from tests._util import build_sdfg

@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from dace_fortran.inliner.ast_desugaring import optimizations
 from tests._helpers import sdfg_call_args
 from tests._util import build_sdfg
-from dace_fortran.inliner.ast_desugaring import optimizations
 from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 #: Every sign combination of dividend and divisor, exact and inexact.

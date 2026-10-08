@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 # Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from copy import deepcopy
-from typing import Iterable, List, NamedTuple, Optional, Tuple, Union
+from typing import NamedTuple, Union
 
-from fparser.api import get_reader
 import fparser.two.Fortran2003 as f03
+from fparser.api import get_reader
 from fparser.two.utils import Base, BlockBase
 
 from .. import ast_utils
@@ -73,7 +74,7 @@ NAMED_STMTS_OF_INTEREST_CLASSES = (
 )
 
 
-def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
+def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> str | None:
     """Name of a statement node, or None for anonymous blocks."""
     if isinstance(node, f03.Specific_Binding):
         # Ref: https://github.com/stfc/fparser/blob/8c870f84edbf1a24dfbc886e2f7226d1b158d50b/src/fparser/two/Fortran2003.py#L2504
@@ -87,7 +88,7 @@ def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
         if name == "ABSTRACT":
             return None
     elif isinstance(node, f03.Proc_Component_Def_Stmt):
-        tgt, attrs, plist = node.children
+        _tgt, _attrs, plist = node.children
         assert len(plist.children) == 1, (
             f"Only one procedure per statement is accepted due to Fparser bug. Break down the line: {node}"
         )
@@ -103,7 +104,7 @@ def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
     return name
 
 
-def find_name_of_node(node: Base) -> Optional[str]:
+def find_name_of_node(node: Base) -> str | None:
     """Name of a node's contained named statement, or None."""
     if isinstance(node, NAMED_STMTS_OF_INTEREST_CLASSES):
         return find_name_of_stmt(node)
@@ -113,7 +114,7 @@ def find_name_of_node(node: Base) -> Optional[str]:
     return find_name_of_stmt(stmt)
 
 
-def find_scope_ancestor(node: Base) -> Optional[SCOPE_OBJECT_TYPES]:
+def find_scope_ancestor(node: Base) -> SCOPE_OBJECT_TYPES | None:
     """Nearest ancestor node that defines a scope, or None."""
     anc = node.parent
     while anc and not isinstance(anc, SCOPE_OBJECT_CLASSES):
@@ -121,7 +122,7 @@ def find_scope_ancestor(node: Base) -> Optional[SCOPE_OBJECT_TYPES]:
     return anc
 
 
-def find_named_ancestor(node: Base) -> Optional[NAMED_STMTS_OF_INTEREST_TYPES]:
+def find_named_ancestor(node: Base) -> NAMED_STMTS_OF_INTEREST_TYPES | None:
     """Nearest named-statement-of-interest ancestor, or None."""
     anc = find_scope_ancestor(node)
     if not anc:
@@ -129,7 +130,7 @@ def find_named_ancestor(node: Base) -> Optional[NAMED_STMTS_OF_INTEREST_TYPES]:
     return ast_utils.atmost_one(ast_utils.children_of_type(anc, NAMED_STMTS_OF_INTEREST_CLASSES))
 
 
-def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
+def lineage(anc: Base, des: Base) -> tuple[Base, ...] | None:
     """Path from anc to des, or None if des is not a descendant of anc."""
     if anc is des:
         return (anc,)
@@ -138,7 +139,7 @@ def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
     lin = lineage(anc, des.parent)
     if not lin:
         return None
-    return lin + (des,)
+    return (*lin, des)
 
 
 def _reparent_children(node: Base) -> None:
@@ -161,7 +162,7 @@ def set_children(par: Base, children: Iterable[Union[Base, str, None]]) -> None:
         _reparent_children(par)
 
 
-def remove_self(nodes: Union[Base, List[Base]]) -> None:
+def remove_self(nodes: Union[Base, list[Base]]) -> None:
     """Removes one or more nodes from their parent's children."""
     if isinstance(nodes, Base):
         nodes = [nodes]
@@ -173,7 +174,7 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     """Replaces `node` with `subst` (None deletes it; can be a single node or iterable)."""
     # Ensure substituted nodes aren't the same object reused at multiple sites.
     par = node.parent
-    repls: List[Union[Base, str, None]] = []
+    repls: list[Union[Base, str, None]] = []
     found = False
     for c in par.children:
         if c is not node:
@@ -184,7 +185,7 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     if not found and isinstance(par, f03.Loop_Control) and isinstance(subst, Base):
         _, cntexpr, _, _ = par.children
         if cntexpr:
-            loopvar, looprange = cntexpr
+            _loopvar, looprange = cntexpr
             for i in range(len(looprange)):
                 if looprange[i] is node:
                     looprange[i] = subst
@@ -192,21 +193,21 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]) -> None:
     set_children(par, repls)
 
 
-def append_children(par: Base, children: Union[Base, List[Base]]) -> None:
+def append_children(par: Base, children: Union[Base, list[Base]]) -> None:
     """Appends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, list(par.children) + children)
 
 
-def prepend_children(par: Base, children: Union[Base, List[Base]]) -> None:
+def prepend_children(par: Base, children: Union[Base, list[Base]]) -> None:
     """Prepends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, children + list(par.children))
 
 
-def remove_children(par: Base, children: Union[Base, List[Base]]) -> None:
+def remove_children(par: Base, children: Union[Base, list[Base]]) -> None:
     """Removes specific children (a single node or a list) from `par`."""
     if isinstance(children, Base):
         children = [children]
@@ -219,10 +220,7 @@ def copy_fparser_node(n: Base) -> Base:
     """Copies a node by re-parsing its Fortran text; falls back to deepcopy on failure."""
     try:
         nstr = n.tofortran()
-        if isinstance(n, BlockBase):
-            x = Base.__new__(type(n), get_reader(nstr))
-        else:
-            x = Base.__new__(type(n), nstr)
+        x = Base.__new__(type(n), get_reader(nstr)) if isinstance(n, BlockBase) else Base.__new__(type(n), nstr)
         assert x is not None
         return x
     except (RuntimeError, AssertionError):
@@ -231,9 +229,9 @@ def copy_fparser_node(n: Base) -> Base:
 
 class ModuleParts(NamedTuple):
     stmt: Union[f03.Module_Stmt, f03.Program_Stmt]
-    spec: Optional[f03.Specification_Part]
-    execution: Optional[f03.Execution_Part]
-    subprograms: Optional[f03.Module_Subprogram_Part]
+    spec: f03.Specification_Part | None
+    execution: f03.Execution_Part | None
+    subprograms: f03.Module_Subprogram_Part | None
 
 
 def get_module_or_program_parts(

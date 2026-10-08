@@ -30,7 +30,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 module cloudsc_mod
   implicit none

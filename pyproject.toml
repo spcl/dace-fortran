@@ -83,6 +83,31 @@ line-length = 120
 target-version = "py310"
 extend-exclude = ["tests/icon/full/icon-model", "tests/cloudsc/variants/dwarf-p-cloudsc"]
 
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # The set agreed for dace (Tal): annotations, docstrings, unused arguments, dict(...) calls, magic values.
+    "F821", "F841", "ANN", "D", "EM101", "EM102", "ARG", "C408", "PLR2004",
+    # Conflict with ruff format.
+    "COM812", "E501",
+    # Tests assert; scripts print and run subprocesses; error messages are written inline.
+    "S", "T201", "TRY003", "TRY300",
+    # Lazy imports (fparser, MLIR bridge), private access between our own modules, Fortran-style names.
+    "PLC0415", "SLF001", "N8",
+    # Size and style heuristics.
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "FBT", "TD", "FIX", "ERA001", "PT006", "PT018",
+    # Imports stay where annotations read them at runtime; os.path stays; tests and scripts catch broadly.
+    "TC", "PTH", "PERF203", "PERF401", "BLE001", "S108", "S110", "S112", "PT011", "PT019",
+    # Scripts and stubs are not packages.
+    "INP001", "EXE001", "PYI021", "N999",
+    # Closures here run inside the iteration that defines them; DaCe config variables are mixed case.
+    "B023", "SIM112",
+    # Loop variables are rebound on purpose; class-level tables are constants; tests raise blind exceptions.
+    "PLW2901", "RUF012", "A001", "B017", "PLC0206",
+    # ``Union[...]`` aliases are runtime objects (walk/isinstance targets); package-relative imports stay.
+    "UP007", "TID252",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # Spack recipes star-import the package DSL by spack's own convention.
 "spack/**/package.py" = ["F403", "F405"]

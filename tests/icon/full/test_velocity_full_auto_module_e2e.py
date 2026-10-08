@@ -125,7 +125,7 @@ def test_velocity_full_auto_module_provenance_e2e(tmp_path: Path):
     vf._run(ref_lib, "run_velocity_flat_c", dims, bufs_ref, z_ref)
     vf._run(sdfg_lib, "run_velocity_flat_sdfg", dims, bufs_sdfg, z_sdfg)
 
-    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref)))
+    extras = dict(zip(("z_w_concorr_me", "z_kin_hor_e", "z_vt_ie"), zip(z_sdfg, z_ref, strict=False), strict=False))
     mismatches = []
     mutated = False
     for nm in vf._OUTPUT_NAMES:

@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-
 _ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
 _ENTRY_MODULE = "mo_solve_nonhydro"  # the defining module
 _ENTRY_PROC = "solve_nh"  # the plain Fortran procedure name

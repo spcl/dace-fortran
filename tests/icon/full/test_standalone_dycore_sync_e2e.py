@@ -22,10 +22,10 @@ from pathlib import Path
 import dace
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
+from tests._util import build_sdfg, gfortran_compile_so
 
 # ``-O0 -fno-fast-math -ffp-contract=off`` pinned on every layer (gfortran reference
 # link, SDFG-side gfortran link of the binding wrapper, DaCe's C++ codegen -- overriding
@@ -129,7 +129,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     from ctypes with the same random input; bit-exact match confirms the SDFG's
     stencil lowering + external-call routing."""
     # 1. Pre-build the no-op sync library.
-    sync_so, sync_build_dir = _build_sync_lib(tmp_path)
+    sync_so, _sync_build_dir = _build_sync_lib(tmp_path)
 
     # 2. register BEFORE the SDFG build so the bridge externalises it instead of inlining.
     clear_external_registry()

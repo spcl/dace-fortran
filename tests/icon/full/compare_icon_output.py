@@ -21,8 +21,8 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
 import netCDF4
+import numpy as np
 
 
 def _load(var):

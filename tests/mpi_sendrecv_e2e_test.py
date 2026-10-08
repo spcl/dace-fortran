@@ -40,8 +40,8 @@ end module ring_mod
 
 @pytest.mark.mpi
 def test_ring_send_recv_numeric(tmp_path: Path):
-    from mpi4py import MPI
     from dace.sdfg import utils
+    from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -94,8 +94,8 @@ end module nbring_mod
 @pytest.mark.mpi
 def test_nonblocking_ring_numeric(tmp_path: Path):
     """Nonblocking ring (Irecv+Isend+Wait+Wait): rank r must receive (r-1)%size from its predecessor."""
-    from mpi4py import MPI
     from dace.sdfg import utils
+    from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()

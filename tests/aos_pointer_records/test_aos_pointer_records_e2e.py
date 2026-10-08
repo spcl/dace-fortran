@@ -17,7 +17,7 @@ import dace_fortran
 _HERE = Path(__file__).resolve().parent
 
 
-def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
+def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict | None = None):
     """Compile ``src`` via ``numpy.f2py`` and import the resulting module.
 
     ``kind_map`` writes a ``.f2py_f2cmap`` for symbolic kind aliases (``wp``, ``JPRB``) f2py can't resolve itself.
@@ -25,7 +25,7 @@ def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
     out_dir.mkdir(parents=True, exist_ok=True)
     if kind_map:
         # f2py reads .f2py_f2cmap from cwd; maps Fortran TypeName -> {kind_alias: ctype}.
-        as_dict = {"real": {a: c for a, c in kind_map.items()}}
+        as_dict = {"real": dict(kind_map.items())}
         (out_dir / ".f2py_f2cmap").write_text(repr(as_dict))
     subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
     if str(out_dir) not in sys.path:

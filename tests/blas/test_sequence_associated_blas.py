@@ -8,7 +8,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 _SRC = """
 SUBROUTINE mydgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
   DOUBLE PRECISION, INTENT(IN) :: alpha, beta

@@ -58,16 +58,17 @@ the extractor reports ``velocity_tendencies``' six scalars as
 
 from __future__ import annotations
 
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 import json
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
+from typing import TYPE_CHECKING
 
 import dace
-from typing import TYPE_CHECKING
+
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 
 if TYPE_CHECKING:
     from dace_fortran.bindings.frozen_signature import FrozenSignature
@@ -122,8 +123,8 @@ class AccResidency:
     routine: str
     source: str
     args: Mapping[str, Residency]
-    unclassified: Tuple[str, ...] = ()
-    refs: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
+    unclassified: tuple[str, ...] = ()
+    refs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def has_device_args(self) -> bool:
@@ -131,7 +132,7 @@ class AccResidency:
         return any(r is DEVICE for r in self.args.values())
 
     @classmethod
-    def from_dict(cls, raw: Mapping) -> "AccResidency":
+    def from_dict(cls, raw: Mapping) -> AccResidency:
         """Build from the sidecar mapping, rejecting unknown residencies."""
         args = {}
         refs = {}
@@ -157,7 +158,7 @@ class AccResidency:
         )
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "AccResidency":
+    def from_file(cls, path: str | Path) -> AccResidency:
         """Read and parse the sidecar at ``path``."""
         path = Path(path)
         try:
@@ -179,13 +180,13 @@ class AccTransferPlan:
     A given build uses one pair or the other, never both.
     """
 
-    update_host: Tuple[str, ...] = ()
-    update_device: Tuple[str, ...] = ()
-    use_device: Tuple[str, ...] = ()
+    update_host: tuple[str, ...] = ()
+    update_device: tuple[str, ...] = ()
+    use_device: tuple[str, ...] = ()
     storage: Mapping[str, Residency] = field(default_factory=dict)
-    copyin: Tuple[str, ...] = ()
-    copyout: Tuple[str, ...] = ()
-    copy: Tuple[str, ...] = ()
+    copyin: tuple[str, ...] = ()
+    copyout: tuple[str, ...] = ()
+    copy: tuple[str, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -193,13 +194,13 @@ class AccTransferPlan:
         return bool(self.update_host or self.update_device or self.use_device or self.data_region)
 
     @property
-    def data_region(self) -> Tuple[Tuple[str, str], ...]:
+    def data_region(self) -> tuple[tuple[str, str], ...]:
         """``(clause, name)`` pairs for the ``!$ACC DATA`` region, in emission order."""
         groups = (("COPYIN", self.copyin), ("COPY", self.copy), ("COPYOUT", self.copyout))
         return tuple((clause, name) for clause, names in groups for name in names)
 
 
-def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> Tuple[str, ...]:
+def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> tuple[str, ...]:
     """Non-transient SDFG data containers backing wrapper argument ``arg``.
 
     ``hlfir-flatten-structs`` unpacks a derived-type dummy into one flat
@@ -240,7 +241,7 @@ def _arg_storage(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> Reside
     return sides.pop()
 
 
-def _written_args(sdfg: dace.SDFG, containers: Mapping[str, Tuple[str, ...]]) -> frozenset:
+def _written_args(sdfg: dace.SDFG, containers: Mapping[str, tuple[str, ...]]) -> frozenset:
     """Wrapper arguments the SDFG writes, via ``SDFG.read_and_write_sets``."""
     _, write_set = sdfg.read_and_write_sets()
     return frozenset(arg for arg, names in containers.items() if write_set & set(names))
@@ -382,7 +383,7 @@ def plan_frozen_transfers(frozen: FrozenSignature) -> AccTransferPlan:
     must hand the SDFG the DEVICE address, which is what ``HOST_DATA USE_DEVICE`` makes
     ``c_loc`` return.  Argument order follows the snapshot, so the emission is stable.
     """
-    by_clause: Dict[str, list] = {"copyin": [], "copyout": [], "copy": []}
+    by_clause: dict[str, list] = {"copyin": [], "copyout": [], "copy": []}
     for arg in frozen.args:
         clause = arg.acc_data_clause
         if clause:
@@ -419,7 +420,7 @@ def render_data_open(plan: AccTransferPlan, indent: str = "  ", directive: Direc
     lines = [f"{indent}!$ACC DATA &"]
     lines += [f"{indent}!$ACC   {clause}({name}) &" for clause, name in pairs[:-1]]
     clause, name = pairs[-1]
-    return lines + [f"{indent}!$ACC   {clause}({name})"]
+    return [*lines, f"{indent}!$ACC   {clause}({name})"]
 
 
 def render_data_close(plan: AccTransferPlan, indent: str = "  ", directive: Directive = Directive.OPENACC) -> list:
@@ -462,7 +463,7 @@ def render_host_data_open(plan: AccTransferPlan, indent: str = "  ", directive: 
             return [f"{indent}!$omp target data use_device_addr({names[0]})"]
         lines = [f"{indent}!$omp target data use_device_addr({names[0]}, &"]
         lines += [f"{indent}!$omp&   {name}, &" for name in names[1:-1]]
-        return lines + [f"{indent}!$omp&   {names[-1]})"]
+        return [*lines, f"{indent}!$omp&   {names[-1]})"]
     return [f"{indent}!$ACC HOST_DATA USE_DEVICE({', '.join(plan.use_device)})"]
 
 

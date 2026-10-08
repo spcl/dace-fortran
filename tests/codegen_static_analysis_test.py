@@ -13,7 +13,6 @@ import pytest
 from tests._util import build_sdfg
 from tests.codegen_check import CRITICAL_WARNINGS, analyze
 
-
 # An ALLOCATE whose extent comes from a runtime scalar, plus a loop nest over it -- the shape that produced the
 # uninitialised-extent miscompile.  Kept tiny so the analysis, not the build, dominates the runtime.
 ALLOCATE_SRC = """

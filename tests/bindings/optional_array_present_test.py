@@ -16,10 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
-from tests._util import build_sdfg, gfortran_compile_so
 from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
-
+from tests._util import build_sdfg, gfortran_compile_so
 
 # Minimal QE ``addusxx_g(becphi_c, ...)`` shape: an OPTIONAL ARRAY dummy whose
 # presence gates the whole computation.

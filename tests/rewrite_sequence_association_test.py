@@ -19,7 +19,6 @@ import numpy as np
 
 from tests._util import build_sdfg, compile_to_hlfir
 
-
 _PRELUDE = (
     "lower-fir-select-case,hlfir-inline-all,hlfir-fold-element-aliases,"
     "hlfir-expand-vector-subscript-gather,hlfir-expand-vector-subscript-scatter,symbol-dce,"
@@ -49,9 +48,9 @@ def _count_seq_adapter(ir: str) -> int:
         if "fir.convert" not in line:
             continue
         # Pattern: "(!fir.ref<T>) -> !fir.ref<!fir.array<?xT>>"
-        if "ref<!fir.array" in line and "!fir.ref<f" in line.split("->")[0]:
-            n += 1
-        elif "ref<!fir.array" in line and "!fir.ref<i" in line.split("->")[0]:
+        if ("ref<!fir.array" in line and "!fir.ref<f" in line.split("->")[0]) or (
+            "ref<!fir.array" in line and "!fir.ref<i" in line.split("->")[0]
+        ):
             n += 1
     return n
 

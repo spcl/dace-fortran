@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 # Module-level memo so a session that touches several ICON tests builds
 # at most once even before any external cache is warm.
@@ -46,7 +45,7 @@ def _missing_build_tools() -> list:
     return [t for t in need if shutil.which(t) is None]
 
 
-def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Optional[int] = None) -> Path:
+def ensure_icon_built(icon_src: Path, build_dir: Path | None = None, jobs: int | None = None) -> Path:
     """Configure + ``make`` ICON under ``build_dir`` (default ``<icon_src>/build/stock_cpu``).
     Idempotent: no-ops if ``<build_dir>/mod`` already has .mod files. Raises RuntimeError (not swallowed --
     tests must FAIL loudly, not silently skip) if the submodule is not checked out, tools are missing or the

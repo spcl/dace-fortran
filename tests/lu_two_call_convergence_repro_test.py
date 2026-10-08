@@ -12,12 +12,10 @@ Matches LU's ``dolu``: ``call ssor(1)`` (always 1 iter) then ``call ssor(itmax)`
 the multi-element convergence matching LU's ``rsdnm(1)<tolrsd(1) .and. ...`` shape.
 Isolates the bug from LU's full 1041-state SDFG for fast iteration."""
 
+import dace.data
 import numpy as np
 
 from tests._util import build_sdfg
-
-import dace.data
-
 
 _SRC = """\
 module m

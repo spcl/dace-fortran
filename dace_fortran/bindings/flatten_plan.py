@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,11 +67,11 @@ class FlattenRecipe:
         ``_build_symbol_assigns`` skips it (pack-in computes it directly).
     """
 
-    flat_names: Tuple[str, ...]
-    read_exprs: Tuple[str, ...]
+    flat_names: tuple[str, ...]
+    read_exprs: tuple[str, ...]
     write_expr: str = ""
     rank: int = 0
-    shape_exprs: Tuple[str, ...] = field(default_factory=tuple)
+    shape_exprs: tuple[str, ...] = field(default_factory=tuple)
     aliasable: bool = False
     scratch_dtype: str = "float64"
     aos_alloc: bool = False
@@ -89,7 +88,7 @@ class FlattenRecipe:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "FlattenRecipe":
+    def from_dict(cls, d: dict) -> FlattenRecipe:
         """Rebuild from a :meth:`to_dict` mapping (lists back to tuples)."""
         d = dict(d)
         d["flat_names"] = tuple(d.get("flat_names", []))
@@ -125,7 +124,7 @@ class FlattenEntry:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "FlattenEntry":
+    def from_dict(cls, d: dict) -> FlattenEntry:
         """Rebuild from a :meth:`to_dict` mapping."""
         return cls(
             outer_expr=d["outer_expr"],
@@ -170,7 +169,7 @@ class SyntheticGlobal:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SyntheticGlobal":
+    def from_dict(cls, d: dict) -> SyntheticGlobal:
         """Rebuild from a :meth:`to_dict` mapping."""
         return cls(
             symbol=d["symbol"],
@@ -194,8 +193,8 @@ class FlattenPlan:
         the binding wrapper before the call.
     """
 
-    entries: Tuple[FlattenEntry, ...] = field(default_factory=tuple)
-    synthetic_globals: Tuple[SyntheticGlobal, ...] = field(default_factory=tuple)
+    entries: tuple[FlattenEntry, ...] = field(default_factory=tuple)
+    synthetic_globals: tuple[SyntheticGlobal, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (one entry per flattened dummy)."""
@@ -205,7 +204,7 @@ class FlattenPlan:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "FlattenPlan":
+    def from_dict(cls, d: dict) -> FlattenPlan:
         """Rehydrate from a plain dict -- the bridge returns the MLIR-side
         ``hlfir.flatten_plan`` attribute in this same nested shape."""
         return cls(
@@ -219,7 +218,7 @@ class FlattenPlan:
             json.dump(self.to_dict(), fh, indent=2)
 
     @classmethod
-    def from_json(cls, path: str) -> "FlattenPlan":
+    def from_json(cls, path: str) -> FlattenPlan:
         """Load a plan previously written by :meth:`to_json`."""
         with open(path) as fh:
             return cls.from_dict(json.load(fh))
@@ -232,7 +231,7 @@ class FlattenPlan:
 _INDEX_RE = re.compile(r"\$i(\d+)")
 
 
-def substitute_indices(expr: str, names: Tuple[str, ...]) -> str:
+def substitute_indices(expr: str, names: tuple[str, ...]) -> str:
     """Replace ``$i1``, ``$i2``, ... placeholders with concrete loop
     variable names (``$i1`` -> ``names[0]``, etc).
 

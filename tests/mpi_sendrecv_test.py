@@ -5,9 +5,7 @@ Flang lowers ``call MPI_Send(...)`` to an opaque fir.call; the bridge recognises
 
 from pathlib import Path
 
-
 from tests._util import build_sdfg
-
 
 # external MPI decls + parameter constants so the program needs no mpi.mod / MPI install to lower (bridge sees the same opaque fir.call either way).
 _SENDRECV = """
@@ -144,8 +142,8 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
 def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
     """A non-default (runtime dummy) communicator flows as opaque dataflow: a CommF2c node (MPI_Comm_f2c) converts the Fortran integer handle into an opaque(MPI_Comm) feeding Send's _comm connector.  The Fortran handle stays in sdfg.arrays (CommF2c reads it) -- supersedes the legacy process-grid path, which dropped the handle and wired a _grid cartesian sub-comm connector instead."""
     import dace
-    from dace.libraries.mpi.nodes.send import Send
     from dace.libraries.mpi.nodes.comm_f2c import CommF2c
+    from dace.libraries.mpi.nodes.send import Send
 
     sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "sr_usercomm")
 

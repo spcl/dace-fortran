@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from dace_fortran.bindings.frozen_signature import FrozenArgKind
 from dace_fortran.bindings import (
     FlattenEntry,
     FlattenPlan,
@@ -18,6 +17,7 @@ from dace_fortran.bindings import (
     OriginalInterface,
     emit_bindings,
 )
+from dace_fortran.bindings.frozen_signature import FrozenArgKind
 
 # --------------------------------------------------------------------------
 # Fixtures

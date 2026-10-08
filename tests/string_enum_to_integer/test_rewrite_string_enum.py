@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from tests._util import flang_binary, flang_intrinsic_modules_path
 from dace_fortran.preprocess import rewrite_string_enum_to_integer
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
 
@@ -37,7 +37,7 @@ def test_basic_signature_becomes_integer():
     """``CHARACTER(LEN=1), INTENT(IN) :: action`` rewrites to
     ``INTEGER, INTENT(IN) :: action``."""
     src = _read("string_enum_basic_example.f90")
-    out, enum_maps = rewrite_string_enum_to_integer(src)
+    out, _enum_maps = rewrite_string_enum_to_integer(src)
     code = _strip_comments(out)
     assert re.search(r"(?im)^\s*INTEGER,\s*INTENT\s*\(\s*IN\s*\)\s*::\s*action\s*$", code), (
         "signature should be integer-typed after rewrite"
@@ -49,7 +49,7 @@ def test_basic_comparisons_become_integer_literals():
     """The three ``action == '<lit>'`` comparisons map to ``== 0``/``== 1``/``== 2``
     (first-appearance order)."""
     src = _read("string_enum_basic_example.f90")
-    out, enum_maps = rewrite_string_enum_to_integer(src)
+    out, _enum_maps = rewrite_string_enum_to_integer(src)
     code = _strip_comments(out)
     # All three integer comparisons present.
     assert re.search(r"action\s*==\s*0", code)
@@ -83,7 +83,7 @@ def test_case_insensitive_pairs_collapse_to_one_int():
     """``flag == 'c' .OR. flag == 'C'`` -- both literals map to the SAME integer, giving
     ``flag == 0 .OR. flag == 0`` (later collapsed by the optimiser)."""
     src = _read("string_enum_case_insensitive_example.f90")
-    out, enum_maps = rewrite_string_enum_to_integer(src)
+    _out, enum_maps = rewrite_string_enum_to_integer(src)
     m = enum_maps["run"]["flag"]
     # Three distinct case-insensitive groups, integers 0..2.
     assert set(m) == {"c", "r", "i"}
@@ -163,7 +163,7 @@ def test_idempotent():
     """A second pass over an already-rewritten source finds no
     CHARACTER dummies and is a no-op."""
     src = _read("string_enum_basic_example.f90")
-    once, m1 = rewrite_string_enum_to_integer(src)
+    once, _m1 = rewrite_string_enum_to_integer(src)
     twice, m2 = rewrite_string_enum_to_integer(once)
     assert once == twice
     assert m2 == {}  # nothing left to rewrite

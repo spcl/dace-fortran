@@ -32,10 +32,10 @@ import dace
 import numpy as np
 import pytest
 
-from tests._util import build_on_root
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.build import build_sdfg
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
+from tests._util import build_on_root
 from tests.icon.ocean._ocean_e2e import (
     _invoke,
     _resolve_module_seeds,
@@ -159,6 +159,7 @@ def _build_artifacts(tmp_path: Path) -> dict:
             f"-Wl,-rpath,{sync_so.parent}",
             f"-l:{sync_so.name}",
         ],
+        check=False,
         capture_output=True,
         text=True,
         cwd=str(tmp_path),

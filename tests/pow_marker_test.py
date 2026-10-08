@@ -15,8 +15,8 @@ from tests._util import build_sdfg
 
 
 def _tasklet_codes(sdfg) -> list[str]:
-    from dace.sdfg.state import SDFGState, ControlFlowRegion
     from dace.sdfg import nodes as nd
+    from dace.sdfg.state import ControlFlowRegion, SDFGState
 
     out = []
 

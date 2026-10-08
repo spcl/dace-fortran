@@ -21,7 +21,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Mirrors ast_v1_h_psi.f90:88-133 (xclib_dft_is + capital), wrapped so the
 # SELECT CASE result lands in an integer output.
 _SRC = """

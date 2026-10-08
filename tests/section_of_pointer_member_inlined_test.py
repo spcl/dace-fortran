@@ -23,7 +23,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # Two inlining levels are essential: mid takes the whole 3-D member and passes a per-block 2-D
 # SECTION to worker, so the section's base is an inlined ALIAS of the flat companion (chain
 # shape leaf -> section -> alias-declare -> companion) -- a single level doesn't reproduce the

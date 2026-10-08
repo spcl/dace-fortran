@@ -42,7 +42,6 @@ import pytest
 
 from tests._util import build_on_root, build_sdfg
 
-
 # Dual-typed nonblocking ring, per-request MPI_Wait (distinct request scalars
 # r1..r4 -> no request-array collapse).  MPI entry points are EXTERNAL with
 # OpenMPI constants hard-coded (SDFG-bridge convention: no ``use mpi`` .mod
@@ -231,6 +230,7 @@ def _gfortran_compiles(src: str, tmp: Path, name: str, *, prelude: str = "") -> 
     f90.write_text(prelude + "\n" + src)
     r = subprocess.run(
         ["gfortran", "-ffree-line-length-none", f"-J{tmp}", "-c", str(f90), "-o", str(tmp / f"{name}.o")],
+        check=False,
         capture_output=True,
         text=True,
         cwd=str(tmp),

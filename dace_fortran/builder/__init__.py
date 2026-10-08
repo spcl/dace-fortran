@@ -43,9 +43,10 @@ from __future__ import annotations
 import ast
 import gc
 import weakref
-from typing import Any, Callable, Sequence, cast
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
-from dace import InterstateEdge, SDFG, SDFGState, config
+from dace import SDFG, InterstateEdge, SDFGState, config
 from dace.data import Data
 from dace.frontend.python import astutils
 from dace.properties import CodeBlock
@@ -53,20 +54,23 @@ from dace.sdfg.state import ControlFlowRegion
 from dace.sdfg.utils import specialize_symbols
 from dace.subsets import Subset
 
+from dace_fortran.bindings.frozen_signature import FrozenArgKind, ModuleOrigin
 from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
-from dace_fortran.bindings.frozen_signature import FrozenArgKind, ModuleOrigin
-from dace_fortran.entry_names import split_qualified_entry
-
 from dace_fortran.builder.auto_dim_symbols import AutoDimSDFG
 from dace_fortran.builder.context import Ctx
-from dace_fortran.dace_types import connectors
-from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.builder.descriptors import (
     DTYPE,
     add_descriptors,
     emit_declare_transient,
     sdfg_name,
+)
+from dace_fortran.builder.emit_cfg import (
+    emit_assign,
+    emit_cond,
+    emit_loop,
+    emit_symbol_init,
+    emit_while,
 )
 from dace_fortran.builder.emit_library import (
     emit_blas,
@@ -84,14 +88,10 @@ from dace_fortran.builder.emit_library import (
     emit_return,
     emit_unsupported_libcall,
 )
-from dace_fortran.builder.emit_cfg import (
-    emit_assign,
-    emit_cond,
-    emit_loop,
-    emit_symbol_init,
-    emit_while,
-)
 from dace_fortran.builder.emit_tasklet import add_whole_array_fill, emit_scalar_assign
+from dace_fortran.builder.records import NodeLike, VarLike
+from dace_fortran.dace_types import connectors
+from dace_fortran.entry_names import split_qualified_entry
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
@@ -470,7 +470,7 @@ def global_is_baked_constant(v: VarLike) -> bool:
     #
     # Neither carries a Fortran-source symbol the caller could bind --
     # always bake.
-    if mangled.startswith("_QQro") or mangled.startswith("_QQcl"):
+    if mangled.startswith(("_QQro", "_QQcl")):
         return True
     tail = mangled[2:]
     return "EC" in tail or "F" in tail
@@ -618,7 +618,7 @@ def _resolve_entry_symbol(module: HlfirModule, entry: str) -> str:
     if not matches:
         raise RuntimeError(
             f"entry '{entry}': no Fortran procedure of that name in the module; "
-            f"available: {sorted(set(demangle_fortran_proc(s) for s in funcs))}"
+            f"available: {sorted({demangle_fortran_proc(s) for s in funcs})}"
         )
     raise RuntimeError(
         f"entry '{entry}' is ambiguous -- {len(matches)} procedures match ({matches}); qualify it as module::proc"
@@ -643,27 +643,27 @@ class SDFGBuilder:
     DTYPE = DTYPE
 
     __slots__ = (
-        "module",
-        "entry",
-        "fortran_source",
         "_fortran_interface_raw",
-        "variables",
-        "value_symbols",
-        "ast",
-        "write_set",
+        "_id_counter",
+        "_value_symbol_provenance",
+        "access_caches",
         "arrays",
-        "symbols",
-        "scalars",
+        "ast",
         "complex_component_aliases",
-        "offset_values",
+        "dace_name_map",
+        "entry",
         "extent_aliases",
-        "object_aliases",
+        "fortran_source",
+        "module",
         "object_alias_defs",
         "object_alias_flat_members",
-        "dace_name_map",
-        "_value_symbol_provenance",
-        "_id_counter",
-        "access_caches",
+        "object_aliases",
+        "offset_values",
+        "scalars",
+        "symbols",
+        "value_symbols",
+        "variables",
+        "write_set",
     )
 
     module: HlfirModule
@@ -689,7 +689,7 @@ class SDFGBuilder:
     _value_symbol_provenance: dict[str, tuple[str, str]]
     _id_counter: int
     #: Per-state ``{name: live AccessNode}`` cache behind ``access.acc`` (absent key = state not touched yet).
-    access_caches: "weakref.WeakKeyDictionary[Any, dict[str, Any]]"
+    access_caches: weakref.WeakKeyDictionary[Any, dict[str, Any]]
 
     def init_emit_state(self) -> None:
         """Reset the per-build emitter state to its empty defaults."""
@@ -771,9 +771,7 @@ class SDFGBuilder:
         self._classify()
 
     @classmethod
-    def from_files(
-        cls, hlfir_paths: Sequence[str], *, entry: str, pipeline: str = MULTI_FILE_PIPELINE
-    ) -> "SDFGBuilder":
+    def from_files(cls, hlfir_paths: Sequence[str], *, entry: str, pipeline: str = MULTI_FILE_PIPELINE) -> SDFGBuilder:
         """Parse and merge several HLFIR files, keep ``entry`` as the only
         public function, verify every remaining call resolves, then run
         the rewrite chain.
@@ -1172,8 +1170,8 @@ class SDFGBuilder:
         the transient as initialised before any read is checked (silencing
         the warning) AND the value is provably zero at every read.
         """
-        from dace import nodes as dace_nodes
         from dace import data as dace_data
+        from dace import nodes as dace_nodes
 
         # A transient is "written" iff some access node for it has an
         # incoming edge in any state.  Collect the written set first so a
@@ -1362,7 +1360,7 @@ class SDFGBuilder:
             if v.rank == 0:
                 val = v.const_data[0]
                 is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
-                expr = str(int(round(val))) if is_int else repr(float(val))
+                expr = str(round(val)) if is_int else repr(float(val))
                 if v.fortran_name in self.symbols:
                     symbol_inits.append((v.fortran_name, expr))
                 elif v.fortran_name in self.scalars:
@@ -1395,11 +1393,11 @@ class SDFGBuilder:
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
-                expr = str(int(round(float(val)))) if is_int else repr(float(val))
-                tname = "init_%s_%s" % (v.fortran_name, "_".join(str(i) for i in idx))
-                t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, "_o = %s" % expr)
+                expr = str(round(float(val))) if is_int else repr(float(val))
+                tname = "init_{}_{}".format(v.fortran_name, "_".join(str(i) for i in idx))
+                t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, f"_o = {expr}")
                 ctx.cur.add_edge(
-                    t, "_o", acc, None, Memlet("%s[%s]" % (v.fortran_name, ", ".join(str(i) for i in idx)))
+                    t, "_o", acc, None, Memlet("{}[{}]".format(v.fortran_name, ", ".join(str(i) for i in idx)))
                 )
         nxt = sdfg.add_state(f"s_{self.nid()}")
         edge = InterstateEdge(assignments=dict(symbol_inits)) if symbol_inits else InterstateEdge()
@@ -1523,10 +1521,11 @@ class SDFGBuilder:
               plain scalars while the caller contract is untouched.
         """
         from dace.transformation.passes import ConvertLengthOneArraysToScalars
+        from dace.transformation.passes.prune_symbols import RemoveUnusedSymbols
+        from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+
         from dace_fortran.builder.scalar_shape_symbol_cleanup import RemoveScalarFortranShapeSymbols
         from dace_fortran.integer_power_exponents import IntegerizePowerExponents
-        from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
-        from dace.transformation.passes.prune_symbols import RemoveUnusedSymbols
 
         # Empty-region cleanup: any ControlFlowRegion (LoopRegion,
         # ConditionalBlock branch, the top-level SDFG, etc.) that
@@ -1596,8 +1595,9 @@ class SDFGBuilder:
         # descriptor lookup is scoped correctly.  Idempotent (skips
         # already-subscripted refs / non-SDFG names), so re-running over
         # already-deref'd edges is a no-op.
+        from dace.sdfg.state import ConditionalBlock, LoopRegion
+
         from dace_fortran.builder.access import deref_len1_array_scalars
-        from dace.sdfg.state import LoopRegion, ConditionalBlock
 
         def _deref_cb(scope_sdfg: SDFG, cb: CodeBlock | None) -> CodeBlock | None:
             """Deref a CodeBlock in place; return the (possibly new) block."""
@@ -1644,6 +1644,7 @@ class SDFGBuilder:
         # ``import dace_fortran`` doesn't drag it in.
         from dace import dtypes
         from dace.data import Array, Scalar
+
         from dace_fortran.bindings.frozen_signature import (
             HOST_STORAGE,
             FrozenArg,
@@ -1947,7 +1948,8 @@ class SDFGBuilder:
             registered on the SDFG nor a dace-internal name.
         """
         import re
-        from dace.sdfg.nodes import Tasklet, NestedSDFG
+
+        from dace.sdfg.nodes import NestedSDFG, Tasklet
 
         unresolved = sorted(
             k for k in needed if k not in sdfg.symbols and k not in sdfg.arrays and not k.startswith("__dace")
@@ -2011,7 +2013,7 @@ class SDFGBuilder:
         self._id_counter += 1
         return i
 
-    _EMIT_DISPATCH: dict[str, Callable[["SDFGBuilder", Ctx, NodeLike, ControlFlowRegion], None]] = {
+    _EMIT_DISPATCH: dict[str, Callable[[SDFGBuilder, Ctx, NodeLike, ControlFlowRegion], None]] = {
         "assign": emit_assign,
         "loop": emit_loop,
         "while": emit_while,

@@ -12,7 +12,6 @@ import numpy as np
 
 from tests._util import build_sdfg
 
-
 # ---------------------------------------------------------------------------
 # Local runtime-sized AoS with SCALAR members -> per-member SoA companions (non-concat
 # dynamic path: ``rewrapWith`` produces box result#0, alloca ``array<?x?xf64>``).

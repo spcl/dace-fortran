@@ -12,27 +12,26 @@ rewrite is behaviour-preserving under gfortran.
 import subprocess
 from pathlib import Path
 
-import pytest
-
 import fparser.two.Fortran2003 as f03
+import pytest
 from fparser.two.utils import walk
 
-from tests._util import _FLANG
-from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program, UnsupportedProgram
+from dace_fortran.inliner.ast_desugaring.monomorphize import UnsupportedProgram, analyze, parse_program
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
-    AxisSpec,
-    clone_shared_interposers,
-    discover_axes,
     LADDER,
-    monomorphize,
-    monomorphize_auto,
+    RETYPE,
+    AxisSpec,
     MonomorphizationSpec,
     MonomorphizationStats,
+    clone_shared_interposers,
+    discover_axes,
+    monomorphize,
+    monomorphize_auto,
     monomorphize_component_dispatch,
     monomorphize_local_dispatch,
-    RETYPE,
     retype_to_concrete,
 )
+from tests._util import _FLANG
 
 SRC = """
 module m

@@ -6,7 +6,6 @@ textual expression when they disagreed on count (e.g. the MIN/MAX cmp+select pat
 """
 
 import numpy as np
-
 from dace.sdfg import nodes as nd
 
 from tests._util import build_sdfg

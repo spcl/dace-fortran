@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import TYPE_CHECKING, Any, Callable, Container, Iterator, NamedTuple, Sequence
+from collections.abc import Callable, Container, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from dace_fortran.builder.records import AccessLike, ComplexAliasSpec, NodeLike, SyntheticAccess, SyntheticVar
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from dace import SDFG
     from dace.sdfg.nodes import AccessNode
     from dace.sdfg.state import SDFGState
+
     from dace_fortran.builder import SDFGBuilder
 
 # Process-level (not per-SDFG) counter for unique '<arr>_at<gid>' names; avoids collisions across multi-file runs.
@@ -350,7 +352,7 @@ def _reserved_rewrite(name: str) -> str:
     ``FunctionClass``; arithmetic against a ``Symbol`` then fails).
     See ``builder.__init__.RESERVED_DACE_NAMES`` for the full set.
     Imported lazily to avoid a circular import at module load."""
-    from dace_fortran.builder import RESERVED_DACE_NAMES, DACE_NAME_PREFIX
+    from dace_fortran.builder import DACE_NAME_PREFIX, RESERVED_DACE_NAMES
 
     if name in RESERVED_DACE_NAMES:
         return DACE_NAME_PREFIX + name
