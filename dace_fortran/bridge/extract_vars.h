@@ -174,6 +174,12 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
 /// their per-variable module.walk into an O(1) lookup (O(module+variables) vs O(variables x module)).
 using AllocSitesIndex = std::map<std::string, std::vector<fir::AllocMemOp>>;
 
+/// One module walk: every fir.allocmem keyed by uniq_name.
+AllocSitesIndex buildAllocSitesIndex(mlir::ModuleOp module);
+
+/// One module walk: the short names with an ALLOCATED()/ASSOCIATED() reader (a fir.box_addr of their box).
+std::set<std::string> buildAllocatedReaderNames(mlir::ModuleOp module);
+
 /// True iff allocatable/pointer declName needs the per-variable ``<declName>_allocated`` int32 tracker (body
 /// ALLOCATEs/DEALLOCATEs it, or an ALLOCATED()/ASSOCIATED() reader exists); already-allocated dummies never queried by
 /// ALLOCATED() skip the tracker.

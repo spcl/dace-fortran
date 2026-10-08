@@ -2224,7 +2224,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // class per epoch (a, a_alloc1, ...); conditional ALLOCATE -> multi-site class sharing one buffer, each branch
       // assigning its extent symbol, merging at the IF join. See ALLOC_BUFFER_SSA_DESIGN.md.
       auto mod = decl->getParentOfType<mlir::ModuleOp>();
-      auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod) : std::vector<std::vector<fir::AllocMemOp>>{};
+      auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod, &kAllocSitesIndex)
+                         : std::vector<std::vector<fir::AllocMemOp>>{};
       unsigned cls = 0;
       for (unsigned ci = 0; ci < classes.size(); ++ci)
         for (auto site : classes[ci])
@@ -3277,6 +3278,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   // prior extractVariables would leak stale kEntryScope/kShortNameCollisions. Shares the same helper extractVariables
   // uses so the two paths can't drift.
   prepareExtractionState(module, entry_symbol);
+  kAllocSitesIndex = buildAllocSitesIndex(module);
 
   std::vector<ASTNode> result;
   module.walk([&](mlir::func::FuncOp func) {
@@ -3293,6 +3295,9 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   // before the first ALLOCATE return 0 instead of DaCe's uninitialised value.
   {
     std::vector<std::string> allocNames;
+    // Per-declare lookups below go through these, not a module walk each (quadratic in a fully inlined entry).
+    const AllocSitesIndex& allocIdx = kAllocSitesIndex;
+    const std::set<std::string> readerNames = buildAllocatedReaderNames(module);
     module.walk([&](hlfir::DeclareOp op) {
       auto attrs = op.getFortranAttrs();
       if (!attrs) return;
@@ -3301,7 +3306,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
       if (raw.empty()) return;
       // Skips allocatables with neither ALLOCATE writes nor ALLOCATED(...) reads -- the tracker would be dead weight
       // (Phase H); needsAllocatedTracker keys on the declare's full uniq_name.
-      if (!needsAllocatedTracker(op.getUniqName().str(), module)) return;
+      if (!needsAllocatedTracker(op.getUniqName().str(), module, &allocIdx, &readerNames)) return;
       // A module-global allocatable read via ALLOCATED(...) but never allocated in-kernel gets its state from the
       // caller -- forcing 0 here would fold the kernel's branch regardless of host state, so leave it a free input
       // symbol (see _build_symbol_assigns). A global the kernel DOES allocate itself has an ALLOCATE site and keeps the
@@ -3317,7 +3322,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
               break;
             }
         }
-        if (moduleScope && collectAllocSites(op.getUniqName().str(), module).empty()) return;
+        if (moduleScope && collectAllocSites(op.getUniqName().str(), module, &allocIdx).empty()) return;
       }
       allocNames.push_back(std::move(raw));
     });

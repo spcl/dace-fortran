@@ -60,6 +60,10 @@ inline thread_local llvm::DenseSet<mlir::Operation*> kPendingSwitchResults;
 inline thread_local int kAllocaCounter = 0;
 inline thread_local llvm::DenseMap<mlir::Operation*, std::string> kAllocaMap;
 
+/// The module's fir.allocmem sites by uniq_name, built once per extractAST after the extraction-state renames: an
+/// ALLOCATE statement looks its buffer class up here instead of walking the module (quadratic on an inlined entry).
+inline thread_local AllocSitesIndex kAllocSitesIndex;
+
 /// Maps a libcall-producing hlfir op (matmul/transpose/dot_product) inlined inside an elemental body to the synthetic
 /// transient buildElementalAssign materialises ahead of the loop; buildExpr consults this for hlfir.apply.
 inline thread_local std::map<mlir::Operation*, std::string> kHlfirExprToTransient;

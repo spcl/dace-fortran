@@ -228,7 +228,7 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vec
 /// Build the :type:`AllocSitesIndex` (declared in extract_vars.h) with one
 /// module walk, so the per-variable helpers below look a name up instead of
 /// re-walking the module each time.
-static AllocSitesIndex buildAllocSitesIndex(mlir::ModuleOp module) {
+AllocSitesIndex buildAllocSitesIndex(mlir::ModuleOp module) {
   AllocSitesIndex idx;
   module.walk([&](fir::AllocMemOp a) {
     if (auto un = a.getUniqName()) idx[un->str()].push_back(a);
@@ -526,7 +526,7 @@ static std::vector<std::string> lowerBoundsFromAllocSite(fir::AllocMemOp alloc) 
 /// Short (post-``extractName``) names that have an ``ALLOCATED`` /
 /// ``ASSOCIATED`` reader (a ``fir.box_addr``), built with one module walk. Lets
 /// ``needsAllocatedTracker`` look a name up instead of re-walking per variable.
-static std::set<std::string> buildAllocatedReaderNames(mlir::ModuleOp module) {
+std::set<std::string> buildAllocatedReaderNames(mlir::ModuleOp module) {
   std::set<std::string> names;
   module.walk([&](fir::BoxAddrOp ba) {
     auto src = ba.getVal();
