@@ -1,4 +1,4 @@
-"""Arrays private to one loop are placed on the stack (``StorageType.Register(dynamic=True)``)."""
+"""Arrays private to one loop are placed on the stack (``StorageType.Register(force=True)``)."""
 
 import numpy as np
 import pytest
@@ -31,7 +31,7 @@ def test_a_loop_private_array_is_a_dynamic_register(tmp_path):
     loop_private = [
         name
         for name, desc in sdfg.arrays.items()
-        if isinstance(desc, data.Array) and desc.transient and dtypes.is_dynamic_register(desc.storage)
+        if isinstance(desc, data.Array) and desc.transient and desc.storage == dtypes.StorageType.Register and desc.storage.force
     ]
     assert loop_private, f"no loop-private array was placed on the stack: {sdfg.arrays}"
     assert not any(dtypes.StorageType.Register == sdfg.arrays[name].storage for name in ("a", "total"))

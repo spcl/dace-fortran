@@ -5,7 +5,7 @@
 A Fortran ``ALLOCATE`` / automatic array inside a ``DO`` body becomes a scope-lifetime transient whose
 size is often a runtime value; on the heap it costs an allocation per iteration.  An array that is
 only ever touched inside one outermost loop is private to that loop, so it is marked
-``StorageType.Register(dynamic=True)``, which places it on the stack whatever its size; a symbolic size
+``StorageType.Register(force=True)``, which places it on the stack whatever its size; a symbolic size
 becomes a variable-length array.
 """
 
@@ -29,7 +29,7 @@ def _outermost_loop(block: ControlFlowBlock) -> LoopRegion | None:
 
 def place_loop_local_arrays_on_stack(sdfg: SDFG) -> None:
     """Mark every scope-lifetime transient array accessed within a single outermost loop (and nowhere
-    else) of its SDFG as ``StorageType.Register(dynamic=True)``."""
+    else) of its SDFG as ``StorageType.Register(force=True)``."""
     for sd in sdfg.all_sdfgs_recursive():
         owners: dict[str, set[LoopRegion | None]] = {}
         array_names = sd.arrays.keys()  # walks every descriptor: once per SDFG, not per block
@@ -56,4 +56,4 @@ def place_loop_local_arrays_on_stack(sdfg: SDFG) -> None:
                 and len(loops) == 1
                 and None not in loops
             ):
-                desc.storage = dtypes.StorageType.Register(dynamic=True)
+                desc.storage = dtypes.StorageType.Register(force=True)
