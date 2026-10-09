@@ -2,6 +2,87 @@
 
 Lowers Fortran HPC kernels to optimisable [DaCe](https://github.com/spcl/dace) SDFGs; hands back a **Fortran-callable shared library** preserving the caller's original interface (SDFG drops in for the kernel it replaces).
 
+## Quick start: graupel and CloudSC, optimized end to end
+
+Each block builds the kernel's SDFG from its Fortran sources, runs DaCe's default parallelization pipeline on it
+(`dace_fortran.pipelines.optimize`, [below](#the-optimize-pipeline)), runs the optimized program on physical inputs
+from the test harnesses under `tests/` and checks it twice: the pre- and post-optimization SDFGs must agree bit for
+bit, and the outputs must match the gfortran build of the same source. Run them from the repository root after
+[installing](#install--build); `tests/readme_quickstart_test.py` executes exactly these blocks.
+
+<!-- optimize-graupel:begin -->
+```python
+import tempfile
+from pathlib import Path
+
+import dace
+
+import dace_fortran
+from dace_fortran.pipelines import num_maps, optimize
+from tests._util import BITEXACT_CPU_ARGS
+from tests.icon.graupel._graupel_harness import (
+    SCENARIOS, Config, assert_match, compile_reference, physical_columns, run_reference, sdfg_args,
+)
+
+graupel = Path("tests/icon/graupel")
+sources = [graupel / "aes_graupel" / f for f in ("mo_kind.f90", "mo_physical_constants.f90", "mo_aes_thermo.f90")]
+sources.append(graupel / "aes_graupel_fused" / "graupel.f90")
+sdfg = dace_fortran.build_sdfg_from_files(sources, entry="mo_aes_graupel::graupel_run", name="graupel_opt")
+
+# DaCe's default flags let gcc contract and rewrite floating-point arithmetic, differently in the unoptimized and
+# the optimized program; comparing them bit for bit needs value-preserving flags (-O3, no FMA contraction).
+dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
+
+# One 20-level column per regime (ice and snow, mixed-phase rain, melting layer, warm rain, dry), all of them.
+cfg = Config(ivstart=1, ivend=len(SCENARIOS), kstart=1)
+optimize(sdfg, verify_inputs=sdfg_args(physical_columns(), cfg))  # in place; validates every structural stage
+assert num_maps(sdfg) > 0
+
+reference, columns = physical_columns(), physical_columns()
+run_reference(compile_reference(Path(tempfile.mkdtemp()), [sources[-1]]), reference, cfg)  # gfortran -O0
+sdfg(**sdfg_args(columns, cfg))  # compiles once; the array extents (nvec x ke) are read off the arguments
+assert_match(reference, columns, rtol=1e-10, atol=1e-14)
+```
+<!-- optimize-graupel:end -->
+
+CloudSC bakes its species count first. Only `NCLV` reaches the SDFG as a free symbol (`CLOUDSCOUTER` sizes its
+arrays by its `NCLV` dummy; flang lowercases it): the `NCLDQ*` species indices `CLOUDSC` reads are `YOECLDP`
+`PARAMETER`s, already folded to literals by the build. `tests/e2e/test_cloudsc.py` runs the same check.
+
+<!-- optimize-cloudsc:begin -->
+```python
+import copy
+import tempfile
+from pathlib import Path
+
+import dace
+import numpy as np
+
+import dace_fortran
+from dace_fortran.pipelines import num_maps, optimize
+from tests._util import BITEXACT_CPU_ARGS
+from tests.cloudsc.full._harness import f2py_reference, run_against_reference
+from tests.cloudsc.full._registries import program_outputs
+
+source = Path("tests/cloudsc/full/cloudsc.F90").read_text()
+sdfg = dace_fortran.build_sdfg(source, entry="cloudscouter", name="cloudsc_opt")
+unoptimized = copy.deepcopy(sdfg)
+optimize(sdfg, symbols={"nclv": 5})
+assert num_maps(sdfg) > 0
+
+# DaCe's default flags let gcc contract and rewrite floating-point arithmetic, differently in the unoptimized and
+# the optimized program; comparing them bit for bit needs value-preserving flags (-O3, no FMA contraction).
+dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
+
+# One seeded physical state through gfortran -O0, the optimized SDFG and, bit for bit against it, the unoptimized one.
+got, want = run_against_reference(sdfg, f2py_reference(Path(tempfile.mkdtemp())), unoptimized=unoptimized)
+for name in program_outputs:
+    np.testing.assert_allclose(got[name.lower()], want[name.lower()], rtol=1e-11, atol=1e-11, err_msg=name)
+```
+<!-- optimize-cloudsc:end -->
+
+## Overview
+
 - Flang (`flang-new`) owns the front-end (parse / name-bind / type-infer / intrinsic-lower).
 - Consumes Flang's elaborated **HLFIR** (MLIR dialect) → MLIR pass pipeline normalises to one narrow IR shape → walks into `dace.SDFG` → regenerates `bind(c)` Fortran wrapper.
 - Targets: ICON (ocean + atmosphere dycore, graupel, velocity advection), Quantum ESPRESSO (`exx`), CLOUDSC, NPB, FV3, LULESH, + a large construct-level test corpus.
@@ -193,7 +274,7 @@ make -j8
 
 Override LLVM discovery with the `LLVM_VERSION` / `LLVM_DIR` env vars if auto-detection misses; `LLVM_VERSION` restricts the probe to that major, `LLVM_DIR` names an `LLVMConfig.cmake` directory directly (the major is then read out of that config).
 
-## Quick start
+## Building an SDFG
 
 Read the ICON AES graupel microphysics (`tests/icon/graupel/aes_graupel_fused/graupel.f90` and the three modules it `USE`s) into one SDFG, naming the entry as in Fortran, then validate and compile it.  Run from the repository root; `tests/readme_quickstart_test.py` executes exactly this block.
 
@@ -214,7 +295,7 @@ graupel_run = sdfg.compile()  # callable with the Fortran dummy arguments as key
 ```
 <!-- quickstart:end -->
 
-### Optimize: graupel and CloudSC end to end
+### The optimize pipeline
 
 `dace_fortran.pipelines.optimize` is the parallelization pipeline the CI e2e lanes run (`tests/e2e/`). It is the
 recipe of DaCe's `ParallelizePipeline`, which DaCe's own CI runs on the Python CloudSC
@@ -231,84 +312,10 @@ recipe of DaCe's `ParallelizePipeline`, which DaCe's own CI runs on the Python C
 8. **MakeTransientsPersistent**, **BindOmpThreadCount** -- allocate once, size the OpenMP team.
 
 The ICON AES graupel has nothing to specialize (its constants are Fortran `PARAMETER`s, folded by the build); the
-column loop `DO iv = ivstart, ivend` becomes a map, the level loops inside it stay sequential. Both blocks below run
-the optimized program on physical inputs from the test harnesses under `tests/` and check it twice:
-`optimize(..., verify_inputs=kwargs)` (or a replay of the unoptimized SDFG) requires the pre- and
-post-optimization SDFGs to agree bit for bit, and the outputs must match the gfortran build of the same source.
-Run them from the repository root; `tests/readme_quickstart_test.py` executes exactly these blocks.
+column loop `DO iv = ivstart, ivend` becomes a map, the level loops inside it stay sequential. CloudSC bakes its species
+count `nclv`. The two optimize blocks at the top of this README run exactly this pipeline.
 
-<!-- optimize-graupel:begin -->
-```python
-import tempfile
-from pathlib import Path
-
-import dace
-
-import dace_fortran
-from dace_fortran.pipelines import num_maps, optimize
-from tests._util import BITEXACT_CPU_ARGS
-from tests.icon.graupel._graupel_harness import (
-    SCENARIOS, Config, assert_match, compile_reference, physical_columns, run_reference, sdfg_args,
-)
-
-graupel = Path("tests/icon/graupel")
-sources = [graupel / "aes_graupel" / f for f in ("mo_kind.f90", "mo_physical_constants.f90", "mo_aes_thermo.f90")]
-sources.append(graupel / "aes_graupel_fused" / "graupel.f90")
-sdfg = dace_fortran.build_sdfg_from_files(sources, entry="mo_aes_graupel::graupel_run", name="graupel_opt")
-
-# DaCe's default flags let gcc contract and rewrite floating-point arithmetic, differently in the unoptimized and
-# the optimized program; comparing them bit for bit needs value-preserving flags (-O3, no FMA contraction).
-dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
-
-# One 20-level column per regime (ice and snow, mixed-phase rain, melting layer, warm rain, dry), all of them.
-cfg = Config(ivstart=1, ivend=len(SCENARIOS), kstart=1)
-optimize(sdfg, verify_inputs=sdfg_args(physical_columns(), cfg))  # in place; validates every structural stage
-assert num_maps(sdfg) > 0
-
-reference, columns = physical_columns(), physical_columns()
-run_reference(compile_reference(Path(tempfile.mkdtemp()), [sources[-1]]), reference, cfg)  # gfortran -O0
-sdfg(**sdfg_args(columns, cfg))  # compiles once; the array extents (nvec x ke) are read off the arguments
-assert_match(reference, columns, rtol=1e-10, atol=1e-14)
-```
-<!-- optimize-graupel:end -->
-
-CloudSC bakes its species count first. Only `NCLV` reaches the SDFG as a free symbol (`CLOUDSCOUTER` sizes its
-arrays by its `NCLV` dummy; flang lowercases it): the `NCLDQ*` species indices `CLOUDSC` reads are `YOECLDP`
-`PARAMETER`s, already folded to literals by the build. `tests/e2e/test_cloudsc.py` runs the same check.
-
-<!-- optimize-cloudsc:begin -->
-```python
-import copy
-import tempfile
-from pathlib import Path
-
-import dace
-import numpy as np
-
-import dace_fortran
-from dace_fortran.pipelines import num_maps, optimize
-from tests._util import BITEXACT_CPU_ARGS
-from tests.cloudsc.full._harness import f2py_reference, run_against_reference
-from tests.cloudsc.full._registries import program_outputs
-
-source = Path("tests/cloudsc/full/cloudsc.F90").read_text()
-sdfg = dace_fortran.build_sdfg(source, entry="cloudscouter", name="cloudsc_opt")
-unoptimized = copy.deepcopy(sdfg)
-optimize(sdfg, symbols={"nclv": 5})
-assert num_maps(sdfg) > 0
-
-# DaCe's default flags let gcc contract and rewrite floating-point arithmetic, differently in the unoptimized and
-# the optimized program; comparing them bit for bit needs value-preserving flags (-O3, no FMA contraction).
-dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
-
-# One seeded physical state through gfortran -O0, the optimized SDFG and, bit for bit against it, the unoptimized one.
-got, want = run_against_reference(sdfg, f2py_reference(Path(tempfile.mkdtemp())), unoptimized=unoptimized)
-for name in program_outputs:
-    np.testing.assert_allclose(got[name.lower()], want[name.lower()], rtol=1e-11, atol=1e-11, err_msg=name)
-```
-<!-- optimize-cloudsc:end -->
-
-The same for one self-contained source, plus a Fortran-callable library:
+Building from one self-contained source, plus a Fortran-callable library:
 
 ```python
 import dace_fortran
