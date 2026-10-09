@@ -35,38 +35,43 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     # Lanes, each sized to stay under ~45 minutes with warm caches:
     #   fast        every test outside the lanes below (uploads coverage)
-    #   e2e         the e2e pipeline tests except CloudSC and graupel, the multi-rank mpi tests, the integration
-    #               tests, QE h_psi
+    #   e2e         the e2e pipeline tests except CloudSC and graupel (the README optimize blocks among them), the
+    #               multi-rank mpi tests, the integration tests, QE h_psi
     #   e2e-cloudsc CloudSC through the pipeline, then the CloudSC numerical tests (each a multi-GB -O3 build, so
     #               one at a time: four at once exhaust the runner's memory)
     #   e2e-graupel ICON AES graupel through the pipeline, then the graupel numerical tests
-    #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean,graupel}, including those that need ICON built from
-    #               source (both builds cached per icon-model commit)
+    #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean,graupel} and tests/qe/h_psi, including those that
+    #               need ICON built from source (both builds cached per icon-model commit)
+    #   heavy-qe    the two full QE h_psi builds (h_psi inlines ~9.6k lines; each build alone runs tens of minutes, so
+    #               they get a lane, and a core each, of their own)
     #   heavy-atmo  long atmosphere tests; the single-TU extractions run one at a time (~9 GB each)
     #   heavy-ocean long ocean tests (~25 minutes)
     strategy:
       fail-fast: false
       matrix:
         llvm: ['21', '22']
-        lane: [fast, e2e, e2e-cloudsc, e2e-graupel, heavy-icon, heavy-atmo, heavy-ocean]
+        lane: [fast, e2e, e2e-cloudsc, e2e-graupel, heavy-icon, heavy-qe, heavy-atmo, heavy-ocean]
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    # A cold ICON cache adds two ICON builds to heavy-icon.
-    timeout-minutes: ${{ matrix.lane == 'heavy-icon' && 150 || matrix.lane == 'e2e-graupel' && 30 || 75 }}
+    # heavy-qe: test_h_psi_numerical_correctness's own pytest timeout is 120 minutes.
+    timeout-minutes: ${{ matrix.lane == 'heavy-qe' && 150 || matrix.lane == 'e2e-graupel' && 30 || 75 }}
     env:
       LLVM_VERSION: ${{ matrix.llvm }}
-      ICON_BUILD: ${{ github.workspace }}/../icon_build/stock_cpu
       PYTEST_OPTS: --maxfail=20 -p no:cacheprovider --tb=short --durations=30
       LONG: long and not mpi and not integration and not e2e
     steps:
     - uses: actions/checkout@v4
+
+    # Outside the checkout and spelled without "..", which actions/cache refuses to save.
+    - name: Locate the ICON build tree
+      run: echo "ICON_BUILD=$RUNNER_TEMP/icon_build/stock_cpu" >> "$GITHUB_ENV"
 
     - uses: ./.github/actions/setup
       with:
         llvm: ${{ matrix.llvm }}
 
     - name: Check out the icon-model submodule
-      if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' && matrix.lane != 'e2e-graupel' }}
+      if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' && matrix.lane != 'e2e-graupel' && matrix.lane != 'heavy-qe' }}
       id: icon-src
       # The nested submodules live on several hosts (gitlab.dkrz.de among them) whose fetches time out now and then.
       run: |
@@ -84,7 +89,7 @@ jobs:
       with:
         path: |
           tests/icon/dycore/.icon_build
-          ${{ github.workspace }}/../icon_build
+          ${{ runner.temp }}/icon_build
         key: icon-${{ steps.icon-src.outputs.sha }}-${{ hashFiles('tests/icon/dycore/setup_icon_dycore.sh', 'tests/icon/dycore/config/*', 'tests/icon/full/_icon_build.py') }}
 
     - name: Build ICON (compile_commands.json for the dycore parse test, the icon_build fixture tree)
@@ -100,7 +105,7 @@ jobs:
       with:
         path: |
           tests/icon/dycore/.icon_build
-          ${{ github.workspace }}/../icon_build
+          ${{ runner.temp }}/icon_build
         key: ${{ steps.icon-build.outputs.cache-primary-key }}
 
     - name: fast
@@ -159,7 +164,11 @@ jobs:
       if: ${{ matrix.lane == 'heavy-icon' }}
       run: |
         pytest -n auto --dist loadgroup -m "$LONG" $PYTEST_OPTS \
-          --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean --ignore=tests/icon/graupel tests/
+          --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean --ignore=tests/icon/graupel --ignore=tests/qe/h_psi tests/
+
+    - name: heavy-qe
+      if: ${{ matrix.lane == 'heavy-qe' }}
+      run: pytest -n 2 -m "$LONG" $PYTEST_OPTS tests/qe/h_psi
 
     - name: heavy-atmo
       if: ${{ matrix.lane == 'heavy-atmo' }}
