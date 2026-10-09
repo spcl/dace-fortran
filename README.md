@@ -406,7 +406,7 @@ pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and
 # e2e -- multi-rank MPI tests, integration tests, then QE vexx + ICON velocity_tendencies through the pipeline:
 mpirun --oversubscribe -n 4 python -m pytest -m mpi tests/
 python -m pytest -m "integration and not mpi" tests/
-python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py tests/
+python -m pytest -m "e2e and not mpi" --ignore=tests/e2e/test_cloudsc.py --ignore=tests/e2e/test_graupel.py tests/
 python -m pytest -m "not mpi and not long and not integration and not e2e" tests/qe/h_psi
 
 # e2e-cloudsc -- CloudSC through the pipeline, then the CloudSC numerical tests one at a time (each -O3 build
@@ -414,12 +414,15 @@ python -m pytest -m "not mpi and not long and not integration and not e2e" tests
 python -m pytest -m e2e tests/e2e/test_cloudsc.py
 python -m pytest -m "not mpi and not long and not integration and not e2e" tests/cloudsc/full tests/cloudsc/variants
 
-# heavy-icon -- long tests outside tests/icon/{atmosphere,ocean}; some need ICON built from source
-# (tests/icon/dycore/setup_icon_dycore.sh and the icon_build fixture, whose tree ICON_BUILD names; CI caches both):
+# heavy-icon -- long tests outside tests/icon/{atmosphere,ocean,graupel} and tests/qe/h_psi; some need ICON built from
+# source (tests/icon/dycore/setup_icon_dycore.sh and the icon_build fixture, whose tree ICON_BUILD names):
 pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
-    --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean tests/
+    --ignore=tests/icon/atmosphere --ignore=tests/icon/ocean --ignore=tests/icon/graupel --ignore=tests/qe/h_psi tests/
 
-# heavy-atmo, heavy-ocean-a/-b -- the long atmosphere and ocean tests (CI splits the ocean ones in two with -k):
+# heavy-qe -- the two full QE h_psi builds:
+pytest -n 2 -m "long and not mpi and not integration and not e2e" tests/qe/h_psi
+
+# heavy-atmo, heavy-ocean -- the long atmosphere and ocean tests:
 pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" tests/icon/atmosphere
 pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" tests/icon/ocean
 

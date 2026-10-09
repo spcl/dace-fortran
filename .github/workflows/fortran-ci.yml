@@ -41,7 +41,7 @@ jobs:
     #               one at a time: four at once exhaust the runner's memory)
     #   e2e-graupel ICON AES graupel through the pipeline, then the graupel numerical tests
     #   heavy-icon  long tests outside tests/icon/{atmosphere,ocean,graupel} and tests/qe/h_psi, including those that
-    #               need ICON built from source (both builds cached per icon-model commit)
+    #               need ICON built from source (~20 minutes of the lane)
     #   heavy-qe    the two full QE h_psi builds (h_psi inlines ~9.6k lines; each build alone runs tens of minutes, so
     #               they get a lane, and a core each, of their own)
     #   heavy-atmo  long atmosphere tests; the single-TU extractions run one at a time (~9 GB each)
@@ -62,7 +62,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Outside the checkout and spelled without "..", which actions/cache refuses to save.
     - name: Locate the ICON build tree
       run: echo "ICON_BUILD=$RUNNER_TEMP/icon_build/stock_cpu" >> "$GITHUB_ENV"
 
@@ -72,7 +71,6 @@ jobs:
 
     - name: Check out the icon-model submodule
       if: ${{ matrix.lane != 'fast' && matrix.lane != 'e2e-cloudsc' && matrix.lane != 'e2e-graupel' && matrix.lane != 'heavy-qe' }}
-      id: icon-src
       # The nested submodules live on several hosts (gitlab.dkrz.de among them) whose fetches time out now and then.
       run: |
         for attempt in 1 2 3; do
@@ -80,33 +78,15 @@ jobs:
           [ "$attempt" = 3 ] && exit 1
           sleep 60
         done
-        echo "sha=$(git -C tests/icon/full/icon-model rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-    - name: Restore the ICON builds
-      if: ${{ matrix.lane == 'heavy-icon' }}
-      id: icon-build
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          tests/icon/dycore/.icon_build
-          ${{ runner.temp }}/icon_build
-        key: icon-${{ steps.icon-src.outputs.sha }}-${{ hashFiles('tests/icon/dycore/setup_icon_dycore.sh', 'tests/icon/dycore/config/*', 'tests/icon/full/_icon_build.py') }}
-
+    # Built on every run, not cached: configuring ICON also writes into the submodule checkout (the flang wrapper
+    # under config/generic, autotools outputs), so a restored build tree does not match a fresh checkout.
     - name: Build ICON (compile_commands.json for the dycore parse test, the icon_build fixture tree)
-      if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}
+      if: ${{ matrix.lane == 'heavy-icon' }}
       run: |
         SKIP_APT=1 bash tests/icon/dycore/setup_icon_dycore.sh
         python -c "from pathlib import Path; from tests.icon.full._icon_build import ensure_icon_built; \
           ensure_icon_built(Path('tests/icon/full/icon-model'), Path('$ICON_BUILD'))"
-
-    - name: Save the ICON builds
-      if: ${{ matrix.lane == 'heavy-icon' && steps.icon-build.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
-      with:
-        path: |
-          tests/icon/dycore/.icon_build
-          ${{ runner.temp }}/icon_build
-        key: ${{ steps.icon-build.outputs.cache-primary-key }}
 
     - name: fast
       if: ${{ matrix.lane == 'fast' }}
