@@ -17,36 +17,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests._util import f2py_compile
-from tests.cloudsc.full._harness import run_cloudsc
-from tests.cloudsc.full._registries import (
-    CLOUDSC_F90FLAGS,
-    program_outputs,
-)
+from tests.cloudsc.full._harness import f2py_reference, run_cloudsc
+from tests.cloudsc.full._registries import program_outputs
 
 _HERE = Path(__file__).resolve().parent
 
 
 @pytest.fixture(scope="module")
 def _f2py_ref(tmp_path_factory):
-    """Build the f2py reference once per session (3541-line compile ~30-90s).
+    """The f2py reference, built once per module (3541-line compile, ~30-90 s).
 
     FP flags: flang-portable core ``-O0 -fno-fast-math -ffp-contract=off``. Neither side
     zero-fills locals, so an uninitialised-read divergence is a real bug, not a flag artifact.
-    ``-ffree-line-length-none`` is the sole gfortran-only flag (long-line source; flang has no
-    line limit).
     """
-    src = (_HERE / "cloudsc.F90").read_text()
-    ref_dir = tmp_path_factory.mktemp("cloudsc_ref")
-    # only=('cloudscouter',): hides inner CLOUDSC from crackfortran -- its TYPE(TOMCST/...)
-    # dummies map to 'void' and crash f2py (KeyError: 'void')
-    return f2py_compile(
-        src,
-        ref_dir,
-        "cloudsc_ref",
-        extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter",),
-    )
+    return f2py_reference(tmp_path_factory.mktemp("cloudsc_ref"))
 
 
 def test_cloudsc_full_numerical(tmp_path, _f2py_ref, _strict_fp_cpu_args):

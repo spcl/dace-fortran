@@ -7,83 +7,52 @@ why the inputs must be in-regime rather than uniform-random), with ``pipelines.o
 between the SDFG build and the run.
 
 CLOUDSC needs the ``specialize`` knob the ocean and QE kernels do without: it bakes the species
-counts so downstream shape and branch folding have literals. ``scalar_fission`` runs
+count NCLV so downstream shape and branch folding have literals. ``scalar_fission`` runs
 unconditionally in the pipeline; it is what splits the scalar-carried loop bodies so CLOUDSC's
 block loop can map at all.
 """
 
+import copy
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from dace_fortran.pipelines import num_maps, optimize
-from tests._util import f2py_compile
-from tests.cloudsc.full._harness import run_cloudsc
-from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, program_outputs
+from tests._util import build_sdfg
+from tests.cloudsc.full._harness import f2py_reference, run_against_reference
+from tests.cloudsc.full._registries import program_outputs
 
 pytestmark = pytest.mark.e2e
 
 _SRC = Path(__file__).resolve().parents[1] / "cloudsc" / "full" / "cloudsc.F90"
 
-# Species counts CLOUDSC treats as compile-time constants. flang lowercases identifiers and some
-# of these fold away during the build, so the names are matched against the live SDFG rather than
-# assumed present.
-_SPECIALIZE = {"NCLV": 5, "NCLDQI": 2, "NCLDQL": 1, "NCLDQR": 3, "NCLDQS": 4}
-
-
-def _split_specialize(sdfg):
-    """Split ``_SPECIALIZE`` into (symbols, scalars) by how each name appears in ``sdfg``.
-
-    A name already folded away by the build matches neither and is simply not specialized.
-    """
-    from dace.data import Scalar
-
-    present_syms = {str(s) for s in sdfg.free_symbols} | set(sdfg.symbols)
-    syms, scalars = {}, {}
-    for name, val in _SPECIALIZE.items():
-        for cand in (name, name.lower(), name.upper()):
-            if cand in present_syms:
-                syms[cand] = val
-                break
-            if cand in sdfg.arrays and isinstance(sdfg.arrays[cand], Scalar):
-                scalars[cand] = val
-                break
-    return syms, scalars
+# The species count, the one species constant that reaches the SDFG as a free symbol: CLOUDSCOUTER
+# sizes its arrays by its NCLV dummy, while CLOUDSC reads NCLV and the NCLDQ* species indices from
+# YOECLDP's PARAMETERs, which the build folds to literals (CLOUDSCOUTER's NCLDQ* dummies are unused).
+_SPECIALIZE = {"nclv": 5}
 
 
 @pytest.fixture(scope="module")
 def _f2py_ref(tmp_path_factory):
     """The untouched gfortran reference, built once (see cloudsc/full/test_cloudsc_full)."""
-    return f2py_compile(
-        _SRC.read_text(),
-        tmp_path_factory.mktemp("cloudsc_e2e_ref"),
-        "cloudsc_ref",
-        extra_f90flags=CLOUDSC_F90FLAGS,
-        only=("cloudscouter",),
-    )
+    return f2py_reference(tmp_path_factory.mktemp("cloudsc_e2e_ref"))
 
 
 def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
     """Optimized SDFG output == untouched-reference output, to fp64 precision.
 
-    ``verify_preopt`` adds the second, stricter question on the same seeded inputs: the pre- and
-    post-optimize SDFGs must agree BIT-EXACTLY. The reference comparison below can only be a 1e-11
-    one (frontend vs gfortran differ in evaluation order), so on its own a pipeline bug worth less
-    than 1e-11 passes; the differential has no such floor.
+    Replaying the unoptimized SDFG adds the second, stricter question on the same seeded inputs:
+    the pre- and post-optimize SDFGs must agree BIT-EXACTLY. The reference comparison below can only
+    be a 1e-11 one (frontend vs gfortran differ in evaluation order), so on its own a pipeline bug
+    worth less than 1e-11 passes; the differential has no such floor.
     """
-    maps = {}
+    sdfg = build_sdfg(_SRC.read_text(), tmp_path / "sdfg", name="cloudsc", entry="cloudscouter").build()
+    unoptimized = copy.deepcopy(sdfg)
+    optimize(sdfg, symbols=_SPECIALIZE)
+    assert num_maps(sdfg) > 0, "pipeline produced no maps -- nothing was parallelized"
 
-    def transform(sdfg):
-        syms, scalars = _split_specialize(sdfg)
-        optimize(sdfg, symbols=syms, scalars=scalars)
-        maps["n"] = num_maps(sdfg)
-
-    outputs_sdfg, outputs_ref = run_cloudsc(
-        _SRC.read_text(), "cloudsc", _f2py_ref, tmp_path / "sdfg", transform=transform, verify_preopt=True
-    )
-
-    assert maps["n"] > 0, "pipeline produced no maps -- nothing was parallelized"
+    outputs_sdfg, outputs_ref = run_against_reference(sdfg, _f2py_ref, unoptimized=unoptimized)
 
     rtol = atol = 1e-11  # fp64 precision guard
     report: list[str] = []
@@ -99,4 +68,12 @@ def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
+    import tempfile
+
+    import dace
+
+    from tests._util import BITEXACT_CPU_ARGS
+
+    dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
+    with tempfile.TemporaryDirectory() as tmp:
+        test_cloudsc_pipeline_numerical_e2e(Path(tmp) / "run", f2py_reference(Path(tmp) / "ref"), BITEXACT_CPU_ARGS)

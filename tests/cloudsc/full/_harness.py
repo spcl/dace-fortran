@@ -5,13 +5,15 @@ import re
 from pathlib import Path
 
 import numpy as np
+from dace import SDFG
 
 from dace_fortran.pipelines import accepted_call_args, verify_numerics
-from tests._util import build_sdfg
-from tests.cloudsc.full._registries import get_inputs_physical, get_outputs
+from tests._util import build_sdfg, f2py_compile
+from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, get_inputs_physical, get_outputs
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
 _ENTRY = "cloudscouter"
+_FULL_SOURCE = Path(__file__).resolve().parent / "cloudsc.F90"
 
 
 def lower_keys(d: dict) -> dict:
@@ -49,30 +51,34 @@ def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
     return out
 
 
-def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42, transform=None, verify_preopt=False):
-    """Build the SDFG and run both the f2py reference and the SDFG on identical seeded physical inputs.
+def f2py_reference(out_dir: Path):
+    """The untouched full ``cloudsc.F90`` through gfortran/f2py at ``CLOUDSC_F90FLAGS``, exposing ``cloudscouter`` only.
 
-    ``transform`` (optional) is called on the built SDFG before it runs -- an optimization pipeline,
-    say. Specializing bakes constants out of the signature, so whatever names the transform removes
-    are dropped from the call; with no transform that set is empty and the call is unchanged.
+    ``only``: the inner CLOUDSC's ``TYPE(TOMCST/...)`` dummies map to ``void`` and crash f2py's crackfortran.
+    """
+    return f2py_compile(
+        _FULL_SOURCE.read_text(), out_dir, "cloudsc_ref", extra_f90flags=CLOUDSC_F90FLAGS, only=(_ENTRY,)
+    )
 
-    ``verify_preopt`` snapshots the SDFG BEFORE ``transform`` and, after the run, replays both on the
-    same inputs requiring bit-identical results. That is a strictly different question from the
-    returned reference comparison: it isolates "did the pipeline change a value" from "does the
-    frontend match gfortran", and holds the bit-exact bar the 1e-11 reference comparison cannot.
-    Costs a deepcopy plus a compile and run of the unoptimized SDFG, so it is opt-in.
+
+def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42):
+    """Build the SDFG of ``src`` and :func:`run_against_reference` it as built."""
+    sdfg_dir.mkdir(parents=True, exist_ok=True)
+    return run_against_reference(build_sdfg(src, sdfg_dir, name=name, entry=_ENTRY).build(), f2py_ref, seed=seed)
+
+
+def run_against_reference(sdfg: SDFG, f2py_ref, *, unoptimized: SDFG | None = None, seed: int = 42):
+    """Run the f2py reference and ``sdfg`` on identical seeded physical inputs.
+
+    ``unoptimized`` is ``sdfg`` as built, before an optimization pipeline ran on it. It is replayed
+    on the same inputs and must agree with ``sdfg`` BIT-EXACTLY: a strictly different question from
+    the returned reference comparison, isolating "did the pipeline change a value" from "does the
+    frontend match gfortran" at a bar no reference tolerance can hold. Names it accepts that ``sdfg``
+    does not (specialization bakes them out of the signature) are dropped from ``sdfg``'s call.
 
     Returns ``(outputs_sdfg, outputs_ref)`` -- lowercase-keyed dicts for the caller to compare under its own mismatch policy.
     """
-    sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name=name, entry=_ENTRY).build()
-
-    preopt = copy.deepcopy(sdfg) if verify_preopt else None
-    baked = set()
-    if transform is not None:
-        before = accepted_call_args(sdfg)
-        transform(sdfg)
-        baked = before - accepted_call_args(sdfg)
+    baked = accepted_call_args(unoptimized) - accepted_call_args(sdfg) if unoptimized is not None else set()
 
     rng = np.random.default_rng(seed)
     inputs = get_inputs_physical(rng)
@@ -91,15 +97,14 @@ def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42
     # post-run dict would start both SDFGs from already-computed tendencies instead of the inputs.
     # Scalars are re-routed against the PRE-optimize descriptors -- specialization can change a
     # name's Scalar-vs-length-1-Array kind, and the snapshot must be called by its own convention.
-    verify_kwargs = None
-    if preopt is not None:
-        verify_kwargs = copy.deepcopy(sdfg_kwargs)
-        verify_kwargs.update(sdfg_call_args(preopt, scalars))  # fresh buffers per call
+    verify_kwargs = {}
+    if unoptimized is not None:
+        verify_kwargs = {**copy.deepcopy(sdfg_kwargs), **sdfg_call_args(unoptimized, scalars)}  # fresh buffers
     sdfg(**{k: v for k, v in sdfg_kwargs.items() if k not in baked})
 
-    if preopt is not None:
+    if unoptimized is not None:
         # Unfiltered: verify_numerics drops per-SDFG whatever each signature does not accept, so the
         # snapshot still receives the names specialization baked out of the optimized one.
-        verify_numerics(preopt, sdfg, verify_kwargs)
+        verify_numerics(unoptimized, sdfg, verify_kwargs)
 
     return outputs_sdfg, outputs_ref

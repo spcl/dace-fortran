@@ -65,7 +65,7 @@ class Config:
 def compile_reference(out_dir: Path, graupel_sources: list[Path]) -> ctypes.CDLL:
     """Build the multi-file gfortran reference into one ``.so`` and bind ``run_graupel_c``.
 
-    Sources compile in dependency order with ``cwd=out_dir`` so every USE finds the previous ``.mod``; ``-J`` is avoided because other tests may leave flang-built ``iso_c_binding.mod`` in shared temp paths that gfortran rejects. ``-O0 -ffp-contract=off`` keeps the reference free of FMA contraction.
+    Sources (relative paths resolve against the caller's cwd) compile in dependency order with ``cwd=out_dir`` so every USE finds the previous ``.mod``; ``-J`` is avoided because other tests may leave flang-built ``iso_c_binding.mod`` in shared temp paths that gfortran rejects. ``-O0 -ffp-contract=off`` keeps the reference free of FMA contraction.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libgraupel_ref.so"
@@ -73,7 +73,7 @@ def compile_reference(out_dir: Path, graupel_sources: list[Path]) -> ctypes.CDLL
     objects = []
     for src in [*DEP_SOURCES, *graupel_sources, CALLER]:
         obj = out_dir / (src.stem + ".o")
-        subprocess.run(["gfortran", *flags, "-c", str(src), "-o", str(obj)], check=True, cwd=str(out_dir))
+        subprocess.run(["gfortran", *flags, "-c", str(src.resolve()), "-o", str(obj)], check=True, cwd=str(out_dir))
         objects.append(str(obj))
     subprocess.run(["gfortran", "-shared", "-fPIC", "-o", str(so_path), *objects], check=True, cwd=str(out_dir))
     lib = ctypes.CDLL(str(so_path))
@@ -140,7 +140,7 @@ def physical_columns(ke: int = 20, dz0: float = 250.0, repeats: int = 1) -> dict
     """
     nvec = len(SCENARIOS) * repeats
     f = {n: np.zeros((nvec, ke), order="F") for n in (*IN_2D, *INOUT_2D, "pflx")}
-    f["qnc"] = np.linspace(1.0e8, 3.0e8, nvec)
+    f["qnc"] = np.linspace(1.0e8, 3.0e8, nvec).copy()  # linspace returns a view, which DaCe refuses as an argument
     for n in OUT_1D:
         f[n] = np.zeros(nvec)
     k = np.arange(1, ke + 1)
