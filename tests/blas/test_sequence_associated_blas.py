@@ -48,6 +48,14 @@ CONTAINS
     CALL mydgemm('C', 'N', nkb, m, 2 * npw, 2.0D0, beta, 2 * npwx, psi, 2 * npwx, 0.0D0, betapsi, nkb)
   END SUBROUTINE calbec_gemm
 
+  SUBROUTINE hpsi_gemm(npw, npwx, nkb, m, vkb, ps, hpsi)
+    INTEGER, INTENT(IN) :: npw, npwx, nkb, m
+    COMPLEX(8), INTENT(IN) :: vkb(npwx, nkb)
+    REAL(8), INTENT(IN) :: ps(nkb, m)
+    COMPLEX(8), INTENT(INOUT) :: hpsi(npwx, m)
+    CALL mydgemm('N', 'N', 2 * npw, m, nkb, 1.0D0, vkb, 2 * npwx, ps, nkb, 1.0D0, hpsi, 2 * npwx)
+  END SUBROUTINE hpsi_gemm
+
   SUBROUTINE calbec_ger(npwx, nkb, m, beta, psi, betapsi)
     INTEGER, INTENT(IN) :: npwx, nkb, m
     COMPLEX(8), INTENT(IN) :: beta(npwx, nkb), psi(npwx, m)
@@ -94,6 +102,23 @@ def test_complex_actuals_to_dgemm(tmp_path):
     sdfg(npw=np.int32(NPW), npwx=np.int32(NPWX), nkb=np.int32(NKB), m=np.int32(M), beta=beta, psi=psi, betapsi=out)
     ref = 2.0 * _real_rows(beta, 2 * NPW).T @ _real_rows(psi, 2 * NPW)
     np.testing.assert_allclose(out, ref, rtol=1e-12)
+
+
+def _real_view(z: np.ndarray) -> np.ndarray:
+    """The REAL(8) storage of a column-major COMPLEX(8) ``z``, one column per column of ``z``."""
+    return z.reshape(-1, order="F").view(np.float64).reshape(2 * z.shape[0], -1, order="F")
+
+
+def test_complex_actual_accumulates_into_dgemm_c(tmp_path):
+    """QE ``add_vuspsi_k``: ``beta = 1`` reads ``C``, a window of a COMPLEX actual, and writes it back."""
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="hpsi_gemm", entry="calbec_mod::hpsi_gemm").build()
+    rng = np.random.default_rng(5)
+    vkb, hpsi = _complex(rng, NPWX, NKB), _complex(rng, NPWX, M)
+    ps = np.asfortranarray(rng.random((NKB, M)))
+    ref = hpsi.copy(order="F")
+    _real_view(ref)[: 2 * NPW] += _real_rows(vkb, 2 * NPW) @ ps
+    sdfg(npw=np.int32(NPW), npwx=np.int32(NPWX), nkb=np.int32(NKB), m=np.int32(M), vkb=vkb, ps=ps, hpsi=hpsi)
+    np.testing.assert_allclose(hpsi, ref, rtol=1e-12)
 
 
 def test_complex_actuals_to_dger(tmp_path):

@@ -1268,9 +1268,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             state.add_node(node)
             _read_view(node, "_A", op_a, _view(op_a, (lda, cols), (1, lda)), f"0:{rows}, 0:{cols}")
             _read_view(node, "_x", op_x, _view(op_x, (x_len,), (incx,)), f"0:{x_len}")
+            # The in/out connector reads and writes one window, so both sides go through one view
+            y_view = _view(op_y, (y_len,), (incy,))
             if "_y" in node.in_connectors:  # beta == 0 reads no y
-                _read_view(node, "_y", op_y, _view(op_y, (y_len,), (incy,)), f"0:{y_len}")
-            _write_view(node, "_y", op_y, _view(op_y, (y_len,), (incy,)), f"0:{y_len}")
+                _read_view(node, "_y", op_y, y_view, f"0:{y_len}")
+            _write_view(node, "_y", op_y, y_view, f"0:{y_len}")
             return
         _apply_promotions()
         state.add_node(node)
@@ -1293,9 +1295,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             state.add_node(node)
             _read_view(node, "_a", op_a, _view(op_a, (lda, a_cols), (1, lda)), f"0:{a_rows}, 0:{a_cols}")
             _read_view(node, "_b", op_b, _view(op_b, (ldb, b_cols), (1, ldb)), f"0:{b_rows}, 0:{b_cols}")
+            # The in/out connector reads and writes one window, so both sides go through one view
+            c_view = _view(op_c, (ldc, cols), (1, ldc))
             if "_c" in node.in_connectors:  # beta == 0 reads no C
-                _read_view(node, "_c", op_c, _view(op_c, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
-            _write_view(node, "_c", op_c, _view(op_c, (ldc, cols), (1, ldc)), f"0:{rows}, 0:{cols}")
+                _read_view(node, "_c", op_c, c_view, f"0:{rows}, 0:{cols}")
+            _write_view(node, "_c", op_c, c_view, f"0:{rows}, 0:{cols}")
             return
         _apply_promotions()
         state.add_node(node)
