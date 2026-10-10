@@ -8,7 +8,7 @@ imports and runs on the DUT SDFG before compile, so this module is named ``tests
 """
 
 from dace_fortran.bindings.frozen_signature import refreeze
-from dace_fortran.pipelines import num_maps, optimize
+from dace_fortran.pipelines import num_loops, num_maps, optimize
 
 
 def velocity_optimize(sdfg):
@@ -23,6 +23,9 @@ def velocity_optimize(sdfg):
     # passed=False with the child's captured output, since this runs in the forked child.
     if num_maps(sdfg) == 0:
         raise AssertionError("pipeline produced no maps -- nothing was parallelized")
+    # Every velocity loop is a map, the ``clip_count`` counter included (an integer sum reduction).
+    if num_loops(sdfg) != 0:
+        raise AssertionError(f"{num_loops(sdfg)} loops left sequential; every velocity loop maps")
     # The harness builds the Fortran binding right after this hook and verifies the build-time
     # signature snapshot. Re-snapshot so the binding regenerates against the optimized SDFG: args
     # stay ABI-identical and free symbols may only shrink, else refreeze raises.

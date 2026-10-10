@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dace_fortran.pipelines import num_maps, optimize
+from dace_fortran.pipelines import num_loops, num_maps, optimize
 from tests._util import build_sdfg
 from tests.cloudsc.full._harness import f2py_reference, run_against_reference
 from tests.cloudsc.full._registries import program_outputs
@@ -50,7 +50,10 @@ def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
     sdfg = build_sdfg(_SRC.read_text(), tmp_path / "sdfg", name="cloudsc", entry="cloudscouter").build()
     unoptimized = copy.deepcopy(sdfg)
     optimize(sdfg, symbols=_SPECIALIZE)
-    assert num_maps(sdfg) > 0, "pipeline produced no maps -- nothing was parallelized"
+    # Every column (JL) loop maps once the guards are scalars private to each loop; what stays sequential is the
+    # vertical sweep and the species-ordered solver.
+    assert num_maps(sdfg) >= 280, f"only {num_maps(sdfg)} maps -- loops the pipeline parallelizes stayed sequential"
+    assert num_loops(sdfg) <= 8, f"{num_loops(sdfg)} loops left sequential, expected at most 8"
 
     outputs_sdfg, outputs_ref = run_against_reference(sdfg, _f2py_ref, unoptimized=unoptimized)
 

@@ -5,8 +5,9 @@
 ``optimize`` is the end-to-end parallelization pipeline:
 
     specialize -> len1-to-scalar -> short-loop-unroll -> unique-loop-iterators -> scalar-fission
-      -> simplify -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
-      -> map-collapse -> mapfusion -> make-transients-persistent -> bind-omp-thread-count
+      -> simplify -> state-fusion-extended -> demote-non-structural-symbols -> scalar-fission
+      -> order-free-reductions -> loop2map -> state-fusion-extended -> mapfusion -> map-collapse
+      -> mapfusion -> make-transients-persistent -> bind-omp-thread-count
 
 ``scalar_fission`` runs unconditionally, BEFORE simplify (it splits scalar-carried loop bodies so
 the loop can map downstream): LoopToMap needs it in general, not just CloudSC. ``specialize``
@@ -21,17 +22,22 @@ since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-
 defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
 """
 
+import ast
 import copy
 from typing import Any, Union, cast
 
 import numpy as np
-from dace import SDFG
+from dace import SDFG, Memlet, dtypes, subsets
 from dace.sdfg import nodes
+from dace.sdfg.graph import MultiConnectorEdge
+from dace.sdfg.state import LoopRegion, SDFGState
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
+from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
+from dace.transformation.passes.demote_non_structural_symbols import DemoteNonStructuralSymbols
 from dace.transformation.passes.full_map_fusion import FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import (
     STAGING_STATE_PREFIXES,
@@ -92,6 +98,116 @@ def fission_scalars(sdfg: SDFG) -> dict[str, set[str]]:
     finally:
         for name in proxies:
             sdfg.arrays[name].transient = True
+
+
+#: Updates whose parallel combination gives the same bits in any order, so forming them keeps ``optimize`` bit-exact;
+#: a floating-point sum would round differently.
+ORDER_FREE_UPDATES = frozenset({"max", "min", "or", "and"})
+#: Updates exact in any order on integers only (a counter such as ICON's ``clip_count = clip_count + 1``).
+ORDER_FREE_INTEGER_UPDATES = frozenset({"+", "|", "&", "^"})
+
+
+def _is_integer(sdfg: SDFG, name: str) -> bool:
+    """Whether container ``name`` holds integers (Fortran ``LOGICAL`` included, stored as an integer)."""
+    return np.issubdtype(sdfg.arrays[name].dtype.type, np.integer)
+
+
+#: The reduction a boolean constant store is equivalent to: ``x = True`` is ``x = x or True``.
+_IDEMPOTENT_STORE_WCR = {True: "lambda a, b: a or b", False: "lambda a, b: a and b"}
+
+
+def _enclosing_loop_vars(state: SDFGState) -> set[str]:
+    """The iteration variables of the loops around ``state`` within its SDFG."""
+    names: set[str] = set()
+    region = state.parent_graph
+    while region is not None and not isinstance(region, SDFG):
+        if isinstance(region, LoopRegion) and region.loop_variable:
+            names.add(region.loop_variable)
+        region = region.parent_graph
+    return names
+
+
+def order_free_reductions(sdfg: SDFG) -> int:
+    """Turn every update ``LoopToMap`` would see as a loop-carried write into the reduction it is.
+
+    * ``x = max(x, e)`` / ``min`` / ``x = x or e`` / ``and`` becomes a WCR write (``AugAssignToWCR``);
+    * a boolean constant store to an element no enclosing loop's iterator selects (Fortran's
+      ``levmask(jb, jk) = .TRUE.`` inside the ``jc`` loop) becomes the OR / AND reduction it is equivalent to.
+
+    Only :data:`ORDER_FREE_UPDATES`, and :data:`ORDER_FREE_INTEGER_UPDATES` on integers, are formed, so the parallel
+    result is bit-identical. Returns the updates rewritten.
+    """
+    rewritten = 0
+    xform = AugAssignToWCR()
+    for sd in sdfg.all_sdfgs_recursive():
+        changed = True
+        while changed:
+            changed = False
+            for state in sd.states():
+                for tasklet in [n for n in state.nodes() if isinstance(n, nodes.Tasklet)]:
+                    if tasklet.language is not dtypes.Language.Python or state.entry_node(tasklet) is not None:
+                        continue
+                    outs = state.out_edges(tasklet)
+                    if len(outs) != 1 or not isinstance(outs[0].dst, nodes.AccessNode) or outs[0].data.wcr:
+                        continue
+                    out = outs[0]
+                    if state.in_degree(tasklet) == 0:
+                        rewritten += _idempotent_store(sd, state, tasklet, out)
+                        continue
+                    update = AugAssignToWCR.python_update(tasklet, state.in_edges(tasklet), out)
+                    if update is None or not (
+                        update[0] in ORDER_FREE_UPDATES
+                        or (update[0] in ORDER_FREE_INTEGER_UPDATES and _is_integer(sd, out.dst.data))
+                    ):
+                        continue
+                    source = update[1].src
+                    if not isinstance(source, nodes.AccessNode) or source.data != out.dst.data:
+                        continue
+                    xform.setup_match(
+                        sd,
+                        sd.cfg_id,
+                        sd.node_id(state) if state.parent_graph is sd else -1,
+                        # Bound by node OBJECT, not by node id: ``PatternNode`` resolves a non-int value as-is.
+                        cast(
+                            dict[Any, int],
+                            {
+                                AugAssignToWCR.input: source,
+                                AugAssignToWCR.tasklet: tasklet,
+                                AugAssignToWCR.output: out.dst,
+                            },
+                        ),
+                        0,
+                        override=True,
+                    )
+                    if not xform.can_be_applied(state, 0, sd):
+                        continue
+                    xform.apply(state, sd)
+                    rewritten += 1
+                    changed = True  # the apply may fission ``state``: sweep again
+                    break
+                if changed:
+                    break
+    return rewritten
+
+
+def _idempotent_store(sdfg: SDFG, state: SDFGState, tasklet: nodes.Tasklet, out: MultiConnectorEdge[Memlet]) -> int:
+    """Give a boolean constant store, ``out = True`` or ``out = False``, the reduction it is equivalent to when an
+    enclosing loop writes the same element from every iteration."""
+    code = tasklet.code.code
+    statement = code[0] if isinstance(code, list) and len(code) == 1 else None
+    if not isinstance(statement, ast.Assign) or not isinstance(statement.value, ast.Constant):
+        return 0
+    value = statement.value.value
+    name = out.dst.data
+    if not isinstance(value, bool) or not (sdfg.arrays[name].dtype == dtypes.bool_ or _is_integer(sdfg, name)):
+        return 0
+    written = out.data.get_dst_subset(out, state)
+    if not isinstance(written, subsets.Subset) or not _enclosing_loop_vars(state) - {
+        str(s) for s in written.free_symbols
+    }:
+        return 0
+    out.data.wcr = _IDEMPOTENT_STORE_WCR[value]
+    return 1
 
 
 def verify_numerics(reference: SDFG, optimized: SDFG, inputs: dict[str, Any]) -> None:
@@ -187,6 +303,13 @@ def optimize(
     sdfg.simplify(validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
 
+    # After the last simplify, whose scalar-to-symbol promotion would undo it: a counter or guard that bounds no loop
+    # and indexes no array becomes a scalar again, so the update below can turn into a reduction.
+    DemoteNonStructuralSymbols().apply_pass(sdfg, {})
+    # A demoted symbol is one name for every loop that assigned it; split it per write scope again, as the symbol
+    # was private to each iteration, or LoopToMap sees one container shared by all those loops.
+    fission_scalars(sdfg)
+    order_free_reductions(sdfg)
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
     # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
@@ -213,3 +336,8 @@ def num_maps(sdfg: SDFG) -> int:
     from dace.sdfg import nodes
 
     return sum(1 for n, _ in sdfg.all_nodes_recursive() if isinstance(n, nodes.MapEntry))
+
+
+def num_loops(sdfg: SDFG) -> int:
+    """Loops anywhere in ``sdfg``, nested SDFGs included -- what the pipeline left sequential."""
+    return sum(1 for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion))
