@@ -1302,8 +1302,13 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> int | None:
     return None
 
 
-#: Key of a tracked local constant: a variable's spec, or a (root spec, component spec) pair for ``root % comp``.
-ConstKey = Union[types.SPEC, tuple[types.SPEC, types.SPEC]]
+#: Key of a tracked local constant: a variable's spec, a (root spec, component
+#: spec) pair for ``root % comp``, or a (root spec, component_path) pair where
+#: component_path is a tuple of component names and integer subscript tuples for
+#: indexed components (e.g. ``root % baz(3) % scalar`` or
+#: ``root % baz(2) % arr(4)``).
+IndexedComponent = tuple[Union[str, tuple[int, ...]], ...]
+ConstKey = Union[types.SPEC, tuple[types.SPEC, types.SPEC], tuple[types.SPEC, tuple[IndexedComponent, ...]]]
 
 
 class RootComponent(NamedTuple):
@@ -1324,6 +1329,69 @@ def track_local_consts(
 ) -> LocalConsts:
     plus: dict[ConstKey, types.LITERAL_TYPES] = copy(plus_init) if plus_init else {}
     minus: set[ConstKey] = copy(minus_init) if minus_init else set()
+
+    def _indexed_key(ref: Base) -> ConstKey | None:
+        """Build a constant key for a scalar array element or component reference.
+
+        For ``arr(i)`` returns ``(arr_spec, ((i,),))``.  For ``root % comp(i)``
+        returns ``(root_spec, (('comp', (i,)),))``.  For
+        ``root % baz(3) % scalar`` returns ``(root_spec, (('baz', (3,)), 'scalar'))``.
+        Returns ``None`` for non-scalar references (slices), references to
+        non-local roots, or non-constant subscripts.
+        """
+        scope_spec = search_scope_spec(ref)
+        if not scope_spec:
+            return None
+
+        components: list[IndexedComponent] = []
+
+        def _append_part(pr: f03.Part_Ref) -> bool:
+            name, subs = pr.children
+            if not isinstance(name, f03.Name):
+                return False
+            if subs is None:
+                return False
+            subscripts: list[int] = []
+            for s in subs.children:
+                if isinstance(s, f03.Subscript_Triplet):
+                    return False
+                sv = const_eval_basic_type(s, alias_map)
+                if sv is None or not types.is_numpy_int(sv):
+                    return False
+                subscripts.append(int(sv))
+            components.append((name.string.lower(), tuple(subscripts)))
+            return True
+
+        if isinstance(ref, f03.Part_Ref):
+            if not _append_part(ref):
+                return None
+            name, _ = ref.children
+            loc = search_real_local_alias_spec(name, alias_map)
+            if not loc:
+                return None
+            base_spec = ident_spec(alias_map[loc])
+        elif isinstance(ref, f03.Data_Ref):
+            root, _root_type, rest = dataref_root(ref, scope_spec, alias_map)
+            if not isinstance(root, f03.Name):
+                return None
+            loc = search_real_local_alias_spec(root, alias_map)
+            if not loc:
+                return None
+            base_spec = ident_spec(alias_map[loc])
+            for comp in rest:
+                if isinstance(comp, f03.Part_Ref):
+                    if not _append_part(comp):
+                        return None
+                elif isinstance(comp, f03.Name):
+                    components.append(comp.string.lower())
+                else:
+                    return None
+        else:
+            return None
+
+        if not components:
+            return None
+        return (base_spec, tuple(components))
 
     def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> RootComponent | None:
         scope_spec = search_scope_spec(dref)
@@ -1410,6 +1478,14 @@ def track_local_consts(
             if (pointer and xtyp and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[spec])
         elif isinstance(x, f03.Data_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                scope_spec = find_scope_spec(x)
+                xtyp = find_type_dataref(x, scope_spec, alias_map)
+                if (pointer and xtyp.pointer) or value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             comp_key = _root_comp(x)
             if comp_key is None or comp_key not in plus:
                 for pr in x.children[1:]:
@@ -1426,6 +1502,12 @@ def track_local_consts(
             if (pointer and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[comp_key])
         elif isinstance(x, f03.Part_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                if value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             par, subsc = x.children
             _inject_knowns(par, value=False, pointer=True)
             assert isinstance(subsc, f03.Section_Subscript_List)
@@ -1503,15 +1585,30 @@ def track_local_consts(
                 lspec = ident_spec(alias_map[loc])
                 if isinstance(alias_map[lspec], f03.Entity_Decl):
                     ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+        elif isinstance(lv, f03.Part_Ref):
+            lspec = _indexed_key(lv)
+            if lspec is not None:
+                name, _ = lv.children
+                name_spec = search_real_local_alias_spec(name, alias_map)
+                assert name_spec
+                ltyp = find_type_of_entity(alias_map[name_spec], alias_map)
         elif isinstance(lv, f03.Data_Ref):
-            lspec = _root_comp(lv)
-            scope_spec = find_scope_spec(lv)
-            ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            idx_key = _indexed_key(lv)
+            if idx_key is not None:
+                lspec = idx_key
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            else:
+                lspec = _root_comp(lv)
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
             rval = const_eval_basic_type(rv, alias_map)
             if rval is None:
                 _integrate_subresults({}, {lspec})
-            elif not ltyp.shape:
+            elif not ltyp.shape or (isinstance(lspec, tuple) and len(lspec) >= 2):
+                # Scalar variable, or a scalar array element / component element
+                # represented by an indexed key.
                 plus[lspec] = types.numpy_type_to_literal(rval)
                 if lspec in minus:
                     minus.remove(lspec)
@@ -1535,11 +1632,26 @@ def track_local_consts(
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
+        remove: set[ConstKey] = set()
         if lspec and ltyp and ltyp.pointer:
-            plus[lspec] = rv
-            if lspec in minus:
-                minus.remove(lspec)
-        tp, tm = track_local_consts(rv, alias_map)
+            # Only treat the pointer as a known alias when the RHS is a plain
+            # target name/data-ref or a constant-indexed element (e.g.
+            # ``ptr => arr(2)``).  If the RHS indexes with a variable (e.g.
+            # ``ptr => arr(i)``) the target is not a compile-time constant and
+            # substituting it would be wrong.
+            rv_scope_spec = search_scope_spec(rv)
+            if rv_scope_spec is None:
+                remove = {lspec}
+            else:
+                root_name = dataref_root(rv, rv_scope_spec, alias_map)[0]
+                bad = list(walk(rv.children, (f03.Name, f03.Data_Ref, f03.Part_Ref)))
+                if not bad or all(n is root_name for n in bad):
+                    plus[lspec] = rv
+                    if lspec in minus:
+                        minus.remove(lspec)
+                else:
+                    remove = {lspec}
+        tp, tm = track_local_consts(rv, alias_map, {}, remove)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.If_Stmt):
         cond, body = node.children
