@@ -12,7 +12,7 @@ _SRC = _HERE / "mpi_alltoall_probe.f90"
 
 
 def test_mpi_alltoall_recognised(tmp_path):
-    from dace.libraries.mpi.nodes.alltoall import Alltoall
+    from dace.libraries.comm.nodes.alltoall import Alltoall
 
     src = _SRC.read_text()
     sdfg = dace_fortran.build_sdfg(

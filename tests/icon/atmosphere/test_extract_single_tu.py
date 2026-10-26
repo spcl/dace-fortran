@@ -8,7 +8,7 @@ dispatch: ``t_comm_pattern_yaxt`` is cpp'd out, leaving ``t_comm_pattern_orig``,
 which the pass retypes so ``p_pat%exchange_data_*`` becomes a static call the
 inliner inlines.  The pack/gather loops land inline and only the MPI
 point-to-point (``p_isend`` / ``p_irecv`` / ``p_wait`` / ``p_send`` / ``p_recv``)
-remains external -- "only MPI calls remain" (mapped to ``dace.libraries.mpi``
+remains external -- "only MPI calls remain" (mapped to ``dace.libraries.comm``
 libnodes when the TU is lowered to an SDFG; see
 ``tests/sync_devirt_mpi_libnode_test.py``).
 

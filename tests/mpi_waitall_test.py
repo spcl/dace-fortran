@@ -1,4 +1,4 @@
-"""``MPI_Waitall`` over a request array lowers to a ``dace.libraries.mpi`` ``Waitall`` node.
+"""``MPI_Waitall`` over a request array lowers to a ``dace.libraries.comm`` ``Waitall`` node.
 
 Recognises ``MPI_Waitall(count, array_of_requests, statuses, ierr)``, threaded after the
 matching Isend/Irecv producers through the shared per-request opaque transient -- the array
@@ -33,11 +33,11 @@ end module waitall_mod
 
 
 def test_mpi_waitall_lowers_to_waitall_libnode(tmp_path: Path):
-    """``MPI_Waitall`` lowers to a ``dace.libraries.mpi`` ``Waitall`` node beside the Isend/Irecv producers -- the only MPI nodes, none left external."""
-    from dace.libraries.mpi.nodes.node import MPINode
+    """``MPI_Waitall`` lowers to a ``dace.libraries.comm`` ``Waitall`` node beside the Isend/Irecv producers -- the only MPI nodes, none left external."""
+    from dace.libraries.comm.nodes.node import CommNode
 
     sdfg = build_sdfg(_WAITALL, tmp_path / "sdfg", name="waitall", entry="waitall_mod::waitall_ring").build()
-    mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
+    mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, CommNode)})
     assert mpi == ["CommF2c", "Irecv", "Isend", "Waitall"], (
         f"expected CommF2c/Irecv/Isend/Waitall MPI libnodes, got {mpi}"
     )

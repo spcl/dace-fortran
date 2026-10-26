@@ -1,7 +1,7 @@
 ! MPI_Alltoall frontend-recognition probe.
 !
 ! Standard 8-arg MPI Fortran ABI; the bridge maps this to
-! :class:`dace.libraries.mpi.nodes.alltoall.Alltoall`.
+! :class:`dace.libraries.comm.nodes.alltoall.Alltoall`.
 !
 ! Uses ``external``-declared MPI symbols + ``parameter`` constants so
 ! the file lowers via flang-new-21 without ``mpi.mod`` -- same

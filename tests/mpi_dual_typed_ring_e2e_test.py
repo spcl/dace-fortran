@@ -7,7 +7,7 @@ covers that dual-typed shape.  This module locks in what works and pins what
 does not:
 
   * ``test_dual_typed_nonblocking_ring`` -- the bridge lowers a real*8 + real*4
-    nonblocking ring (per-request ``MPI_Wait``) to ``dace.libraries.mpi`` nodes,
+    nonblocking ring (per-request ``MPI_Wait``) to ``dace.libraries.comm`` nodes,
     picking ``MPI_DOUBLE_PRECISION`` vs ``MPI_REAL`` per buffer.  Both received
     buffers arrive, per rank, under real MPI.  PASSES -- dual-typing is sound.
 

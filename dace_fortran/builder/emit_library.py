@@ -533,7 +533,7 @@ def bind_query_symbol(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion,
 
 def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran MPI point-to-point call
-    (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
+    (``kind == 'mpicall'``) to a ``dace.libraries.comm`` library node.
 
     ``n.callee`` / ``n.call_args``:
 
@@ -546,9 +546,9 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     (i)recv.  count is implicit in the buffer memlet, the MPI datatype
     is derived from the buffer descriptor.  The communicator is
     ``MPI_COMM_WORLD`` unless the C++ bridge appended a runtime/user
-    communicator, in which case the Fortran ``integer`` handle is
-    retyped to an ``opaque(MPI_Comm)`` SDFG input wired to the libnode's
-    ``_comm`` connector (the c-binding wrapper does ``MPI_Comm_f2c``).
+    communicator, in which case a ``CommF2c`` node turns the Fortran
+    ``integer`` handle into the comm library's integer handle, wired to the
+    libnode's ``_comm`` connector.
     The non-blocking request is threaded Isend/Irecv
     -> Wait through a synthesised transient ``_mpireq_<req>`` of
     ``opaque("MPI_Request")`` keyed by the Fortran request variable, so
@@ -561,7 +561,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     nodes is enforced by state sequencing -- a state is a dataflow
     graph, so two MPI nodes with no connecting memlet placed in one
     state would be order-unspecified (reorder / deadlock risk).
-    ``has_side_effects`` (True for every ``MPINode``) only prevents
+    ``has_side_effects`` (True for every ``CommNode``) only prevents
     DCE, not reordering; the per-statement state is what orders them,
     matching DaCe's Python-frontend MPI lowering.
 
@@ -648,36 +648,36 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         return n.call_args[operands] if len(n.call_args) > operands else None
 
     def _wire_user_comm(node: Node, comm: str | None) -> None:
-        """Thread an optional user communicator into an MPI node via a ``_comm``
-        input connector carrying an ``opaque(MPI_Comm)`` value.
+        """Thread an optional user communicator into an MPI node via its ``_comm``
+        input connector, which takes the communicator's integer handle.
 
-        The Fortran ``INTEGER`` communicator handle ``comm`` is converted to a C
-        ``MPI_Comm`` by a ``CommF2c`` dataflow node (``MPI_Comm_f2c``); the result
-        is WRITTEN into an ``opaque(MPI_Comm)`` transient and READ by ``node``'s
-        ``_comm`` connector.  The communicator is thus a first-class opaque value
-        that flows through the graph -- no Cartesian ``MPI_Cart_create`` (the
-        exchange is plain point-to-point on the pattern's own comm), no dropped
-        scalar, and multiple distinct communicators are supported naturally.
-        Library nodes resolve ``_comm`` ahead of ``_grid`` (see ``resolve_comm``).
-        No-op for the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
+        The Fortran ``INTEGER`` communicator handle ``comm`` is converted by a
+        ``CommF2c`` dataflow node (``MPI_Comm_f2c``) into the handle (``_handle``)
+        DaCe's comm library passes around; it is WRITTEN into an int64 transient
+        and READ by ``node``'s ``_comm`` connector.  The communicator is thus a
+        first-class value that flows through the graph -- no Cartesian
+        ``MPI_Cart_create``, no dropped scalar, and multiple distinct communicators
+        are supported naturally.  Comm nodes resolve ``_comm`` ahead of ``_grid``
+        (see ``mpi_communicator``).  No-op for the default ``MPI_COMM_WORLD``
+        (``comm`` is ``None``)."""
         if comm is None:
             return
-        from dace.libraries.mpi.nodes.comm_f2c import CommF2c
+        from dace.libraries.comm.nodes.comm_f2c import CommF2c
 
         sd = ctx.sdfg
         cname = f"__mpicomm_{builder.nid()}"
-        sd.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
+        sd.add_scalar(cname, dace.int64, transient=True)
         f2c = CommF2c(f"_mpi_commf2c_{builder.nid()}")
         state.add_node(f2c)
         state.add_edge(acc(builder, state, comm), None, f2c, "_fcomm", Memlet(data=comm, subset="0"))
         cw = state.add_access(cname)
-        state.add_edge(f2c, "_comm", cw, None, Memlet(data=cname, subset="0"))
-        node.add_in_connector("_comm", dace.dtypes.opaque("MPI_Comm"))
+        state.add_edge(f2c, "_handle", cw, None, Memlet(data=cname, subset="0"))
+        node.add_in_connector("_comm", dace.int64)
         state.add_edge(cw, None, node, "_comm", Memlet(data=cname, subset="0"))
 
     node: LibraryNode  # each MPI branch below binds its own library-node class
     if n.callee == "mpi_wait":
-        from dace.libraries.mpi.nodes.wait import Wait
+        from dace.libraries.comm.nodes.wait import Wait
 
         (req,) = n.call_args
         rname = _req_array(req)
@@ -706,7 +706,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # orders the waitall after them (reinforced by the ``__mpi_order`` chain).
         # ``Waitall`` has only a ``_request`` input (no status outputs) and derives the
         # count from the request memlet's element count.
-        from dace.libraries.mpi.nodes.wait import Waitall
+        from dace.libraries.comm.nodes.wait import Waitall
 
         (req,) = n.call_args
         rname = _req_array(req, _opts.get("mpi_req_extent", "1"))
@@ -742,7 +742,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # ``call_args``: [sendbuf, recvbuf] + optional comm.  The Alltoall
         # library node has fixed ``_inbuffer`` / ``_outbuffer`` connectors
         # and derives the count from the buffer memlets.
-        from dace.libraries.mpi.nodes.alltoall import Alltoall
+        from dace.libraries.comm.nodes.alltoall import Alltoall
 
         sendbuf = n.call_args[0]
         recvbuf = n.call_args[1]
@@ -759,7 +759,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     if n.callee == "mpi_barrier":
         # ``call_args``: [] or [comm].  Pure synchronisation, no data buffers --
         # the node carries side effects so it is not pruned.
-        from dace.libraries.mpi.nodes.barrier import Barrier
+        from dace.libraries.comm.nodes.barrier import Barrier
 
         node = Barrier(f"_mpi_barrier_{builder.nid()}")
         state.add_node(node)
@@ -772,7 +772,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # ``mpi_maxloc`` / ...); ``resolve_mpi_op`` maps it to the exact
         # ``MPI_Op`` and raises on an unrecognised / identity-lost op instead of
         # silently reducing with ``MPI_SUM``.
-        from dace.libraries.mpi.nodes.allreduce import Allreduce
+        from dace.libraries.comm.nodes.allreduce import Allreduce
 
         sendbuf, recvbuf, opname = n.call_args[0], n.call_args[1], n.call_args[2]
         op = resolve_mpi_op(opname)
@@ -786,7 +786,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     if n.callee == "mpi_bcast":
         # ``call_args``: [buffer, root] + optional comm.  Broadcast in place
         # (the same buffer is read on root and written on the others).
-        from dace.libraries.mpi.nodes.bcast import Bcast
+        from dace.libraries.comm.nodes.bcast import Bcast
 
         buffer, root = n.call_args[0], n.call_args[1]
         node = Bcast(f"_mpi_bcast_{builder.nid()}")
@@ -802,7 +802,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # ``call_args``: [rank] + optional comm.  Query-only: writes this
         # process's rank to the Fortran integer scalar via ``_rank`` (no data
         # inputs -- the communicator threads in through ``_comm``).
-        from dace.libraries.mpi.nodes.comm_rank import CommRank
+        from dace.libraries.comm.nodes.comm_rank import CommRank
 
         rank, rank_sym = query_target(builder, ctx, n.call_args[0])
         node = CommRank(f"_mpi_comm_rank_{builder.nid()}")
@@ -817,7 +817,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     if n.callee == "mpi_comm_size":
         # ``call_args``: [size] + optional comm.  Query-only: writes the
         # communicator's rank count to the Fortran integer scalar via ``_size``.
-        from dace.libraries.mpi.nodes.comm_size import CommSize
+        from dace.libraries.comm.nodes.comm_size import CommSize
 
         size, size_sym = query_target(builder, ctx, n.call_args[0])
         node = CommSize(f"_mpi_comm_size_{builder.nid()}")
@@ -831,20 +831,17 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
 
     if n.callee == "mpi_comm_split":
         # ``call_args``: [color, key, newcomm] + optional comm.  Reads the int
-        # color/key, produces a first-class ``opaque(MPI_Comm)`` on ``_newcomm``
+        # color/key, produces the new communicator's integer handle on ``_newcomm``
         # written to a fresh transient (usable as a downstream ``_comm`` value).
-        from dace.libraries.mpi.nodes.comm_split import CommSplit
+        from dace.libraries.comm.nodes.comm_split import CommSplit
 
         color, key, newcomm = n.call_args[0], n.call_args[1], n.call_args[2]
         node = CommSplit(f"_mpi_comm_split_{builder.nid()}")
-        node.out_connectors = {
-            c: (dace.dtypes.opaque("MPI_Comm") if c == "_newcomm" else t) for c, t in node.out_connectors.items()
-        }
         state.add_node(node)
         state.add_edge(state.add_read(color), None, node, "_color", Memlet.from_array(color, ctx.sdfg.arrays[color]))
         state.add_edge(state.add_read(key), None, node, "_key", Memlet.from_array(key, ctx.sdfg.arrays[key]))
         cname = f"__newcomm_{newcomm}_{builder.nid()}"
-        ctx.sdfg.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
+        ctx.sdfg.add_scalar(cname, dace.int64, transient=True)
         state.add_edge(node, "_newcomm", state.add_write(cname), None, Memlet(data=cname, subset="0"))
         _wire_user_comm(node, _trailing_comm(operands=3))
         return
@@ -854,7 +851,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # no data outputs.  A literal errorcode (``mpi_abort(0, 1, ierr)``) has
         # no name -> the bridge stashed its value in ``mpi_errorcode`` and the
         # emitter materialises a scalar to feed ``_errorcode``.
-        from dace.libraries.mpi.nodes.abort import Abort
+        from dace.libraries.comm.nodes.abort import Abort
 
         errorcode = n.call_args[0]
         node = Abort(f"_mpi_abort_{builder.nid()}")
@@ -883,7 +880,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # comm.  Variable-count gather to ``root``: each rank contributes
         # ``recvcounts[rank]`` elements landing at ``displs[rank]`` in the root's
         # ``recvbuf``.  Counts / displs are whole int32 arrays.
-        from dace.libraries.mpi.nodes.gatherv import Gatherv
+        from dace.libraries.comm.nodes.gatherv import Gatherv
 
         sendbuf, recvbuf, recvcounts, displs, root = n.call_args[:5]
         node = Gatherv(f"_mpi_gatherv_{builder.nid()}")
@@ -908,7 +905,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # ``call_args``: [sendbuf, recvbuf, root] + optional comm.  Fixed-count
         # gather to ``root``; the node derives the per-rank count from the
         # buffers.
-        from dace.libraries.mpi.nodes.gather import Gather
+        from dace.libraries.comm.nodes.gather import Gather
 
         sendbuf, recvbuf, root = n.call_args[:3]
         node = Gather(f"_mpi_gather_{builder.nid()}")
@@ -923,7 +920,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # ``call_args``: [sendbuf, recvbuf, op, root] + optional comm.  Reduce to
         # ``root`` only (cf. allreduce's all-ranks result); ``op`` maps through
         # the exact ``resolve_mpi_op`` (raises on an identity-lost handle).
-        from dace.libraries.mpi.nodes.reduce import Reduce
+        from dace.libraries.comm.nodes.reduce import Reduce
 
         sendbuf, recvbuf, opname, root = n.call_args[:4]
         op = resolve_mpi_op(opname)
@@ -955,13 +952,13 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
 
     def _wire_grid(node: Node) -> None:
         """Wire the optional user communicator into the point-to-point node via a
-        ``_comm`` connector (an ``opaque(MPI_Comm)`` ``CommF2c``-d from the Fortran
+        ``_comm`` connector (the integer handle ``CommF2c`` derives from the Fortran
         handle); shares ``_wire_user_comm`` with the collectives.  No-op for the
         default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
         _wire_user_comm(node, comm)
 
     if n.callee == "mpi_send":
-        from dace.libraries.mpi.nodes.send import Send
+        from dace.libraries.comm.nodes.send import Send
 
         node = Send(f"_mpi_send_{builder.nid()}")
         node.in_connectors = {c: (bptr if c == "_buffer" else t) for c, t in node.in_connectors.items()}
@@ -971,7 +968,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn="_tag", memlet=tag_memlet)
         _wire_grid(node)
     elif n.callee == "mpi_recv":
-        from dace.libraries.mpi.nodes.recv import Recv
+        from dace.libraries.comm.nodes.recv import Recv
 
         node = Recv(f"_mpi_recv_{builder.nid()}")
         node.out_connectors = {c: (bptr if c == "_buffer" else t) for c, t in node.out_connectors.items()}
@@ -981,7 +978,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn="_buffer", memlet=buf_memlet)
         _wire_grid(node)
     elif n.callee == "mpi_isend":
-        from dace.libraries.mpi.nodes.isend import Isend
+        from dace.libraries.comm.nodes.isend import Isend
 
         rname = _req_array(n.call_args[3], _opts.get("mpi_req_extent", "1"))
         node = Isend(f"_mpi_isend_{builder.nid()}")
@@ -999,7 +996,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         state.add_edge(node, "_request", acc(builder, state, rname), None, Memlet(f"{rname}[{_slot0}]"))
         _wire_grid(node)
     elif n.callee == "mpi_irecv":
-        from dace.libraries.mpi.nodes.irecv import Irecv
+        from dace.libraries.comm.nodes.irecv import Irecv
 
         rname = _req_array(n.call_args[3], _opts.get("mpi_req_extent", "1"))
         node = Irecv(f"_mpi_irecv_{builder.nid()}")

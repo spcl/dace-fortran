@@ -4,7 +4,7 @@
 
 Same degenerate single-TU mesh and the same seeds as the single-rank run, with one
 difference: the TU's ``sync_patch_array`` stubs are no longer DROPPED, they carry a real
-halo exchange.  So the DUT SDFG holds genuine ``dace.libraries.mpi`` nodes and each rank's
+halo exchange.  So the DUT SDFG holds genuine ``dace.libraries.comm`` nodes and each rank's
 outputs are compared bit-exact against stock gfortran running the same exchange.
 
 Why the stubs and not a ``keep_external``: ICON's sync takes a ``t_patch`` struct, which is

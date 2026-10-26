@@ -1,4 +1,4 @@
-"""MPI_Send/MPI_Recv (default communicator) -> DaCe dace.libraries.mpi Send/Recv library nodes.
+"""MPI_Send/MPI_Recv (default communicator) -> DaCe dace.libraries.comm Send/Recv library nodes.
 
 Flang lowers ``call MPI_Send(...)`` to an opaque fir.call; the bridge recognises the callee + positional MPI ABI (buf, count, datatype, dest|src, tag, comm, [status,] ierr) and lowers it to Send/Recv nodes.  Structural tests only (build + validate, assert wiring) -- no MPI runtime needed; numeric multi-rank mpirun checks are a separate @pytest.mark.mpi concern.
 """
@@ -64,8 +64,8 @@ def _expanded_mpi_call_codes(sdfg):
 
 def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     """MPI_Send/MPI_Recv on MPI_COMM_WORLD become DaCe Send/Recv nodes with canonical connectors; SDFG validates."""
-    from dace.libraries.mpi.nodes.recv import Recv
-    from dace.libraries.mpi.nodes.send import Send
+    from dace.libraries.comm.nodes.recv import Recv
+    from dace.libraries.comm.nodes.send import Send
 
     sdfg = _build(_SENDRECV, tmp_path, "sendrecv", "sendrecv")
 
@@ -115,9 +115,9 @@ end subroutine nbring
 def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
     """MPI_Isend/MPI_Irecv/MPI_Wait become Isend/Irecv/Wait nodes; the request threads producer->Wait via an opaque(MPI_Request) transient, and each MPI call gets its own state so interstate edges enforce program order."""
     import dace
-    from dace.libraries.mpi.nodes.irecv import Irecv
-    from dace.libraries.mpi.nodes.isend import Isend
-    from dace.libraries.mpi.nodes.wait import Wait
+    from dace.libraries.comm.nodes.irecv import Irecv
+    from dace.libraries.comm.nodes.isend import Isend
+    from dace.libraries.comm.nodes.wait import Wait
 
     sdfg = _build(_NONBLOCKING, tmp_path, "nbring", "nbring")
 
@@ -140,22 +140,21 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
 
 
 def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
-    """A non-default (runtime dummy) communicator flows as opaque dataflow: a CommF2c node (MPI_Comm_f2c) converts the Fortran integer handle into an opaque(MPI_Comm) feeding Send's _comm connector.  The Fortran handle stays in sdfg.arrays (CommF2c reads it) -- supersedes the legacy process-grid path, which dropped the handle and wired a _grid cartesian sub-comm connector instead."""
+    """A non-default (runtime dummy) communicator flows as dataflow: a CommF2c node (MPI_Comm_f2c) converts the Fortran integer handle into the comm library's integer handle feeding Send's _comm connector.  The Fortran handle stays in sdfg.arrays (CommF2c reads it) -- supersedes the legacy process-grid path, which dropped the handle and wired a _grid cartesian sub-comm connector instead."""
     import dace
-    from dace.libraries.mpi.nodes.comm_f2c import CommF2c
-    from dace.libraries.mpi.nodes.send import Send
+    from dace.libraries.comm.nodes.comm_f2c import CommF2c
+    from dace.libraries.comm.nodes.send import Send
 
     sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "sr_usercomm")
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
-    # communicator threads in via an opaque(MPI_Comm) _comm connector, not the legacy _grid process-grid connector.
+    # communicator threads in via an integer-handle _comm connector, not the legacy _grid process-grid connector.
     assert "_comm" in sends[0].in_connectors
     assert "_grid" not in sends[0].in_connectors
-    assert isinstance(sends[0].in_connectors["_comm"], dace.dtypes.opaque)
-    assert sends[0].in_connectors["_comm"].ctype == "MPI_Comm"
+    assert sends[0].in_connectors["_comm"] == dace.int64
 
-    # exactly one CommF2c node, reading the Fortran integer comm handle on _fcomm and producing the opaque(MPI_Comm) Send consumes.
+    # exactly one CommF2c node, reading the Fortran integer comm handle on _fcomm and producing (_handle) the handle Send consumes.
     f2cs = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, CommF2c)]
     assert len(f2cs) == 1, f"expected 1 CommF2c node, got {len(f2cs)}"
     fcomm_srcs = [
@@ -167,6 +166,17 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
         if e.dst_conn == "_fcomm"
     ]
     assert fcomm_srcs == ["comm"], f"CommF2c must read the Fortran comm handle, got {fcomm_srcs}"
+    handles = {
+        e.data.data
+        for st in sdfg.states()
+        for n in st.nodes()
+        if isinstance(n, CommF2c)
+        for e in st.out_edges(n)
+        if e.src_conn == "_handle"
+    }
+    send_state = next(st for n, st in sdfg.all_nodes_recursive() if n is sends[0])
+    send_comms = {e.data.data for e in send_state.in_edges(sends[0]) if e.dst_conn == "_comm"}
+    assert handles and handles == send_comms, f"Send's _comm must be the CommF2c handle, got {handles} vs {send_comms}"
 
     assert "comm" in sdfg.arrays, "the Fortran integer comm handle is read by CommF2c, so it is kept"
     assert "dace_user_pgrid" not in sdfg.arrays, "the process-grid path is superseded by CommF2c/_comm"

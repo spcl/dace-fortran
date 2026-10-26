@@ -459,7 +459,7 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 }
 
 // MPI point-to-point recognition: flang lowers "call MPI_Send(...)" to fir.call @_QPmpi_send(...) (case-insensitive,
-// lowercased); pattern-matched by callee name -> dace.libraries.mpi. ABI:
+// lowercased); pattern-matched by callee name -> dace.libraries.comm. ABI:
 // mpi_send(buf,count,datatype,dest,tag,comm,ierr), mpi_recv(buf,count,datatype,src,tag,comm,status,ierr).
 
 /// Returns the normalised MPI op tag (mpi_send/mpi_recv/mpi_isend/mpi_irecv/mpi_wait) for a recognised callee, else

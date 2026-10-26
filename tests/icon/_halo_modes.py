@@ -1,7 +1,7 @@
 """Shared halo-exchange extraction modes for the ICON dynamical-core solvers.
 ``"external"``: halo generics + collectives stay a black-box ExternalCall (callback
 to a real Fortran halo). ``"inlined"``: every mo_mpi wrapper is inlined to the raw
-mpi_* call, which the bridge lowers to dace.libraries.mpi libnodes. Both modes must
+mpi_* call, which the bridge lowers to dace.libraries.comm libnodes. Both modes must
 extract to a compiling single TU for both solvers; this module is the single source
 of truth so the ocean + atmosphere harnesses stay in step.
 """

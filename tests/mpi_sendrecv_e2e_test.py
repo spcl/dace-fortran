@@ -1,4 +1,4 @@
-"""E2E: Fortran MPI_Send/Recv and Isend/Irecv/Wait lower to dace.libraries.mpi.
+"""E2E: Fortran MPI_Send/Recv and Isend/Irecv/Wait lower to dace.libraries.comm.
 Ring exchange must round-trip: rank r sends r, must receive (r-1) % size. mpirun -n >=2.
 """
 

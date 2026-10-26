@@ -1,5 +1,5 @@
 """MPI collectives (``MPI_Barrier`` / ``MPI_Allreduce`` / ``MPI_Bcast``) ->
-DaCe ``dace.libraries.mpi`` library nodes -- no MPI op should be left external.
+DaCe ``dace.libraries.comm`` library nodes -- no MPI op should be left external.
 
 The bridge recognises the opaque ``fir.call @_QPmpi_*`` and the positional MPI
 ABI; the builder lowers it to the matching DaCe node (``Barrier`` is added here;
@@ -108,7 +108,7 @@ def test_resolve_mpi_op_map():
 def test_collectives_lower_to_mpi_libnodes(tmp_path: Path):
     """``MPI_Barrier`` / ``MPI_Allreduce`` / ``MPI_Bcast`` become DaCe ``Barrier``
     / ``Allreduce`` / ``Bcast`` nodes (no opaque ``call`` left), and validate."""
-    from dace.libraries.mpi.nodes import Allreduce, Barrier, Bcast
+    from dace.libraries.comm.nodes import Allreduce, Barrier, Bcast
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -148,7 +148,7 @@ def test_allreduce_op_not_coerced(tmp_path: Path, op_ref: str, expected: str):
     """End-to-end (flang -> bridge -> builder): the ``MPI_Allreduce`` op is
     mapped to the correct ``MPI_Op``, never silently coerced to ``MPI_SUM`` /
     ``MPI_MAX``.  Pins the reduction-op bug."""
-    from dace.libraries.mpi.nodes import Allreduce
+    from dace.libraries.comm.nodes import Allreduce
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)

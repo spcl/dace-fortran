@@ -1,6 +1,6 @@
 """P2b MPI reachability: the point-to-point/collective recognizer lowers the
 query and rooted-collective family (MPI_Comm_rank/_size/_split, MPI_Abort,
-MPI_Gather/_v, MPI_Reduce) to dace.libraries.mpi nodes, and renders an
+MPI_Gather/_v, MPI_Reduce) to dace.libraries.comm nodes, and renders an
 array-ELEMENT dest/src (neighbors(k)) as a single-element subset instead of
 the whole array.
 
@@ -36,8 +36,8 @@ def _build(src, tmp_path, name, entry):
 def test_comm_rank_size_query(tmp_path: Path):
     """MPI_Comm_rank/_size write into a Fortran integer scalar via the _rank/_size
     output connectors -- the pattern the inlined ocean solve_free_sfc needs."""
-    from dace.libraries.mpi.nodes.comm_rank import CommRank
-    from dace.libraries.mpi.nodes.comm_size import CommSize
+    from dace.libraries.comm.nodes.comm_rank import CommRank
+    from dace.libraries.comm.nodes.comm_size import CommSize
 
     src = """
 subroutine query(myrank, nprocs)
@@ -68,7 +68,7 @@ def test_comm_size_result_drives_a_branch(tmp_path: Path):
     library node to write.  The builder lands the result in a transient and assigns the symbol
     across the next interstate edge; without that the query wired a dangling access node and the
     build died in ``RemoveUnusedSymbols`` with ``KeyError: 'nranks'``."""
-    from dace.libraries.mpi.nodes.comm_size import CommSize
+    from dace.libraries.comm.nodes.comm_size import CommSize
 
     src = """
 subroutine guarded(out)
@@ -95,7 +95,7 @@ end subroutine guarded
 def test_reduce_to_root(tmp_path: Path):
     """``MPI_Reduce`` -> DaCe ``Reduce`` with the resolved op and a ``_root``
     connector (rooted, unlike ``Allreduce``)."""
-    from dace.libraries.mpi.nodes.reduce import Reduce
+    from dace.libraries.comm.nodes.reduce import Reduce
 
     src = (
         _MPI_OP_MODULE
@@ -124,7 +124,7 @@ end subroutine red
 
 def test_gather_to_root(tmp_path: Path):
     """``MPI_Gather`` -> DaCe ``Gather`` (fixed per-rank count, rooted)."""
-    from dace.libraries.mpi.nodes.gather import Gather
+    from dace.libraries.comm.nodes.gather import Gather
 
     src = """
 subroutine gath(sbuf, rbuf, n, root)
@@ -149,8 +149,8 @@ end subroutine gath
 def test_send_to_array_element_dest(tmp_path: Path):
     """MPI_Send(buf, n, dt, neighbors(k), tag, comm) reads the destination rank
     from element neighbors(k-1) (0-based), not the whole array -- pins the subscript-drop miscompile (audit crit#4)."""
-    from dace.libraries.mpi.nodes.isend import Isend
-    from dace.libraries.mpi.nodes.send import Send
+    from dace.libraries.comm.nodes.isend import Isend
+    from dace.libraries.comm.nodes.send import Send
 
     src = """
 subroutine ring(buf, n, neighbors, k)
