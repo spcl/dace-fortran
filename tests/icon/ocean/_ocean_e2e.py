@@ -391,9 +391,13 @@ def synth_call_inputs(
     scalar_overrides=None,
     array_overrides=None,
     mesh_buffers=None,
+    extents=None,
 ):
     """Parse the shim's flat C ABI and synthesize ``(call_plan, inputs, ptr_args,
     ptr_local)`` -- ctypes call plan plus random/pinned input buffers.
+
+    Every extent symbol (``<arr>_d<i>``) is ``n`` unless ``extents`` names it: that size is both the buffer's extent
+    and the one the kernel sees, for a kernel that takes a loop bound from an array's shape.
 
     Shared by the fork-based single-rank differential (:func:`_build_and_compare`)
     and the in-process 2-rank MPI driver; only divergence is the driver
@@ -408,6 +412,11 @@ def synth_call_inputs(
     dimvals = {
         s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n) for s in dim_symbols
     }
+    extents = extents or {}
+    unknown = sorted(extents.keys() - dimvals.keys())
+    if unknown:
+        raise ValueError(f"extents names no extent symbol of the ABI: {unknown}")
+    dimvals.update(extents)
     rng = np.random.default_rng(seed)
     inputs, call_plan = {}, []
     for arg in header:
@@ -779,6 +788,7 @@ def _build_and_compare(
     inject_use_mpi=False,
     ref_solver_allocs=None,
     ref_global_binds=None,
+    extents=None,
 ):
     """Worker body (runs in a subprocess): build DUT + REF, drive both, return
     ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
@@ -825,6 +835,7 @@ def _build_and_compare(
         scalar_overrides=scalar_overrides,
         array_overrides=array_overrides,
         mesh_buffers=mesh_buffers,
+        extents=extents,
     )
     sd = _run_in_fork(
         dut_so_path,
@@ -892,6 +903,7 @@ def run_kernel_e2e(
     ref_solver_allocs=None,
     ref_global_binds=None,
     mesh_buffers=None,
+    extents=None,
 ) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``; ``passed`` is False (with captured
@@ -937,6 +949,7 @@ def run_kernel_e2e(
             json.dumps(module_array_seeds or {}),
             json.dumps(ref_solver_allocs or []),
             json.dumps(ref_global_binds or []),
+            json.dumps(extents or {}),
         ],
         check=False,
         capture_output=True,
@@ -970,7 +983,8 @@ def _main(argv):
         module_array_seeds_json,
         ref_solver_allocs_json,
         ref_global_binds_json,
-    ) = argv[1:17]
+        extents_json,
+    ) = argv[1:18]
     try:
         max_diff, n_changed = _build_and_compare(
             Path(tu_path),
@@ -989,6 +1003,7 @@ def _main(argv):
             inject_use_mpi=json.loads(inject_use_mpi_json),
             ref_solver_allocs=json.loads(ref_solver_allocs_json),
             ref_global_binds=json.loads(ref_global_binds_json),
+            extents=json.loads(extents_json),
         )
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.icon.ocean._ocean_e2e import run_kernel_e2e
+from tests.icon.atmosphere._icon_mesh import velocity_patch
+from tests.icon.ocean._ocean_e2e import _REFIN_CTRL_EXTENT, run_kernel_e2e
 
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "velocity_advection_inlined_single_tu.f90"
@@ -27,13 +28,9 @@ pytestmark = pytest.mark.integration
 def test_velocity_percall_orig_vs_binding_bitexact():
     """Duplicate the velocity call's input, run ORIGINAL ICON Fortran + OUR SDFG binding on
     it, require bit-exact agreement -- the per-call orig-vs-binding contract, single-rank."""
-    res = run_kernel_e2e(
-        _TU,
-        _ENTRY,
-        int_fill=1,
-        module_seeds={"nproma": 8, "nflatlev": 1, "nrdmax": 1},
-        array_overrides={"p_patch_nlev": 7, "p_patch_nlevp1": 8},
-    )
+    patch = velocity_patch(refin_extent=_REFIN_CTRL_EXTENT)
+    patch["module_seeds"] |= {"nflatlev": 1, "nrdmax": 1}
+    res = run_kernel_e2e(_TU, _ENTRY, **patch)
     assert res["passed"], f"velocity orig-vs-binding build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, "no output buffer changed -- the call did no work (integration check is vacuous)"
     assert res["max_diff"] == 0.0, f"binding diverged from original ICON, max|d|={res['max_diff']:.3e} (must be 0)"
