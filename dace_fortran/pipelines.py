@@ -16,7 +16,7 @@ short-loop unroll sees literal trip counts and the shape and branch folding down
 literals to work on. ``len1_to_scalar`` runs with ``preserve_abi``, so the rest of the pipeline
 sees a plain scalar instead of a one-element buffer while the SDFG signature keeps its array form. The builder already runs it on frontend output; repeating it here
 covers an SDFG that reached ``optimize`` some other way, and the pass is idempotent.
-``mapfusion`` is ``FullMapFusion`` (vertical +
+``mapfusion`` is ``FuseMaps`` (vertical +
 horizontal fusion run together to a fixed point), applied a second time after ``map-collapse``
 since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-omp-thread-count``
 defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
@@ -37,7 +37,7 @@ from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
-from dace.transformation.passes.full_map_fusion import FullMapFusion
+from dace.transformation.passes.fuse_maps import FuseMaps
 from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -313,12 +313,12 @@ def optimize(
     order_free_reductions(sdfg)
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
-    # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
+    # FuseMaps: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
     # vertical -- horizontal fuses maps that only share an input, no producer/consumer edge.
-    FullMapFusion(validate=validate).apply_pass(sdfg, {})
+    FuseMaps(validate=validate).apply_pass(sdfg, {})
     sdfg.apply_transformations_repeated(MapCollapse, validate=validate)
     # A freshly-collapsed nest can expose a fusion the pass above missed.
-    FullMapFusion(validate=validate).apply_pass(sdfg, {})
+    FuseMaps(validate=validate).apply_pass(sdfg, {})
 
     MakeTransientsPersistent().apply_pass(sdfg, {})
     BindOmpThreadCount().apply_pass(sdfg, {})
