@@ -32,9 +32,9 @@ end module loop_test_function_mod
 """
     sdfg = build_sdfg(test_string, entry="loop_test_function_mod::loop_test_function", name="loop_test")
 
-    a_test = np.full((10, 10), 2.0, dtype=np.float64)
-    b_test = np.full((10, 10), 3.0, dtype=np.float64)
-    c_test = np.zeros((10, 10), dtype=np.float64)
+    a_test = np.full((10, 10), 2.0, dtype=np.float64, order="F")
+    b_test = np.full((10, 10), 3.0, dtype=np.float64, order="F")
+    c_test = np.zeros((10, 10), dtype=np.float64, order="F")
     sdfg(a=a_test, b=b_test, c=c_test)
 
     validate = np.full((10, 10), 5.0, dtype=np.float64)

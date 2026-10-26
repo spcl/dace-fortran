@@ -668,9 +668,10 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
             composed[alias] = resolved
     target_dtypes = {t: sdfg.symbols[t] for t in composed.values() if t in sdfg.symbols} if keep_target_dtype else {}
     sdfg.replace_dict(composed)
-    for alias in composed:
-        sdfg.symbols.pop(alias, None)
-    sdfg.symbols.update(target_dtypes)
+    for alias in composed.keys() & sdfg.symbols.keys():
+        sdfg.remove_symbol(alias)
+    for target, dtype in target_dtypes.items():
+        sdfg.symbol_repo.set_type(target, dtype)
 
 
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
@@ -1228,14 +1229,13 @@ class SDFGBuilder:
         # An extent the kernel's own ALLOCATE assigns starts at 0, Fortran's unallocated array: a path that skips the
         # ALLOCATE would otherwise read it unset. The binding hands such an array in unallocated (no copy-in), so 0 is
         # its host extent too.
+        # Assigned is enough: a path that skips every assignment is exactly the read this initializes.
         assigned = {str(k) for e in sdfg.all_interstate_edges() for k in e.data.assignments}
-        # Not ``arglist()``: it raises on a free symbol nobody declared, which validation must reject by name below.
-        incoming = {str(s) for s in sdfg.free_symbols} | {k for k, v in sdfg.arrays.items() if not v.transient}
         allocated_extents = sorted(
             f"{name}_d{dim}"
             for name, desc in sdfg.arrays.items()
             for dim, extent in enumerate(desc.shape)
-            if str(extent) == f"{name}_d{dim}" and str(extent) in assigned and str(extent) not in incoming
+            if str(extent) == f"{name}_d{dim}" and str(extent) in assigned
         )
         if allocated_extents:
             sdfg.add_state_before(
@@ -1878,12 +1878,12 @@ class SDFGBuilder:
             if k not in sdfg.symbols and k not in sdfg.arrays and not k.startswith("__dace") and k not in needed_syms
         ]
         for k in leaked_syms:
-            sdfg.symbols[k] = _dtypes.int64
+            sdfg.add_symbol(k, _dtypes.int64)
         try:
             arglist_items = list(sdfg.arglist().items())
         finally:
             for k in leaked_syms:
-                sdfg.symbols.pop(k, None)
+                sdfg.remove_symbol(k)
         for sdfg_name_, desc in arglist_items:
             if sdfg_name_ in leaked_syms:
                 continue  # leaked-but-unused; not a real argument
