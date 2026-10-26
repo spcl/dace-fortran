@@ -461,13 +461,66 @@ def _eval_selected_int_kind(p: Union[int, np.integer]) -> int:
     return fitting[0]
 
 
-def _eval_selected_real_kind(p: int, r: int) -> int:
-    """Calculates the real kind value from a given precision and range."""
+def _eval_selected_real_kind(p: int | None, r: int | None) -> int:
+    """Calculates the real kind value from a given precision and range.
+
+    Either argument may be ``None`` when the caller supplied only the other
+    argument, matching Fortran's optional-argument semantics for
+    ``SELECTED_REAL_KIND``.
+    """
     # Copied logic from `replace_real_kind()` elsewhere in the project.
-    for kind, max_precision, max_range in _REAL_KIND_LIMITS:
-        if p <= max_precision and r <= max_range:
-            return kind
-    return types.DOUBLE_KIND
+    if p is not None and p >= 9:
+        return 8
+    if r is not None and r > 126:
+        return 8
+    if p is not None and p >= 3:
+        return 4
+    if r is not None and r > 14:
+        return 4
+    # If neither argument is supplied at all, the intrinsic is meaningless; the
+    # only valid one-argument forms specify at least one of P or R.
+    if p is None and r is None:
+        raise ValueError("SELECTED_REAL_KIND requires at least one argument")
+    return 2
+
+
+def _selected_real_kind_args(args: list[Base], alias_map: types.SPEC_TABLE) -> tuple[int | None, int | None]:
+    """Resolve the (precision, range) pair from a ``SELECTED_REAL_KIND`` call.
+
+    Handles positional and keyword forms, including the one-argument forms
+    ``SELECTED_REAL_KIND(p)`` and ``SELECTED_REAL_KIND(r=...)``.
+    """
+    p: int | None = None
+    r: int | None = None
+    if not args:
+        return p, r
+    # All-keyword calls parse to Actual_Arg_Spec_List of Actual_Arg_Spec items.
+    # Positional calls parse to Actual_Arg_Spec_List of raw expressions.
+    if all(isinstance(a, f03.Actual_Arg_Spec) for a in args):
+        for a in args:
+            kw, val = a.children
+            p_or_r = kw.string.upper()
+            val_int = const_eval_basic_type(val, alias_map)
+            if val_int is None:
+                return None, None
+            if p_or_r == "P":
+                p = int(val_int)
+            elif p_or_r == "R":
+                r = int(val_int)
+            else:
+                raise ValueError(f"Unexpected SELECTED_REAL_KIND keyword: {p_or_r}")
+        return p, r
+    # Positional: first argument is P, second (if present) is R.
+    p_val = const_eval_basic_type(args[0], alias_map)
+    if p_val is None:
+        return None, None
+    p = int(p_val)
+    if len(args) >= 2:
+        r_val = const_eval_basic_type(args[1], alias_map)
+        if r_val is None:
+            return None, None
+        r = int(r_val)
+    return p, r
 
 
 def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
@@ -664,11 +717,10 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
             ):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = const_eval_basic_type(p, alias_map), const_eval_basic_type(r, alias_map)
-            if p is None or r is None:
+            srk_p, srk_r = _selected_real_kind_args(args, alias_map)
+            if srk_p is None and srk_r is None:
                 return None
-            return np.int32(_eval_selected_real_kind(int(p), int(r)))
+            return np.int32(_eval_selected_real_kind(srk_p, srk_r))
         elif intr.string == "SELECTED_INT_KIND":
             (p,) = args
             p = const_eval_basic_type(p, alias_map)
@@ -1285,10 +1337,10 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> int | None:
         if args:
             args = args.children
         if intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = _const_eval_int(p, alias_map), _const_eval_int(r, alias_map)
-            assert p is not None and r is not None
-            return _eval_selected_real_kind(p, r)
+            srk_p, srk_r = _selected_real_kind_args(args, alias_map)
+            if srk_p is None and srk_r is None:
+                return None
+            return _eval_selected_real_kind(srk_p, srk_r)
         if intr.string == "SELECTED_INT_KIND":
             assert len(args) == 1
             (p,) = args

@@ -6,7 +6,7 @@ from fparser.two.utils import walk
 
 from dace_fortran import inline_to_single_tu
 from dace_fortran.inliner import ast_utils
-from dace_fortran.inliner.ast_desugaring import cleanup, desugaring
+from dace_fortran.inliner.ast_desugaring import cleanup, desugaring, optimizations
 from tests.inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 # ECMWF ``fcttre``/``fccld`` idiom: a type declaration that FOLLOWS a statement
@@ -101,6 +101,68 @@ end module m
     assert "selected_real_kind" not in text
     # Integer kinds are left alone.
     assert "integer(kind = 4)" in text
+
+
+def test_exploit_locally_constant_selected_real_kind():
+    """One- and two-argument ``SELECTED_REAL_KIND`` calls (positional and
+    keyword) are folded by ``exploit_locally_constant_variables``."""
+    sources, _main = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main
+implicit none
+integer :: dummy
+integer :: sp, dp, ep, qp, xp, yp, zp
+
+sp = selected_real_kind(6, 37)
+dummy = sp
+dp = selected_real_kind(12, 307)
+dummy = dp
+ep = selected_real_kind(12)
+dummy = ep
+qp = selected_real_kind(30)
+dummy = qp
+
+xp = selected_real_kind(r=37)
+dummy = xp
+yp = selected_real_kind(p=1)
+dummy = yp
+zp = selected_real_kind(p=12,r=1)
+dummy = zp
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+
+    ast = parse_and_improve(sources)
+    ast = optimizations.exploit_locally_constant_variables(ast)
+    got = ast.tofortran()
+
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  INTEGER :: dummy
+  INTEGER :: sp, dp, ep, qp, xp, yp, zp
+  sp = SELECTED_REAL_KIND(6, 37)
+  dummy = 4
+  dp = SELECTED_REAL_KIND(12, 307)
+  dummy = 8
+  ep = SELECTED_REAL_KIND(12)
+  dummy = 8
+  qp = SELECTED_REAL_KIND(30)
+  dummy = 8
+  xp = SELECTED_REAL_KIND(r = 37)
+  dummy = 4
+  yp = SELECTED_REAL_KIND(p = 1)
+  dummy = 2
+  zp = SELECTED_REAL_KIND(p = 12, r = 1)
+  dummy = 8
+END SUBROUTINE main
+""".strip()
+
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
 _TIMER_LIKE_SRC = """
