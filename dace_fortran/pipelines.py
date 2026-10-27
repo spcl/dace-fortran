@@ -35,6 +35,8 @@ from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
 from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
 from dace.transformation.interstate.loop_to_map import LoopToMap
+from dace.transformation.interstate.move_if_into_map import MoveIfIntoMap
+from dace.transformation.interstate.sdfg_nesting import InlineSDFG
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
@@ -313,6 +315,10 @@ def optimize(
     order_free_reductions(sdfg)
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
+    # LoopToMap nests every loop body; pushing guards into the inner maps and inlining the bodies leaves map nests
+    # that MapCollapse below turns into one multi-dimensional map (VT: nproma x nlev kernels).
+    sdfg.apply_transformations_repeated(MoveIfIntoMap, validate=validate)
+    sdfg.apply_transformations_repeated(InlineSDFG, validate=validate)
     # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
     # vertical -- horizontal fuses maps that only share an input, no producer/consumer edge.
     FullMapFusion(validate=validate).apply_pass(sdfg, {})
