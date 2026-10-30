@@ -669,8 +669,12 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
     target_dtypes = {t: sdfg.symbols[t] for t in composed.values() if t in sdfg.symbols} if keep_target_dtype else {}
     sdfg.replace_dict(composed)
     for alias in composed:
-        sdfg.symbols.pop(alias, None)
-    sdfg.symbols.update(target_dtypes)
+        if alias in sdfg.symbols:
+            sdfg.remove_symbol(alias)
+    for name, dtype in target_dtypes.items():
+        if name in sdfg.symbols:
+            sdfg.remove_symbol(name)
+        sdfg.add_symbol(name, dtype)
 
 
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
@@ -1878,12 +1882,15 @@ class SDFGBuilder:
             if k not in sdfg.symbols and k not in sdfg.arrays and not k.startswith("__dace") and k not in needed_syms
         ]
         for k in leaked_syms:
-            sdfg.symbols[k] = _dtypes.int64
+            if k in sdfg.symbols:
+                sdfg.remove_symbol(k)
+            sdfg.add_symbol(k, _dtypes.int64)
         try:
             arglist_items = list(sdfg.arglist().items())
         finally:
             for k in leaked_syms:
-                sdfg.symbols.pop(k, None)
+                if k in sdfg.symbols:
+                    sdfg.remove_symbol(k)
         for sdfg_name_, desc in arglist_items:
             if sdfg_name_ in leaked_syms:
                 continue  # leaked-but-unused; not a real argument
