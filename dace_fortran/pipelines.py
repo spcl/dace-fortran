@@ -346,3 +346,28 @@ def num_maps(sdfg: SDFG) -> int:
 def num_loops(sdfg: SDFG) -> int:
     """Loops anywhere in ``sdfg``, nested SDFGs included -- what the pipeline left sequential."""
     return sum(1 for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion))
+
+
+def parallelization_rate(sdfg: SDFG, loops_before: int, sequential: int = 0) -> float:
+    """The share of the loops that can run in parallel which do, in [0, 1].
+
+    :param sdfg: the optimized SDFG.
+    :param loops_before: :func:`num_loops` of the SDFG before the pipeline.
+    :param sequential: loops that must stay sequential, such as one carrying a flux from level to level.
+    """
+    parallelizable = loops_before - sequential
+    return 1.0 if parallelizable <= 0 else (loops_before - num_loops(sdfg)) / parallelizable
+
+
+def assert_parallelized(sdfg: SDFG, *, loops_before: int, max_maps: int, sequential: int = 0) -> None:
+    """Fail unless every parallelizable loop became a map and at most ``max_maps`` maps remain.
+
+    The rate and a bound, not exact counts: a better pipeline fuses maps, and that must not read as a regression.
+    """
+    rate = parallelization_rate(sdfg, loops_before, sequential)
+    maps, loops = num_maps(sdfg), num_loops(sdfg)
+    if rate < 1.0 or maps > max_maps:
+        raise AssertionError(
+            f"{rate:.1%} parallelized ({loops} of {loops_before} loops left, {sequential} expected), "
+            f"{maps} maps with a bound of {max_maps}"
+        )

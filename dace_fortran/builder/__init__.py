@@ -1235,7 +1235,9 @@ class SDFGBuilder:
             f"{name}_d{dim}"
             for name, desc in sdfg.arrays.items()
             for dim, extent in enumerate(desc.shape)
-            if str(extent) == f"{name}_d{dim}" and str(extent) in assigned and str(extent) not in incoming
+            if str(extent) == f"{name}_d{dim}"
+            and str(extent) in assigned
+            and (desc.transient or str(extent) not in incoming)  # a used array's shape symbols always count as free
         )
         if allocated_extents:
             sdfg.add_state_before(

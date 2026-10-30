@@ -20,6 +20,9 @@ from ordered_set import OrderedSet
 
 from dace_fortran.dace_types import explicit_cf_compatible
 
+#: The state ScalarToSymbolPromotion puts first to initialize a promoted transient a read may reach unassigned.
+PROMOTED_INIT_STATE = "init_promoted_scalars"
+
 
 def subscript_index_symbols(code: object, containers: Container[str]) -> set[str]:
     """Names an index into one of ``containers`` is written in: ``k`` in ``A[k, i] > 0``."""
@@ -138,6 +141,18 @@ def demote_symbol(sdfg: SDFG, name: str) -> None:
         assignment_tasklet(state, name, rhs)
 
 
+def drop_undefined_init(sdfg: SDFG, name: str) -> None:
+    """Forget the entry value ScalarToSymbolPromotion gave ``name`` to keep it out of the signature.
+
+    A read reaching that value sees Fortran's undefined variable, so the value means nothing. As a scalar write it
+    would be an access outside the loop that owns ``name``, and LoopToMap would refuse to privatize it per iteration.
+    """
+    start = sdfg.start_block
+    if start.label == PROMOTED_INIT_STATE:
+        for edge in sdfg.out_edges(start):
+            edge.data.assignments.pop(name, None)
+
+
 @explicit_cf_compatible
 class DemoteNonStructuralSymbols(ppl.Pass):
     """Demote every interstate-assigned symbol that no iteration domain or data access reads to a scalar."""
@@ -161,6 +176,7 @@ class DemoteNonStructuralSymbols(ppl.Pass):
                 structural = structural if structural is not None else structural_symbols(sd)
                 if name in structural:
                     continue
+                drop_undefined_init(sd, name)
                 demote_symbol(sd, name)
                 demoted += 1
                 # A demotion adds tasklets and accesses whose subscripts can name other candidates.

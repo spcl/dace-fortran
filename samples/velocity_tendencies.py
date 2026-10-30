@@ -19,7 +19,7 @@ from pathlib import Path
 from dace.sdfg import SDFG
 
 from dace_fortran.bindings.frozen_signature import refreeze
-from dace_fortran.pipelines import num_loops, num_maps
+from dace_fortran.pipelines import assert_parallelized, num_loops
 from dace_fortran.pipelines import optimize as optimize_pipeline
 from tests.icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
 from tests.icon.ocean._ocean_e2e import run_kernel_e2e
@@ -27,7 +27,7 @@ from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 ATMOSPHERE = Path(__file__).resolve().parents[1] / "tests" / "icon" / "atmosphere"
 ENTRY = "mo_velocity_advection::velocity_tendencies"
 HOOK = "samples.velocity_tendencies:optimize"
-MAPS = {True: 39, False: 39}  # per ``__LOOP_EXCHANGE`` layout
+MAX_MAPS = 39
 # One input stream per layout: the define swaps the automatic transients' layout, so the two are different kernels
 # sharing an ABI, and inputs tuned to one could hide a layout-sensitive bug in the other.
 SEEDS = {True: 1001, False: 1002}
@@ -35,11 +35,9 @@ SEEDS = {True: 1001, False: 1002}
 
 def optimize(sdfg: SDFG) -> None:
     """The hook the child runs on the built SDFG; raising here fails that run with the child's output."""
+    loops_before = num_loops(sdfg)
     optimize_pipeline(sdfg)
-    loop_exchange = "no_loop_exchange" not in sdfg.name  # the SDFG is named after the translation unit
-    counts = (num_maps(sdfg), num_loops(sdfg))
-    if counts != (MAPS[loop_exchange], 0):
-        raise AssertionError(f"{sdfg.name}: {counts[0]} maps, {counts[1]} loops")
+    assert_parallelized(sdfg, loops_before=loops_before, max_maps=MAX_MAPS)
     # The binding is generated from the build-time signature snapshot; the optimized SDFG keeps the ABI
     refreeze(sdfg)
 
@@ -72,7 +70,7 @@ def run() -> None:
         for tu_name, loop_exchange in VELOCITY_TU_VARIANTS:
             run_layout(tu_name, loop_exchange, optimized=False)
             run_layout(tu_name, loop_exchange, optimized=True)
-            print(f"velocity_tendencies {tu_name}: {MAPS[loop_exchange]} maps, no loops, bit-exact against gfortran")
+            print(f"velocity_tendencies {tu_name}: at most {MAX_MAPS} maps, no loops, bit-exact against gfortran")
     finally:
         os.environ.pop("OCEAN_E2E_SDFG_HOOK", None)
 
