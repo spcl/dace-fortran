@@ -27,7 +27,7 @@ from tests.icon.ocean._ocean_e2e import run_kernel_e2e
 ATMOSPHERE = Path(__file__).resolve().parents[1] / "tests" / "icon" / "atmosphere"
 ENTRY = "mo_velocity_advection::velocity_tendencies"
 HOOK = "samples.velocity_tendencies:optimize"
-MAPS = {True: 61, False: 61}  # per ``__LOOP_EXCHANGE`` layout
+MAPS = {True: 39, False: 39}  # per ``__LOOP_EXCHANGE`` layout
 # One input stream per layout: the define swaps the automatic transients' layout, so the two are different kernels
 # sharing an ABI, and inputs tuned to one could hide a layout-sensitive bug in the other.
 SEEDS = {True: 1001, False: 1002}
