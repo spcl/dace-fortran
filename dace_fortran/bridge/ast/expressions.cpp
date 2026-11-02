@@ -1407,6 +1407,14 @@ std::string buildExpr(mlir::Value val, int d) {
       }
       if (inW < outW) return buildExpr(conv.getValue(), d + 1);
     }
+    // Integer -> wider integer in a value expression: without the cast
+    // ``int(a, 8) * int(b, 8)`` multiplies and wraps in 32 bits. Symbolic
+    // expressions stay bare, as for floats above, so bounds keep matching.
+    if (inIsInt && outIsInt && outT.getIntOrFloatBitWidth() > inT.getIntOrFloatBitWidth() && !kSuppressFloatCast) {
+      if (outT.isInteger(64) || outT.isInteger(32)) {
+        return std::string(outT.isInteger(64) ? "int64(" : "int32(") + buildExpr(conv.getValue(), d + 1) + ")";
+      }
+    }
     // Same width or float -> narrower float (truncating cast)  --
     // transparent (the underlying expression already has the
     // narrower type, or the narrowing is desired).

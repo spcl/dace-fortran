@@ -70,6 +70,22 @@ end subroutine raw_chain
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=1e-12, atol=1e-12)
 
 
+def test_widened_integers_multiply_in_the_wide_kind(tmp_path):
+    """``int(a, 8)`` must reach the multiplication: 32-bit arithmetic wraps this product."""
+    src = """
+subroutine widen_product(a, b, r)
+  implicit none
+  integer(4), intent(in)  :: a, b
+  integer(8), intent(out) :: r(1)
+  r(1) = int(a, 8) * int(b, 8)
+end subroutine
+"""
+    sdfg = _build(src, tmp_path, "widen_product")
+    r = np.zeros(1, dtype=np.int64)
+    sdfg(a=np.int32(100000), b=np.int32(100000), r=r)
+    assert r[0] == 10_000_000_000
+
+
 if __name__ == "__main__":
     import pytest
 
