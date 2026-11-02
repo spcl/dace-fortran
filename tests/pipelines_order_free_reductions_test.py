@@ -8,6 +8,7 @@ on the order the iterations combine in, so the loop is parallel and the result s
 """
 
 import numpy as np
+import pytest
 from dace.sdfg.state import LoopRegion
 
 from dace_fortran.pipelines import optimize
@@ -64,9 +65,79 @@ def test_max_count_and_flag_updates_map(tmp_path):
     assert np.array_equal(b, np.where(picked, 2.0 * a, 0.0))
 
 
+_LOOP_MUST_STAY = {
+    "running_max": """
+SUBROUTINE running_max(n, a, b, x)
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(IN) :: a(n)
+  REAL(8), INTENT(OUT) :: b(n), x(1)
+  INTEGER :: i
+  x(1) = 0.0D0
+  DO i = 1, n
+    x(1) = MAX(x(1), a(i))
+    b(i) = x(1)
+  END DO
+END SUBROUTINE
+""",
+    "search_flag": """
+SUBROUTINE search_flag(n, a, b, f)
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(IN) :: a(n)
+  REAL(8), INTENT(INOUT) :: b(n)
+  LOGICAL, INTENT(OUT) :: f(1)
+  INTEGER :: i
+  f(1) = .FALSE.
+  DO i = 1, n
+    IF (.NOT. f(1)) b(i) = a(i)
+    IF (a(i) > 0.5D0) f(1) = .TRUE.
+  END DO
+END SUBROUTINE
+""",
+    "last_store": """
+SUBROUTINE last_store(n, a, f)
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(IN) :: a(n)
+  LOGICAL, INTENT(OUT) :: f(1)
+  INTEGER :: i
+  f(1) = .FALSE.
+  DO i = 1, n
+    IF (a(i) > 0.5D0) THEN
+      f(1) = .TRUE.
+    ELSE
+      f(1) = .FALSE.
+    END IF
+  END DO
+END SUBROUTINE
+""",
+    "clamp": """
+SUBROUTINE clamp(n, a, b, x)
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(IN) :: a(n), b(n)
+  REAL(8), INTENT(OUT) :: x(1)
+  INTEGER :: i
+  x(1) = 0.0D0
+  DO i = 1, n
+    x(1) = MAX(x(1), a(i))
+    x(1) = MIN(x(1), b(i))
+  END DO
+END SUBROUTINE
+""",
+}
+
+
+@pytest.mark.parametrize("name", _LOOP_MUST_STAY)
+def test_observed_or_mixed_update_keeps_the_loop_sequential(tmp_path, name):
+    """A read of the partial value, or a second operator on the container, is order-dependent: no reduction forms."""
+    sdfg = build_sdfg(_LOOP_MUST_STAY[name], tmp_path / "sdfg", name=name, entry=name).build()
+    optimize(sdfg)
+    assert [r for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion)], "loop was mapped"
+
+
 if __name__ == "__main__":
     import tempfile
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as tmp:
         test_max_count_and_flag_updates_map(Path(tmp))
+        for routine in _LOOP_MUST_STAY:
+            test_observed_or_mixed_update_keeps_the_loop_sequential(Path(tmp) / routine, routine)

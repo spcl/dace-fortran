@@ -24,7 +24,8 @@ defines the team-size symbol of thread-strided persistent maps at SDFG entry, wh
 
 import ast
 import copy
-from typing import Any, Union, cast
+from collections.abc import Iterator
+from typing import Any, NamedTuple, Union, cast
 
 import numpy as np
 from dace import SDFG, Memlet, dtypes, subsets
@@ -46,7 +47,7 @@ from dace.transformation.passes.length_one_array_scalar_conversion import Conver
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
-from dace_fortran.demote_symbols import DemoteNonStructuralSymbols
+from dace_fortran.demote_symbols import DemoteNonStructuralSymbols, enclosing_loops
 from dace_fortran.loop_unroll import ShortLoopUnroll
 from dace_fortran.omp_threads import BindOmpThreadCount
 from dace_fortran.persistent_transients import MakeTransientsPersistent
@@ -118,18 +119,108 @@ def _is_integer(sdfg: SDFG, name: str) -> bool:
 
 
 #: The reduction a boolean constant store is equivalent to: ``x = True`` is ``x = x or True``.
-_IDEMPOTENT_STORE_WCR = {True: "lambda a, b: a or b", False: "lambda a, b: a and b"}
+_IDEMPOTENT_STORE_WCR = {"or": "lambda a, b: a or b", "and": "lambda a, b: a and b"}
 
 
-def _enclosing_loop_vars(state: SDFGState) -> set[str]:
-    """The iteration variables of the loops around ``state`` within its SDFG."""
-    names: set[str] = set()
-    region = state.parent_graph
-    while region is not None and not isinstance(region, SDFG):
-        if isinstance(region, LoopRegion) and region.loop_variable:
-            names.add(region.loop_variable)
-        region = region.parent_graph
-    return names
+class OrderFreeUpdate(NamedTuple):
+    """A tasklet ``out = out <operator> e`` (or a constant store equivalent to one); ``read`` is its read of ``out``."""
+
+    state: SDFGState
+    tasklet: nodes.Tasklet
+    out: MultiConnectorEdge[Memlet]
+    operator: str
+    read: MultiConnectorEdge[Memlet] | None
+
+
+def carrying_loop_of(state: SDFGState, written: set[str]) -> LoopRegion | None:
+    """The outermost iterated loop around ``state`` whose iterator is not among ``written``."""
+    candidates = [loop for loop in enclosing_loops(state) if loop.loop_variable and loop.loop_variable not in written]
+    return candidates[-1] if candidates else None
+
+
+def written_symbols(state: SDFGState, out: MultiConnectorEdge[Memlet]) -> set[str]:
+    written = out.data.get_dst_subset(out, state)
+    return {str(s) for s in written.free_symbols} if isinstance(written, subsets.Subset) else set()
+
+
+def _idempotent_store(sdfg: SDFG, state: SDFGState, tasklet: nodes.Tasklet, out: MultiConnectorEdge[Memlet]) -> str:
+    """The operator a boolean constant store, ``out = True`` or ``out = False``, amounts to when an enclosing loop
+    writes the same element from every iteration; empty otherwise."""
+    code = tasklet.code.code
+    statement = code[0] if isinstance(code, list) and len(code) == 1 else None
+    if not isinstance(statement, ast.Assign) or not isinstance(statement.value, ast.Constant):
+        return ""
+    value = statement.value.value
+    name = out.dst.data
+    if not isinstance(value, bool) or not (sdfg.arrays[name].dtype == dtypes.bool_ or _is_integer(sdfg, name)):
+        return ""
+    if carrying_loop_of(state, written_symbols(state, out)) is None:
+        return ""
+    return "or" if value else "and"
+
+
+def order_free_updates(sdfg: SDFG) -> Iterator[OrderFreeUpdate]:
+    """Every update of ``sdfg`` that :data:`ORDER_FREE_UPDATES` covers, judged alone."""
+    for state in sdfg.states():
+        for tasklet in [n for n in state.nodes() if isinstance(n, nodes.Tasklet)]:
+            if tasklet.language is not dtypes.Language.Python or state.entry_node(tasklet) is not None:
+                continue
+            outs = state.out_edges(tasklet)
+            if len(outs) != 1 or not isinstance(outs[0].dst, nodes.AccessNode) or outs[0].data.wcr:
+                continue
+            out = outs[0]
+            if state.in_degree(tasklet) == 0:
+                operator = _idempotent_store(sdfg, state, tasklet, out)
+                if operator:
+                    yield OrderFreeUpdate(state, tasklet, out, operator, None)
+                continue
+            update = AugAssignToWCR.python_update(tasklet, state.in_edges(tasklet), out)
+            if update is None or not (
+                update[0] in ORDER_FREE_UPDATES
+                or (update[0] in ORDER_FREE_INTEGER_UPDATES and _is_integer(sdfg, out.dst.data))
+            ):
+                continue
+            if isinstance(update[1].src, nodes.AccessNode) and update[1].src.data == out.dst.data:
+                yield OrderFreeUpdate(state, tasklet, out, update[0], update[1])
+
+
+def carrying_loop(update: OrderFreeUpdate) -> LoopRegion | None:
+    """The outermost loop around ``update`` whose iterator does not select the element it writes."""
+    return carrying_loop_of(update.state, written_symbols(update.state, update.out))
+
+
+def used_besides(loop: LoopRegion, name: str, updates: list[OrderFreeUpdate]) -> bool:
+    """Whether anything but ``updates`` touches container ``name`` in ``loop``, control flow included."""
+    if name in loop.used_symbols(all_symbols=True):
+        return True
+    writers = {update.tasklet for update in updates}
+    reads = {(update.tasklet, update.read.dst_conn) for update in updates if update.read is not None}
+    for state in loop.states():
+        for node in state.data_nodes():
+            if node.data == name and (
+                any(edge.src not in writers for edge in state.in_edges(node))
+                or any((edge.dst, edge.dst_conn) not in reads for edge in state.out_edges(node))
+            ):
+                return True
+    return False
+
+
+def racing_containers(sdfg: SDFG) -> set[tuple[LoopRegion, str]]:
+    """The ``(loop, container)`` pairs a reduction would race on, so their updates stay plain writes.
+
+    A reduction holds only if the loop combines one operator and nothing observes the partial value: LoopToMap takes
+    a read of a WCR-written element, and opposite operators on it, as private to the iteration.
+    """
+    groups: dict[tuple[LoopRegion, str], list[OrderFreeUpdate]] = {}
+    for update in order_free_updates(sdfg):
+        loop = carrying_loop(update)
+        if loop is not None:
+            groups.setdefault((loop, update.out.dst.data), []).append(update)
+    return {
+        (loop, name)
+        for (loop, name), updates in groups.items()
+        if len({update.operator for update in updates}) > 1 or used_besides(loop, name, updates)
+    }
 
 
 def order_free_reductions(sdfg: SDFG) -> int:
@@ -140,79 +231,47 @@ def order_free_reductions(sdfg: SDFG) -> int:
       ``levmask(jb, jk) = .TRUE.`` inside the ``jc`` loop) becomes the OR / AND reduction it is equivalent to.
 
     Only :data:`ORDER_FREE_UPDATES`, and :data:`ORDER_FREE_INTEGER_UPDATES` on integers, are formed, so the parallel
-    result is bit-identical. Returns the updates rewritten.
+    result is bit-identical; a container in :func:`racing_containers` keeps its plain writes. Returns the updates
+    rewritten.
     """
     rewritten = 0
     xform = AugAssignToWCR()
     for sd in sdfg.all_sdfgs_recursive():
+        racing = racing_containers(sd)
         changed = True
         while changed:
             changed = False
-            for state in sd.states():
-                for tasklet in [n for n in state.nodes() if isinstance(n, nodes.Tasklet)]:
-                    if tasklet.language is not dtypes.Language.Python or state.entry_node(tasklet) is not None:
-                        continue
-                    outs = state.out_edges(tasklet)
-                    if len(outs) != 1 or not isinstance(outs[0].dst, nodes.AccessNode) or outs[0].data.wcr:
-                        continue
-                    out = outs[0]
-                    if state.in_degree(tasklet) == 0:
-                        rewritten += _idempotent_store(sd, state, tasklet, out)
-                        continue
-                    update = AugAssignToWCR.python_update(tasklet, state.in_edges(tasklet), out)
-                    if update is None or not (
-                        update[0] in ORDER_FREE_UPDATES
-                        or (update[0] in ORDER_FREE_INTEGER_UPDATES and _is_integer(sd, out.dst.data))
-                    ):
-                        continue
-                    source = update[1].src
-                    if not isinstance(source, nodes.AccessNode) or source.data != out.dst.data:
-                        continue
-                    xform.setup_match(
-                        sd,
-                        sd.cfg_id,
-                        sd.node_id(state) if state.parent_graph is sd else -1,
-                        # Bound by node OBJECT, not by node id: ``PatternNode`` resolves a non-int value as-is.
-                        cast(
-                            dict[Any, int],
-                            {
-                                AugAssignToWCR.input: source,
-                                AugAssignToWCR.tasklet: tasklet,
-                                AugAssignToWCR.output: out.dst,
-                            },
-                        ),
-                        0,
-                        override=True,
-                    )
-                    if not xform.can_be_applied(state, 0, sd):
-                        continue
-                    xform.apply(state, sd)
+            for update in order_free_updates(sd):
+                state, tasklet, out = update.state, update.tasklet, update.out
+                if (carrying_loop(update), out.dst.data) in racing:
+                    continue
+                if update.read is None:
+                    out.data.wcr = _IDEMPOTENT_STORE_WCR[update.operator]
                     rewritten += 1
-                    changed = True  # the apply may fission ``state``: sweep again
-                    break
-                if changed:
-                    break
+                    continue
+                xform.setup_match(
+                    sd,
+                    sd.cfg_id,
+                    sd.node_id(state) if state.parent_graph is sd else -1,
+                    # Bound by node OBJECT, not by node id: ``PatternNode`` resolves a non-int value as-is.
+                    cast(
+                        dict[Any, int],
+                        {
+                            AugAssignToWCR.input: update.read.src,
+                            AugAssignToWCR.tasklet: tasklet,
+                            AugAssignToWCR.output: out.dst,
+                        },
+                    ),
+                    0,
+                    override=True,
+                )
+                if not xform.can_be_applied(state, 0, sd):
+                    continue
+                xform.apply(state, sd)
+                rewritten += 1
+                changed = True  # the apply may fission ``state``: sweep again
+                break
     return rewritten
-
-
-def _idempotent_store(sdfg: SDFG, state: SDFGState, tasklet: nodes.Tasklet, out: MultiConnectorEdge[Memlet]) -> int:
-    """Give a boolean constant store, ``out = True`` or ``out = False``, the reduction it is equivalent to when an
-    enclosing loop writes the same element from every iteration."""
-    code = tasklet.code.code
-    statement = code[0] if isinstance(code, list) and len(code) == 1 else None
-    if not isinstance(statement, ast.Assign) or not isinstance(statement.value, ast.Constant):
-        return 0
-    value = statement.value.value
-    name = out.dst.data
-    if not isinstance(value, bool) or not (sdfg.arrays[name].dtype == dtypes.bool_ or _is_integer(sdfg, name)):
-        return 0
-    written = out.data.get_dst_subset(out, state)
-    if not isinstance(written, subsets.Subset) or not _enclosing_loop_vars(state) - {
-        str(s) for s in written.free_symbols
-    }:
-        return 0
-    out.data.wcr = _IDEMPOTENT_STORE_WCR[value]
-    return 1
 
 
 def verify_numerics(reference: SDFG, optimized: SDFG, inputs: dict[str, Any]) -> None:
