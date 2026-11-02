@@ -76,8 +76,37 @@ def test_fftw_backward_stays_unnormalized(tmp_path):
 def test_plan_rank_must_match_the_buffer(tmp_path):
     """A 2-D plan on a flat buffer has no faithful lowering yet, so it stops rather than transforming one axis."""
     src = _probe_with("run_flat", "6", "FFTW_FORWARD")
-    with pytest.raises(NotImplementedError, match="rank 2"):
+    with pytest.raises(NotImplementedError, match="extents"):
         dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry="fft_probe::run_flat", name="run_flat")
+
+
+def test_plan_of_other_extents_is_refused(tmp_path):
+    """FFTW touches only the plan's extents, the FFT node its whole buffer."""
+    src = _probe_with("run_prefix", "4, 4", "FFTW_FORWARD")
+    with pytest.raises(NotImplementedError, match="extents"):
+        dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry="fft_probe::run_prefix", name="run_prefix")
+
+
+def test_plan_outside_a_loop_is_refused(tmp_path):
+    """The execute must not vanish when its plan was made in an enclosing block."""
+    src = (
+        _SRC.read_text().split("CONTAINS")[0]
+        + """CONTAINS
+  SUBROUTINE run_in_loop(x)
+    COMPLEX(C_DOUBLE_COMPLEX), INTENT(INOUT) :: x(2, 3)
+    TYPE(C_PTR) :: plan
+    INTEGER :: i
+    plan = fftw_plan_dft_2d(3, 2, x, x, FFTW_FORWARD, FFTW_ESTIMATE)
+    DO i = 1, 2
+      CALL fftw_execute_dft(plan, x, x)
+    END DO
+    CALL fftw_destroy_plan(plan)
+  END SUBROUTINE run_in_loop
+END MODULE fft_probe
+"""
+    )
+    with pytest.raises(Exception, match="no plan"):
+        dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry="fft_probe::run_in_loop", name="run_in_loop")
 
 
 if __name__ == "__main__":

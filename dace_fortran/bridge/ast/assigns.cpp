@@ -1624,11 +1624,10 @@ std::pair<std::string, std::string> resolveDesignateSliceSubset(mlir::Value oper
         lo0 = "(" + dim.lo + " - 1)";
       }
       sub += lo0 + ":" + dim.hi;
-      bool const strideIsOne = dim.strideExpr.empty() && dim.strideConst == 1;
-      if (!strideIsOne) {
-        sub += ":";
-        sub += dim.strideExpr.empty() ? std::to_string(dim.strideConst) : dim.strideExpr;
-      }
+      // Library nodes read consecutive elements: a stride would walk the wrong ones
+      if (!dim.strideExpr.empty() || dim.strideConst != 1)
+        throw std::runtime_error("libcall \"" + std::string(calleeName) + "\" arg " + std::to_string(argIdx) +
+                                 ": non-unit stride in the section of \"" + name + "\"");
       flatCursor += 3;
     } else {
       // Mixed scalar+slice: emit a single-element subset for the scalar dim so the memlet's rank matches the underlying
