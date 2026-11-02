@@ -453,7 +453,7 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int d
     }
     return;
   }
-  for (auto operand : op->getOperands()) collectReadAccesses(operand, accesses, depth + 1);
+  for (auto operand : printedOperands(op)) collectReadAccesses(operand, accesses, depth + 1);
 }
 
 /// Maps an hlfir expr-producing op to its FaCe libcall callee tag (matmul/transpose/dot_product); nullptr if unknown.
@@ -703,7 +703,8 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
     // Tasklet-body mode: comparisons/loads emit bare names so emit_tasklet's per-occurrence connector wiring picks them
     // up.
     NoSubscriptGuard const g;
-    std::string b = buildBoolExpr(yielded, 0);
+    bool const isLogical = yielded.getType().isInteger(1) || mlir::isa<fir::LogicalType>(yielded.getType());
+    std::string b = isLogical ? buildBoolExpr(yielded, 0) : "?";
     if (b == "?") b = buildExpr(yielded, 0);
     body = b;
   }

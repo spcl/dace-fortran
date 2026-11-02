@@ -110,19 +110,6 @@ struct ForceSubscriptsGuard {
   ~ForceSubscriptsGuard() { kForceSubscripts = prev; }
 };
 
-/// When true, suppress the dace.float32(...) wrap around f32 constants/converts. Set inside
-/// buildBoolExpr/buildExprWithSubscripts, whose output lands in an interstate-edge/ConditionalBlock condition parsed by
-/// DaCe's symbolic engine -- which treats dace.float32 as a free symbol and raises KeyError: 'dace'. Harmless inside
-/// tasklet bodies; the f32-vs-f64 difference doesn't change comparison outcomes anyway.
-inline thread_local bool kSuppressFloatCast = false;
-
-/// RAII guard scoping ``kSuppressFloatCast = true``.
-struct SuppressFloatCastGuard {
-  bool prev;
-  SuppressFloatCastGuard() : prev(kSuppressFloatCast) { kSuppressFloatCast = true; }
-  ~SuppressFloatCastGuard() { kSuppressFloatCast = prev; }
-};
-
 // ============================================================================
 // Cross-file API
 // ============================================================================
@@ -140,6 +127,17 @@ std::string buildIndexExpr(mlir::Value v, int d);
 /// Like buildExpr but renders array reads with full arr[idx, ...] subscripts; used by buildBoolExpr for interstate-edge
 /// condition contexts. See control_flow.cpp.
 std::string buildExprWithSubscripts(mlir::Value val, int d);
+/// ``inner`` wrapped in the cast a value-changing fir.convert from ``inT`` to ``outT`` needs, or unchanged.
+std::string castForConvert(mlir::Type inT, mlir::Type outT, std::string inner);
+/// The complex value of a ``conjg`` insert_value idiom, or null.
+mlir::Value conjSource(fir::InsertValueOp ins);
+/// The two complex operands of a ``__divdc3`` / ``__divsc3`` call, or nulls.
+std::pair<mlir::Value, mlir::Value> complexDivSources(fir::CallOp call);
+/// ``op``'s operands in the order and count buildExpr prints them: emit_tasklet pairs the Nth printed occurrence of an
+/// array with its Nth read access, so every read collector walks this list.
+llvm::SmallVector<mlir::Value, 5> printedOperands(mlir::Operation* op);
+/// ``arr[...]`` for an element designate in a condition, with the same 0-based subscripts its memlet would carry.
+std::string subscriptedElement(hlfir::DesignateOp dg, const std::string& arr);
 
 /// Render an i1 SSA value as a Python boolean expression (cmpf/cmpi predicates, andi/ori/xori chains, fir.is_present
 /// for OPTIONAL present(x)); honours context flags for bare-name vs subscripted operand rendering. See
