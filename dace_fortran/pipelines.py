@@ -184,9 +184,26 @@ def order_free_updates(sdfg: SDFG) -> Iterator[OrderFreeUpdate]:
                 yield OrderFreeUpdate(state, tasklet, out, update[0], update[1])
 
 
-def carrying_loop(update: OrderFreeUpdate) -> LoopRegion | None:
-    """The outermost loop around ``update`` whose iterator does not select the element it writes."""
-    return carrying_loop_of(update.state, written_symbols(update.state, update.out))
+def plainly_written(loop: LoopRegion, name: str, updaters: set[nodes.Tasklet]) -> bool:
+    """Whether a write other than an update of ``updaters`` reaches container ``name`` in ``loop``."""
+    return any(
+        node.data == name and any(edge.src not in updaters for edge in state.in_edges(node))
+        for state in loop.states()
+        for node in state.data_nodes()
+    )
+
+
+def carrying_loop(update: OrderFreeUpdate, updaters: set[nodes.Tasklet]) -> LoopRegion | None:
+    """The outermost loop around ``update`` that combines its partial values: its iterator does not select the element,
+    and no loop up to it holds a plain write, which restarts the value in every iteration of that loop."""
+    name, written = update.out.dst.data, written_symbols(update.state, update.out)
+    carrying = None
+    for loop in enclosing_loops(update.state):
+        if plainly_written(loop, name, updaters):
+            break
+        if loop.loop_variable and loop.loop_variable not in written:
+            carrying = loop
+    return carrying
 
 
 def used_besides(loop: LoopRegion, name: str, updates: list[OrderFreeUpdate]) -> bool:
@@ -205,21 +222,27 @@ def used_besides(loop: LoopRegion, name: str, updates: list[OrderFreeUpdate]) ->
     return False
 
 
-def racing_containers(sdfg: SDFG) -> set[tuple[LoopRegion, str]]:
-    """The ``(loop, container)`` pairs a reduction would race on, so their updates stay plain writes.
+def racing_updates(sdfg: SDFG) -> set[nodes.Tasklet]:
+    """The updates a reduction would race on, so they stay plain writes.
 
     A reduction holds only if the loop combines one operator and nothing observes the partial value: LoopToMap takes
     a read of a WCR-written element, and opposite operators on it, as private to the iteration.
     """
+    updates = list(order_free_updates(sdfg))
+    updaters: dict[str, set[nodes.Tasklet]] = {}
+    for update in updates:
+        updaters.setdefault(update.out.dst.data, set()).add(update.tasklet)
     groups: dict[tuple[LoopRegion, str], list[OrderFreeUpdate]] = {}
-    for update in order_free_updates(sdfg):
-        loop = carrying_loop(update)
+    for update in updates:
+        name = update.out.dst.data
+        loop = carrying_loop(update, updaters[name])
         if loop is not None:
-            groups.setdefault((loop, update.out.dst.data), []).append(update)
+            groups.setdefault((loop, name), []).append(update)
     return {
-        (loop, name)
-        for (loop, name), updates in groups.items()
-        if len({update.operator for update in updates}) > 1 or used_besides(loop, name, updates)
+        update.tasklet
+        for (loop, name), group in groups.items()
+        if len({update.operator for update in group}) > 1 or used_besides(loop, name, group)
+        for update in group
     }
 
 
@@ -231,19 +254,19 @@ def order_free_reductions(sdfg: SDFG) -> int:
       ``levmask(jb, jk) = .TRUE.`` inside the ``jc`` loop) becomes the OR / AND reduction it is equivalent to.
 
     Only :data:`ORDER_FREE_UPDATES`, and :data:`ORDER_FREE_INTEGER_UPDATES` on integers, are formed, so the parallel
-    result is bit-identical; a container in :func:`racing_containers` keeps its plain writes. Returns the updates
+    result is bit-identical; an update in :func:`racing_updates` stays a plain write. Returns the updates
     rewritten.
     """
     rewritten = 0
     xform = AugAssignToWCR()
     for sd in sdfg.all_sdfgs_recursive():
-        racing = racing_containers(sd)
+        racing = racing_updates(sd)
         changed = True
         while changed:
             changed = False
             for update in order_free_updates(sd):
                 state, tasklet, out = update.state, update.tasklet, update.out
-                if (carrying_loop(update), out.dst.data) in racing:
+                if tasklet in racing:
                     continue
                 if update.read is None:
                     out.data.wcr = _IDEMPOTENT_STORE_WCR[update.operator]
