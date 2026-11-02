@@ -123,10 +123,40 @@ def _parse_reduce_identity(s: str) -> bool | int | float:
         raise NotImplementedError(f"unsupported reduction identity {s!r}") from None
 
 
+def whole_memlet(ctx: Ctx, name: str) -> Memlet:
+    return Memlet.from_array(name, ctx.sdfg.arrays[name])
+
+
+def section_alias_slab(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, str] | None:
+    """``(source, subset)`` of a ``section_alias`` dummy, which has no descriptor of its own, or ``None``."""
+    v = builder.arrays.get(name)
+    if v is None or v.role != "section_alias":
+        return None
+    src_desc = ctx.sdfg.arrays[v.view_source]
+    parts = [
+        f"0:{src_desc.shape[src_dim]}" if dummy_dim is not None else f"({slot}) - offset_{v.view_source}_d{src_dim}"
+        for src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map)
+    ]
+    return v.view_source, ", ".join(parts)
+
+
 def add_copy_node(builder: SDFGBuilder, ctx: Ctx, state: SDFGState, src_name: str, tgt_name: str) -> None:
     """Add a ``CopyLibraryNode`` copying the whole array ``src_name`` into ``tgt_name`` in ``state``. Connector
     names come from the node class so this stays correct across libnode renames."""
     from dace.libraries.standard.nodes import CopyLibraryNode
+
+    src_slab = section_alias_slab(builder, ctx, src_name)
+    tgt_slab = section_alias_slab(builder, ctx, tgt_name)
+    if src_slab or tgt_slab:
+        cp = CopyLibraryNode(name=f"copy_{tgt_name}_{builder.nid()}")
+        state.add_node(cp)
+        src_data, src_subset = src_slab or (src_name, None)
+        tgt_data, tgt_subset = tgt_slab or (tgt_name, None)
+        src_memlet = Memlet(data=src_data, subset=src_subset) if src_subset else whole_memlet(ctx, src_data)
+        tgt_memlet = Memlet(data=tgt_data, subset=tgt_subset) if tgt_subset else whole_memlet(ctx, tgt_data)
+        state.add_edge(acc(builder, state, src_data), None, cp, input_connector(CopyLibraryNode), src_memlet)
+        state.add_edge(cp, output_connector(CopyLibraryNode), acc(builder, state, tgt_data), None, tgt_memlet)
+        return
 
     src_desc = ctx.sdfg.arrays[src_name]
     tgt_desc = ctx.sdfg.arrays[tgt_name]
@@ -161,7 +191,8 @@ def _state_for_whole_write(builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRe
 
 def emit_copy(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Whole-array ``b = a`` -> ``CopyLibraryNode``."""
-    state = _state_for_whole_write(builder, ctx, region, n.target)
+    target = (section_alias_slab(builder, ctx, n.target) or (n.target,))[0]
+    state = _state_for_whole_write(builder, ctx, region, target)
     add_copy_node(builder, ctx, state, n.reduce_src, n.target)  # buildCopyNode stored the source in reduce_src
 
 
@@ -173,18 +204,10 @@ def emit_memset(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     tgt_name = n.target
     # Section-alias dummies route memset through the source array, writing the slab
     # view_dim_map carves out.
-    v_tgt = builder.arrays.get(tgt_name)
-    if v_tgt is not None and v_tgt.role == "section_alias":
-        src_name = v_tgt.view_source
+    slab = section_alias_slab(builder, ctx, tgt_name)
+    if slab is not None:
+        src_name, slab_subset = slab
         state = _state_for_whole_write(builder, ctx, region, src_name)
-        src_desc = ctx.sdfg.arrays[src_name]
-        slab_parts = []
-        for src_dim, slot, dummy_dim in iter_view_dim_map(v_tgt.view_dim_map):
-            if dummy_dim is not None:
-                slab_parts.append(f"0:{src_desc.shape[src_dim]}")
-            else:
-                slab_parts.append(f"({slot}) - 1")
-        slab_subset = ", ".join(slab_parts)
         ms = FillLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
         state.add_node(ms)
         tgt_access = acc(builder, state, tgt_name)  # redirects to src via resolve
@@ -311,6 +334,19 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
         emit_libcall(builder, ctx, m_node, region)
         return
 
+    # Fortran evaluates the RHS first and these nodes cannot run in place: go through a buffer.
+    if n.target in n.call_args:
+        if n.target_subset or any(ac.is_write for ac in n.accesses):
+            raise NotImplementedError(f"{n.callee.upper()} overwriting an operand section of {n.target} is not lowered")
+        tgt_desc = ctx.sdfg.arrays[n.target]
+        buffer, _ = ctx.sdfg.add_array(
+            f"{n.target}_rhs", tgt_desc.shape, tgt_desc.dtype, transient=True, find_new_name=True
+        )
+        fields = {f.name: getattr(n, f.name) for f in dataclasses.fields(SyntheticNode)}
+        emit_libcall(builder, ctx, SyntheticNode(**{**fields, "target": buffer}), region)
+        add_copy_node(builder, ctx, ctx.new_state(builder, region), buffer, n.target)
+        return
+
     *arg_subsets, target_subset = symbolize_subset_indices(
         builder, ctx, region, [*(n.call_arg_subsets or []), n.target_subset or ""]
     )
@@ -339,7 +375,7 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
         # dim 0-based in reduce_axes (mirrors the Reduce path); back in options; mask=
         # signalled by an extra call_args entry past the first _x source.
         opt_dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
-        back = bool((n.options or {}).get("back", False))
+        back = (n.options or {}).get("back") == "true"
         has_mask = len(n.call_args) > 1
         node = cls(
             f"{spec.name}_{n.target}_{builder.nid()}",
@@ -415,7 +451,9 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     # Fortran DOT_PRODUCT(a, b) for complex a is SUM(CONJG(a)*b) (BLAS ?dotc); blas.Dot defaults
     # to the unconjugated ?dotu. MATMUL stays unconjugated, so key this on Dot only.
-    if spec.node_cls == "Dot" and n.call_args and ctx.sdfg.arrays[n.call_args[0]].dtype.is_complex():
+    first_arg = n.call_args[0] if n.call_args else ""
+    first_arg = (section_alias_slab(builder, ctx, first_arg) or (first_arg,))[0]
+    if spec.node_cls == "Dot" and n.call_args and ctx.sdfg.arrays[first_arg].dtype.is_complex():
         node.conjugate = True
     state.add_node(pin_sequential(node))
 
@@ -428,6 +466,8 @@ def _emit_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFl
     if has_mask and spec.node_cls in ("ArgMin", "ArgMax"):
         effective_in_conns.append("_mask")
     for conn, src, sub in zip(effective_in_conns, n.call_args, arg_subsets, strict=False):
+        if slab := section_alias_slab(builder, ctx, src):
+            src, sub = slab
         src_desc = ctx.sdfg.arrays[src]
         in_memlet = Memlet(f"{src}[{sub}]") if sub else Memlet.from_array(src, src_desc)
         state.add_edge(acc(builder, state, src), None, node, conn, in_memlet)
@@ -642,6 +682,15 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
             return Memlet(f"{name}[{sub}]")
         return Memlet.from_array(name, ctx.sdfg.arrays[name])
 
+    def rank_operand(name: str) -> str:
+        """A rank or tag a branch promoted to a symbol has no descriptor: stage it for the library node's connector."""
+        if name in ctx.sdfg.arrays or name not in ctx.sdfg.symbols:
+            return name
+        staged, _ = ctx.sdfg.add_array(f"__{name}_stage", [1], dace.int32, transient=True, find_new_name=True)
+        stage = state.add_tasklet(f"stage_{staged}", {}, {"_o_out": None}, f"_o_out = {name}")
+        state.add_edge(stage, "_o_out", acc(builder, state, staged), None, Memlet(f"{staged}[0]"))
+        return staged
+
     def _trailing_comm(operands: int) -> str | None:
         """The user communicator the bridge appends after the call's ``operands`` fixed arguments, or ``None`` for
         the default ``MPI_COMM_WORLD``."""
@@ -788,12 +837,12 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         # (the same buffer is read on root and written on the others).
         from dace.libraries.comm.nodes.bcast import Bcast
 
-        buffer, root = n.call_args[0], n.call_args[1]
+        buffer, root = n.call_args[0], rank_operand(n.call_args[1])
         node = Bcast(f"_mpi_bcast_{builder.nid()}")
         state.add_node(node)
         rdesc = ctx.sdfg.arrays[root]
         state.add_edge(state.add_read(buffer), None, node, "_inbuffer", _buf_memlet(buffer, 0))
-        state.add_edge(state.add_read(root), None, node, "_root", Memlet.from_array(root, rdesc))
+        state.add_edge(acc(builder, state, root), None, node, "_root", Memlet.from_array(root, rdesc))
         state.add_edge(node, "_outbuffer", state.add_write(buffer), None, _buf_memlet(buffer, 0))
         _wire_user_comm(node, _trailing_comm(operands=2))
         return
@@ -923,16 +972,17 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         from dace.libraries.comm.nodes.reduce import Reduce
 
         sendbuf, recvbuf, opname, root = n.call_args[:4]
+        root = rank_operand(root)
         op = resolve_mpi_op(opname)
         node = Reduce(f"_mpi_reduce_{builder.nid()}", op=op)
         state.add_node(node)
         state.add_edge(state.add_read(sendbuf), None, node, "_inbuffer", _buf_memlet(sendbuf, 0))
-        state.add_edge(state.add_read(root), None, node, "_root", _buf_memlet(root, 3))
+        state.add_edge(acc(builder, state, root), None, node, "_root", _buf_memlet(root, 3))
         state.add_edge(node, "_outbuffer", state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
         _wire_user_comm(node, _trailing_comm(operands=4))
         return
 
-    buffer, partner, tag = n.call_args[0], n.call_args[1], n.call_args[2]
+    buffer, partner, tag = n.call_args[0], rank_operand(n.call_args[1]), rank_operand(n.call_args[2])
     bdesc = ctx.sdfg.arrays[buffer]
     bptr = dace.pointer(bdesc.dtype)
     # ``_dest`` / ``_src`` / ``_tag`` route through the subset-aware ``_buf_memlet``
@@ -941,7 +991,7 @@ def emit_mpi(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     # ``call_arg_subsets[1]`` / ``[2]``; an empty subset keeps the whole scalar.
     partner_memlet = _buf_memlet(partner, 1)
     tag_memlet = _buf_memlet(tag, 2)
-    buf_memlet = Memlet.from_array(buffer, bdesc)
+    buf_memlet = _buf_memlet(buffer, 0)
 
     # Optional trailing user communicator (the C++ bridge appends it only
     # when non-default; default ``MPI_COMM_WORLD`` adds nothing).  Base
@@ -1536,6 +1586,16 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         return
 
 
+def wire_info(
+    builder: SDFGBuilder, ctx: Ctx, region: ControlFlowRegion, state: SDFGState, node: Node, info: str
+) -> None:
+    """Connect a LAPACK node's ``_res`` output to ``info``, which a branch on it may have promoted to a symbol."""
+    target, sym = query_target(builder, ctx, info)
+    if target in ctx.sdfg.arrays:
+        state.add_edge(node, "_res", state.add_write(target), None, whole_memlet(ctx, target))
+    bind_query_symbol(builder, ctx, region, target, sym)
+
+
 def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran LAPACK call (``kind == 'lapackcall'``)
     to a :mod:`dace.libraries.lapack` library node.
@@ -1566,9 +1626,7 @@ def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         if ipiv in ctx.sdfg.arrays:
             ipiv_desc = ctx.sdfg.arrays[ipiv]
             state.add_edge(node, "_ipiv", state.add_write(ipiv), None, Memlet.from_array(ipiv, ipiv_desc))
-        if info in ctx.sdfg.arrays:
-            info_desc = ctx.sdfg.arrays[info]
-            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        wire_info(builder, ctx, region, state, node, info)
         return
 
     if routine in ("dpotrf", "spotrf"):
@@ -1582,9 +1640,7 @@ def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         a_desc = ctx.sdfg.arrays[A]
         state.add_edge(state.add_read(A), None, node, "_xin", Memlet.from_array(A, a_desc))
         state.add_edge(node, "_xout", state.add_write(A), None, Memlet.from_array(A, a_desc))
-        if info in ctx.sdfg.arrays:
-            info_desc = ctx.sdfg.arrays[info]
-            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        wire_info(builder, ctx, region, state, node, info)
         return
 
 
@@ -1712,9 +1768,8 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     :class:`dace_fortran.external.ExternalCall` library node.
 
     The callee is matched against
-    ``dace_fortran.external.lookup_external``.  Unregistered callees
-    are a **no-op** (preserves prior behaviour -- ``kind="call"`` had
-    no emitter), so unrelated kernels are unaffected.
+    ``dace_fortran.external.lookup_external``.  An unregistered callee
+    is refused: dropping it would lose its effects.
 
     For a registered callee the signature drives the library node's
     connectors and call body: array args are pointer connectors
@@ -1754,7 +1809,12 @@ def emit_call(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     if sig is None and callee != callee_raw:
         sig = lookup_external(callee_raw)
     if sig is None:
-        return  # not registered -> unchanged (kind="call" had no emitter)
+        # A value call renders in its expression. Runtime calls manage memory and the FP environment, with no data
+        # effect the SDFG needs; RANDOM_NUMBER is the one that produces data.
+        runtime = callee.startswith(("_Fortran", "llvm.")) and not callee.startswith("_FortranARandom")
+        if runtime or (n.options or {}).get("renders_inline"):
+            return
+        raise NotImplementedError(f"call to {callee}: no body in the source and no registered external")
     if sig.stub:
         return  # stubbed external -> body already stripped; drop the call
 
@@ -2321,7 +2381,8 @@ def _emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlo
 
     state = ctx.flush_and_ensure(builder, region)
 
-    src_name = n.reduce_src
+    slab = section_alias_slab(builder, ctx, n.reduce_src)
+    src_name = slab[0] if slab else n.reduce_src
     src_desc = ctx.sdfg.arrays.get(src_name)
     if src_desc is None:
         raise RuntimeError(f"reduction source {src_name!r} not registered as SDFG data")
@@ -2363,6 +2424,43 @@ def _emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlo
     else:
         out_memlet = Memlet.from_array(n.target, tgt_desc)
 
+    # Section source (``MINVAL(kmin(iv, :))`` row / ``m(:, j)`` column): reduce a
+    # VIEW of the section instead of the whole parent.  The bridge passes the
+    # section's 0-based per-dim subset in ``options['src_subset']``; build a View
+    # whose shape = the ranged dims' extents and whose strides = the PARENT's
+    # strides for those dims (so a row keeps its column-major stride, a column
+    # stays contiguous), link ``parent[subset] -> view``, and reduce the view.
+    opts = dict(n.options) if n.options else {}
+    src_subset = opts.get("src_subset", slab[1] if slab else "")
+    input_node, input_memlet = src_access, Memlet.from_array(src_name, src_desc)
+    if src_subset:
+        import dace
+
+        from dace_fortran.builder.access import resolve_full_dim_markers
+
+        parts = resolve_full_dim_markers([p.strip() for p in src_subset.split(",")], [str(s) for s in src_desc.shape])
+        view_shape, view_strides = [], []
+        for d, s in enumerate(parts):
+            if ":" in s:
+                if s.count(":") > 1:
+                    raise NotImplementedError(f"reduction over the strided section {src_name}[{src_subset}]")
+                lo, hi = s.split(":")[0], s.split(":")[1]
+                view_shape.append(dace.symbolic.pystr_to_symbolic(f"({hi}) - ({lo})"))
+                view_strides.append(src_desc.strides[d])
+        view_name = f"{src_name}_redview_{builder.nid()}"
+        ctx.sdfg.add_view(view_name, view_shape, src_desc.dtype, strides=view_strides or [1])
+        view_desc = ctx.sdfg.arrays[view_name]
+        input_node = state.add_access(view_name)
+        input_memlet = Memlet.from_array(view_name, view_desc)
+        view_full = ", ".join(f"0:{s}" for s in view_shape)
+        state.add_edge(
+            src_access,
+            None,
+            input_node,
+            "views",
+            Memlet(data=src_name, subset=", ".join(parts), other_subset=view_full),
+        )
+
     # Fortran logical reductions ALL / ANY get their own library nodes
     # (``AllNode`` / ``AnyNode``) instead of a bare ``Reduce`` -- they own
     # the Fortran identity (true / false) and offer a short-circuit
@@ -2381,45 +2479,12 @@ def _emit_reduce(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlo
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{_logical_op}_{n.target}_{builder.nid()}", dim=dim)
         state.add_node(pin_sequential(node))
-        state.add_edge(src_access, None, node, input_connector(cls), Memlet.from_array(src_name, src_desc))
+        state.add_edge(input_node, None, node, input_connector(cls), input_memlet)
         state.add_edge(node, output_connector(cls), tgt_access, None, out_memlet)
         return
 
-    # Section source (``MINVAL(kmin(iv, :))`` row / ``m(:, j)`` column): reduce a
-    # VIEW of the section instead of the whole parent.  The bridge passes the
-    # section's 0-based per-dim subset in ``options['src_subset']``; build a View
-    # whose shape = the ranged dims' extents and whose strides = the PARENT's
-    # strides for those dims (so a row keeps its column-major stride, a column
-    # stays contiguous), link ``parent[subset] -> view``, and reduce the view.
-    opts = dict(n.options) if n.options else {}
-    src_subset = opts.get("src_subset", "")
-    if src_subset:
-        import dace
-
-        from dace_fortran.builder.access import resolve_full_dim_markers
-
-        parts = resolve_full_dim_markers([p.strip() for p in src_subset.split(",")], [str(s) for s in src_desc.shape])
-        view_shape, view_strides = [], []
-        for d, s in enumerate(parts):
-            if ":" in s:
-                lo, hi = s.split(":")[0], s.split(":")[1]
-                view_shape.append(dace.symbolic.pystr_to_symbolic(f"({hi}) - ({lo})"))
-                view_strides.append(src_desc.strides[d])
-        view_name = f"{src_name}_redview_{builder.nid()}"
-        ctx.sdfg.add_view(view_name, view_shape, src_desc.dtype, strides=view_strides or [1])
-        view_desc = ctx.sdfg.arrays[view_name]
-        vnode = state.add_access(view_name)
-        view_full = ", ".join(f"0:{s}" for s in view_shape)
-        state.add_edge(
-            src_access, None, vnode, "views", Memlet(data=src_name, subset=", ".join(parts), other_subset=view_full)
-        )
-        red = pin_sequential(state.add_reduce(n.reduce_wcr, None, identity_val))
-        state.add_edge(vnode, None, red, None, Memlet.from_array(view_name, view_desc))
-        state.add_edge(red, None, tgt_access, None, out_memlet)
-        return
-
-    red = pin_sequential(state.add_reduce(n.reduce_wcr, axes, identity_val))
-    state.add_edge(src_access, None, red, None, Memlet.from_array(src_name, src_desc))
+    red = pin_sequential(state.add_reduce(n.reduce_wcr, None if src_subset else axes, identity_val))
+    state.add_edge(input_node, None, red, None, input_memlet)
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
 

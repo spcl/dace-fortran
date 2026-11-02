@@ -43,6 +43,32 @@ static bool isOptionalPresentSelect(IfOpT op) {
   return mlir::isa_and_nonnull<fir::AbsentOp>(term->getOperand(0).getDefiningOp());
 }
 
+/// The op of ``block`` right after the last op ``v`` takes its value from: a load, or an op whose regions compute a
+/// result. Renderers read memory by name, so a snapshot placed here sees the writes before those loads and none after.
+/// The block's first op when ``v`` has no such input in ``block``.
+static mlir::Operation* firstOpAfterInputsOf(mlir::Value v, mlir::Block& block) {
+  mlir::Operation* last = nullptr;
+  llvm::SmallPtrSet<mlir::Operation*, 16> seen;
+  llvm::SmallVector<mlir::Value, 16> worklist{v};
+  while (!worklist.empty()) {
+    auto* d = worklist.pop_back_val().getDefiningOp();
+    if (!d || d->getBlock() != &block || !seen.insert(d).second) continue;
+    if ((mlir::isa<fir::LoadOp>(d) || d->getNumRegions() > 0) && (!last || last->isBeforeInBlock(d))) last = d;
+    worklist.append(d->operand_begin(), d->operand_end());
+  }
+  return last ? last->getNextNode() : &block.front();
+}
+
+/// True iff ``v`` is a result of an scf.if in ``block``, through the integer casts lift-cf-to-scf threads it with.
+static bool isScfIfResultIn(mlir::Value v, mlir::Block& block) {
+  while (auto* d = v.getDefiningOp()) {
+    if (mlir::isa<mlir::scf::IfOp>(d)) return d->getBlock() == &block;
+    if (!mlir::isa<mlir::arith::TruncIOp, mlir::arith::ExtUIOp, fir::ConvertOp>(d)) return false;
+    v = d->getOperand(0);
+  }
+  return false;
+}
+
 static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   ASTNode c;
   c.kind = "conditional";
@@ -50,29 +76,15 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
 
   auto walkArm = [&](mlir::Region& region) -> std::vector<ASTNode> {
     if (region.empty()) return {};
-    auto arm = walkSCFBeforeRegion(region.front());
-    // scf.if yields values -> append one scalar_assign per result from the arm's scf.yield.
-    if (ifOp.getNumResults() > 0) {
-      mlir::scf::YieldOp yieldOp;
-      for (auto& op : region.front())
-        if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
-          yieldOp = y;
-          break;
-        }
-      if (yieldOp) {
-        for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
-          auto target = scfSynthName(ifOp.getResult(i));
-          auto expr = yieldedExpr(yieldOp.getOperand(i));
-          ASTNode a;
-          a.kind = "assign";
-          a.target = target;
-          a.expr = expr;
-          a.target_is_array = false;
-          arm.push_back(std::move(a));
-        }
+    // scf.if yields values -> one scalar_assign per result, snapshotted where the arm computes the value.
+    YieldSnapshots snapshots;
+    auto* terminator = region.front().getTerminator();
+    if (ifOp.getNumResults() > 0 && mlir::isa<mlir::scf::YieldOp>(terminator))
+      for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
+        mlir::Value const yielded = terminator->getOperand(i);
+        snapshots[firstOpAfterInputsOf(yielded, region.front())].emplace_back(ifOp.getResult(i), yielded);
       }
-    }
-    return arm;
+    return walkSCFBeforeRegion(region.front(), snapshots);
   };
 
   c.children = walkArm(ifOp.getThenRegion());
@@ -137,8 +149,17 @@ static bool isArrayElementLoad(mlir::Value v) {
 // Upper and lower bound of ``doLoop`` on ``n``: traceToDecl is a shortcut for the scalar case (DO i = 1, n), an
 // array-element bound (DO j = row_ptr(i), ...) goes through buildIndexExpr for its subscripted form.
 static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
+  // ``int(x)`` is a computed bound: only an integer chain may read as the name it traces to.
+  auto peelsFloat = [](mlir::Value v) {
+    for (auto cv = v.getDefiningOp<fir::ConvertOp>(); cv; cv = cv.getValue().getDefiningOp<fir::ConvertOp>())
+      if (mlir::isa<mlir::FloatType>(cv.getValue().getType())) return true;
+    return false;
+  };
+  bool const computed = peelsFloat(doLoop.getUpperBound());
   if (auto c = traceConstInt(doLoop.getUpperBound())) {
     n.loop_bound = std::to_string(*c);
+  } else if (computed) {
+    n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
   } else if (!isArrayElementLoad(doLoop.getUpperBound())) {
     n.loop_bound = traceToDecl(doLoop.getUpperBound());
   }
@@ -159,7 +180,7 @@ static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
   }
 }
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshots& snapshots) {
   std::vector<ASTNode> out;
   // Snapshot scf.condition's break value at body START, before an in-body scf.if mutates it, into __brk_<N>; without it
   // the break re-evaluates post-mutation values and fires one iteration early (NPB LU ssor convergence check).
@@ -180,7 +201,9 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     // break-check; without it a runtime-extent DO WHILE (MAXVAL(a) > 0) falls to inline-unroll which bails to "?".
     materialiseCondReductions(condVal, out);
     size_t const scMapBefore = kScfValueMap.size();
-    auto b = buildBoolExpr(condVal, 0);
+    // A condition an scf.if in this block yields is snapshotted inside that arm: the guard reads its synth scalar.
+    bool const armSnapshots = isScfIfResultIn(condVal, block);
+    auto b = armSnapshots ? std::string{} : buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
       // An array-element break condition (e.g. rsdnm(i) < tolrsd(i)) can't ride an interstate-edge assignment -- DaCe
       // strips the subscript to a bare pointer compare (see tests/lu_two_call_convergence_repro_test.py).
@@ -225,6 +248,15 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     }
   }
   for (auto& op : block) {
+    if (auto it = snapshots.find(&op); it != snapshots.end())
+      for (auto const& [result, yielded] : it->second) {
+        ASTNode a;
+        a.kind = "assign";
+        a.target = scfSynthName(result);
+        a.expr = yieldedExpr(yielded);
+        a.target_is_array = false;
+        out.push_back(std::move(a));
+      }
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       out.push_back(buildScfIfAsConditional(ifOp));
@@ -1442,7 +1474,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   n.call_args = {buf, partner, tag};
   // Renders an indexed scalar dest/src/tag (``neighbors(i)``) as an element subset so the memlet reads element [i-1],
   // not the whole array. Parallel to the first three call_args; the request/comm tail carries no subset.
-  n.call_arg_subsets = {"", mpiScalarElementSubset(args[3]), mpiScalarElementSubset(args[4])};
+  n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), mpiScalarElementSubset(args[3]),
+                        mpiScalarElementSubset(args[4])};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
     if (args.size() < 7) throw std::runtime_error("MPI " + mpiOp + ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
@@ -1759,6 +1792,10 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   if ((!isAll && !isAny) || def->getNumOperands() == 0) return "";
   mlir::Value const maskVal = def->getOperand(0);
   std::string maskName = traceToDecl(maskVal);
+  // A section mask reduces a view of its parent, not the whole array.
+  std::string maskSubset;
+  if (auto dg = maskVal.getDefiningOp<hlfir::DesignateOp>())
+    if (auto parts = renderDesignateSubsetStrings(dg); !parts.empty()) maskSubset = llvm::join(parts, ", ");
   // An INLINE elemental mask (e.g. ``IF (ANY(sectionA /= sectionB))``) has no declared name, so traceToDecl
   // returns "". Materialise it into a transient array via the same path materialiseCondReductions already uses
   // for SUM/MINVAL/MAXVAL/PRODUCT elemental sources, then reduce that transient.
@@ -1792,6 +1829,7 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   red.reduce_src = maskName;
   red.reduce_wcr = isAll ? "lambda a, b: a and b" : "lambda a, b: a or b";
   red.reduce_identity = isAll ? "True" : "False";
+  if (!maskSubset.empty()) red.options["src_subset"] = maskSubset;
   nodes.push_back(std::move(red));
   return tr;
 }
@@ -1811,6 +1849,9 @@ static std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Typ
     int64_t const minVal = (w == 64) ? std::numeric_limits<int64_t>::min() : (-(static_cast<int64_t>(1) << (w - 1)));
     return std::to_string(isInf ? maxVal : minVal);
   }
+  // Fortran's empty MAXVAL / MINVAL is -HUGE / HUGE of the kind.
+  if (elemTy.isF64()) return isInf ? "1.7976931348623157e+308" : "-1.7976931348623157e+308";
+  if (elemTy.isF32()) return isInf ? "3.4028234663852886e+38" : "-3.4028234663852886e+38";
   return baseIdent.str();
 }
 
@@ -2133,6 +2174,8 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
       if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
         if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>("hlfir.aos_marshal_groups"))
           n.aos_marshal_groups.assign(g.asArrayRef().begin(), g.asArrayRef().end());
+  // A call yielding a value renders inside the expression that reads it; this node then has nothing left to do.
+  if (call.getNumResults() > 0) n.options["renders_inline"] = "true";
   nodes.push_back(std::move(n));
 }
 
@@ -3114,8 +3157,13 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             }
             auto lib = buildLibCallNode(assign, sd, e.callee.str());
             if (needSubst) {
-              for (unsigned i = 0; i < elemSubst.size() && i < lib.call_args.size(); ++i)
-                if (!elemSubst[i].empty()) lib.call_args[i] = elemSubst[i];
+              // call_args carries the array operands only: DIM and BACK take no slot.
+              unsigned slot = 0;
+              for (unsigned i = 0; i < elemSubst.size() && slot < lib.call_args.size(); ++i) {
+                if (!isArrayRef(sd->getOperand(i).getType())) continue;
+                if (!elemSubst[i].empty()) lib.call_args[slot] = elemSubst[i];
+                ++slot;
+              }
             }
             nodes.push_back(std::move(lib));
             libMatched = true;
@@ -3267,6 +3315,14 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     // silently drop the assignment and miscompile with no error (verified: WHERE builds a zero-tasklet SDFG) -- throw
     // instead. Deliberately narrow: other unhandled ops (pure-value, declares, destroy, terminators, already-consumed)
     // keep falling through silently.
+    auto reductionMask = [](mlir::Operation* red) -> mlir::Value {
+      if (auto r = mlir::dyn_cast<hlfir::SumOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::ProductOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::MinvalOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::MaxvalOp>(red)) return r.getMask();
+      return {};
+    };
+    if (reductionMask(&op)) throw std::runtime_error("MASK= on SUM/PRODUCT/MINVAL/MAXVAL is not lowered");
     if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
       std::string locStr;
       llvm::raw_string_ostream locOS(locStr);

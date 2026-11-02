@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, NamedTuple
+from collections.abc import Collection, Sequence
+from itertools import pairwise
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import dace
 from dace import InterstateEdge
@@ -125,8 +126,8 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
 
     The input subscripts are 0-based DaCe-form (built by
     ``buildExprWithSubscripts`` as ``(idx) - 1``); ``view_dim_map``'s
-    scalar slots are 1-based Fortran-form, so we subtract 1 when
-    splicing them in.
+    scalar slots are Fortran-form, so we subtract the source's lower
+    bound when splicing them in.
     """
     if not isinstance(expr, str):
         return expr
@@ -152,11 +153,11 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
             continue
         v = builder.arrays[arr]
         new_parts = []
-        for _src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map):
+        for src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map):
             if dummy_dim is not None:
                 new_parts.append(parts[dummy_dim] if dummy_dim < len(parts) else "0")
             else:
-                new_parts.append(f"({slot}) - 1")
+                new_parts.append(f"({slot}) - offset_{v.view_source}_d{src_dim}")
         out = out[:start] + f"{v.view_source}[{', '.join(new_parts)}]" + out[end:]
     return out
 
@@ -352,15 +353,14 @@ def emit_symbol_init(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: Contro
     #     as data.
     #   * ``arr`` is a Scalar on the SDFG (the bridge folds length-1
     #     transients to Scalar) -- a Scalar has no subscript.
-    # Otherwise emit the (multi-dim) 0-based subscript; these source
-    # arrays use the default lower bound 1.
+    # Otherwise emit the (multi-dim) 0-based subscript.
     from dace.data import Scalar
 
     src_desc = ctx.sdfg.arrays.get(arr)
     if arr in ctx.sdfg.symbols or isinstance(src_desc, Scalar):
         read_expr = arr
     else:
-        read_expr = f"{arr}[{', '.join(str(i - 1) for i in idxs)}]"
+        read_expr = f"{arr}[{', '.join(f'{i} - offset_{arr}_d{d}' for d, i in enumerate(idxs))}]"
     region.add_edge(ctx.cur, dst, InterstateEdge(assignments={sym: read_expr}))
     ctx.cur = dst
 
@@ -393,7 +393,7 @@ def _fortran_subs_to_dace(expr: str, builder: SDFGBuilder) -> str:
     cursor = 0
     for start, end, arr, parts in matches:
         out.append(expr[cursor:start])
-        new_inner = ", ".join(f"({p}) - offset_{arr}_d{d}" for d, p in enumerate(parts))
+        new_inner = ", ".join(f"({_fortran_subs_to_dace(p, builder)}) - offset_{arr}_d{d}" for d, p in enumerate(parts))
         out.append(f"{arr}[{new_inner}]")
         cursor = end
     out.append(expr[cursor:])
@@ -435,27 +435,25 @@ def routine_write_set(builder: SDFGBuilder) -> set:
 
     A name absent from the result is therefore read-only for the whole routine.
     """
-    if builder.write_set is not None:
-        return builder.write_set
+    if builder.write_set is None:
+        builder.write_set = written_names(builder.ast)
+    return builder.write_set
 
+
+def written_names(nodes: Sequence[NodeLike]) -> set:
+    """Every name ``nodes`` may store into; see :func:`routine_write_set`."""
     written: set = set()
-
-    def visit(nodes: Sequence[NodeLike]) -> None:
-        for c in nodes:
-            if c.target:
-                written.add(c.target)
-            if c.loop_iter:
-                written.add(c.loop_iter)
-            for a in c.accesses or []:
-                if (not a.is_read) and a.array_name:
-                    written.add(a.array_name)
-            for arg in c.call_args or []:
-                written.add(str(arg).split("[", 1)[0].strip())
-            visit(c.children)
-            visit(c.else_children)
-
-    visit(builder.ast)
-    builder.write_set = written
+    for c in nodes:
+        if c.target:
+            written.add(c.target)
+        if c.loop_iter:
+            written.add(c.loop_iter)
+        for a in c.accesses or []:
+            if (not a.is_read) and a.array_name:
+                written.add(a.array_name)
+        for arg in c.call_args or []:
+            written.add(str(arg).split("[", 1)[0].strip())
+        written |= written_names(c.children) | written_names(c.else_children)
     return written
 
 
@@ -546,7 +544,12 @@ def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: Ctx) -> str:
 
 
 def _hoist_bound_to_symbol(
-    ctx: Ctx, region: ControlFlowRegion, builder: SDFGBuilder, expr_str: str, prefix: str
+    ctx: Ctx,
+    region: ControlFlowRegion,
+    builder: SDFGBuilder,
+    expr_str: str,
+    prefix: str,
+    body_writes: Collection[str] = (),
 ) -> str | None:
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
@@ -554,10 +557,12 @@ def _hoist_bound_to_symbol(
 
     :param expr_str: the rendered bound expression.
     :param prefix: symbol-name prefix (``loopend`` / ``loopbegin``).
+    :param body_writes: names the loop body may store into. Fortran fixes the trip count at entry, so
+                        a bare name among them is hoisted too; the loop condition re-reads it otherwise.
     :returns: the new symbol name, or ``None`` when ``expr_str`` is a
               trivial bound (the caller keeps its original value).
     """
-    if _is_trivial_bound(expr_str, builder):
+    if _is_trivial_bound(expr_str, builder) and expr_str.strip() not in body_writes:
         return None
     sym = f"{prefix}_{builder.nid()}"
     if sym not in ctx.sdfg.symbols:
@@ -617,16 +622,12 @@ def _sibling_rw_hazard(assigns: Sequence[NodeLike]) -> bool:
 
 
 def _rhs_free_symbols(rhs: str) -> set[str]:
-    """Names an interstate-assignment RHS reads.
+    """Names an interstate-assignment RHS reads, the array of a subscript included.
 
-    Symbolic parse first -- robust to substrings and to the ``int32(...)`` typecast, which is a
-    function, not a symbol.  Identifier regex as the fallback for expressions sympy rejects
-    (conservative: also yields function names, which only ever over-approximates the read set).
+    An identifier scan: a symbolic parse sees ``idx[i]`` as a call and loses ``idx``.  It also
+    yields function names, which only ever over-approximates the read set.
     """
-    try:
-        return {str(s) for s in dace.symbolic.pystr_to_symbolic(rhs).free_symbols}
-    except Exception:
-        return set(re.findall(r"[A-Za-z_]\w*", str(rhs)))
+    return set(re.findall(r"[A-Za-z_]\w*", str(rhs)))
 
 
 def _hoist_hazard_targets(hoisted_pairs: Sequence[tuple[str, str]], later_targets: set[str]) -> set[str]:
@@ -725,11 +726,12 @@ def emit_loop(
     # then doesn't need to embed expression-rewrite logic in bound
     # rendering (the hoisted assignment goes through the same
     # interstate-edge symbol-staging path indirect-array reads use).
-    # Bare-symbol bounds are skipped; the staging would be pure noise.
-    _b = _hoist_bound_to_symbol(ctx, region, builder, str(bound), "loopend")
+    # Bare-symbol bounds the body leaves alone are skipped; the staging would be pure noise.
+    body_writes = written_names(n.children)
+    _b = _hoist_bound_to_symbol(ctx, region, builder, str(bound), "loopend", body_writes)
     if _b is not None:
         bound = _b
-    _l = _hoist_bound_to_symbol(ctx, region, builder, str(lower), "loopbegin")
+    _l = _hoist_bound_to_symbol(ctx, region, builder, str(lower), "loopbegin", body_writes)
     if _l is not None:
         lower = _l
 
@@ -745,6 +747,7 @@ def emit_loop(
     # one as init.
     step = n.loop_step
     step_expr = n.loop_step_expr or ""
+    trip = ""
 
     if step_expr:
         # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
@@ -757,20 +760,25 @@ def emit_loop(
         # 1-based -> DaCe 0-based conversion of ``arr(idx)`` to
         # ``arr[(idx) - offset_arr_d0]`` happens once on the
         # hoisted interstate-edge assignment instead of being
-        # embedded in the loop body.  Treat as forward iteration;
-        # runtime-negative symbols yield zero-or-one iterations
-        # under ``uid <= bound``, matching Fortran's mismatched-
-        # direction trip-count semantics.
+        # embedded in the loop body.  The sign is a runtime value and
+        # DaCe reads a loop end only off ``iter < end``, so the loop counts
+        # Fortran's trip count and derives the iterator from it.
         step_expr = _fortran_subs_to_dace(step_expr, builder)
-        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep")
+        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep", body_writes)
         if _s is not None:
             step_expr = _s
+        trips = f"Max(int_floor(({bound}) - ({lower}) + ({step_expr}), {step_expr}), 0)"
+        trip_sym = _hoist_bound_to_symbol(ctx, region, builder, trips, "looptrips", body_writes)
+        trip = f"{uid}_trip_{builder.nid()}"
+        ctx.sdfg.add_symbol(trip, dace.int64)
+        if uid not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(uid, dace.int64)
         loop = LoopRegion(
             label=f"loop_{uid}_{builder.nid()}",
-            condition_expr=f"{uid} < {bound} + 1",
-            loop_var=uid,
-            initialize_expr=f"{uid} = {lower}",
-            update_expr=f"{uid} = {uid} + {step_expr}",
+            condition_expr=f"{trip} < {trip_sym}",
+            loop_var=trip,
+            initialize_expr=f"{trip} = 0",
+            update_expr=f"{trip} = {trip} + 1",
         )
     elif step >= 0:
         loop = LoopRegion(
@@ -795,7 +803,18 @@ def emit_loop(
     if ctx.cur is not None:
         region.add_edge(ctx.cur, loop, InterstateEdge())
     ctx.cur = loop
+    emit_loop_body(builder, ctx, n, loop, iter_map)
+    if step_expr:
+        value = f"({lower}) + {trip} * ({step_expr})"
+        start = loop.start_block if loop.nodes() else loop.add_state(f"body_{builder.nid()}", is_start_block=True)
+        # dace annotates ``add_state_before``'s anchor as an SDFGState; any control-flow block works.
+        loop.add_state_before(cast("SDFGState", start), f"iter_{uid}", is_start_block=True, assignments={uid: value})
+        ctx.cur = region.add_state(f"post_{uid}_{builder.nid()}")
+        region.add_edge(loop, ctx.cur, InterstateEdge(assignments={uid: value}))
 
+
+def emit_loop_body(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, loop: LoopRegion, iter_map: dict[str, str]) -> None:
+    """Emit the children of the DO node ``n`` into ``loop``."""
     # Cache .children once  --  nanobind copies on every access.
     children = n.children
 
@@ -867,7 +886,8 @@ def emit_loop(
                 ctx.sdfg.add_symbol(sym, dace.int64)
         symbol_assign_pairs: list[tuple[str, str]] = []
         for a in symbol_assigns:
-            symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg)))
+            rhs = array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg, indirect_syms)
+            symbol_assign_pairs.append((a.target, rhs))
 
         def _emit_one(st: SDFGState, a: NodeLike, i: int) -> None:
             # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
@@ -884,7 +904,10 @@ def emit_loop(
         hazardous = _hoist_hazard_targets(symbol_assign_pairs, compute_targets)
         hazardous |= _hoist_hazard_targets(per_sym_assigns, compute_targets | {t for t, _ in symbol_assign_pairs})
 
-        if hazardous:
+        # A symbol assign after a compute cannot hoist over it either: the compute may read the old value.
+        if hazardous or any(
+            a.target not in builder.symbols and b.target in builder.symbols for a, b in pairwise(child_assigns)
+        ):
             # At least one hoisted assignment reads a value something it skips past defines, so the
             # hoist would rotate it by an iteration (see ``_hoist_hazard_targets``).  Emit the batch
             # statement by statement in SOURCE order instead: computes land in the current state,
@@ -927,6 +950,7 @@ def emit_loop(
                         cur, edge, batch_lhs = nxt, InterstateEdge(), set()
                     edge.assignments[tgt] = rhs
                     batch_lhs.add(tgt)
+                    emitted_syms -= {sym for expr, sym in indirect_syms.items() if tgt in _rhs_free_symbols(expr)}
                     continue
                 # A pending symbol edge -- or a sibling array/scalar hazard -- closes the state
                 # first; the first compute always opens one so nothing lands in ``pre``.
@@ -936,6 +960,7 @@ def emit_loop(
                     cur, edge, batch_lhs = nxt, InterstateEdge(), set()
                 _emit_one(cur, a, compute_i)
                 compute_i += 1
+                emitted_syms -= {sym for expr, sym in indirect_syms.items() if a.target in _rhs_free_symbols(expr)}
             if edge.assignments:  # trailing symbol assignments still need a state to land on
                 loop.add_edge(cur, loop.add_state(f"body_{builder.nid()}"), edge)
             return
@@ -1047,6 +1072,19 @@ def materialize_indirect_syms(
     return indirect_syms
 
 
+def rendered_condition(n: NodeLike) -> str:
+    """The condition of ``n``, ``True`` when it has none.
+
+    :raises NotImplementedError: the bridge left the ``?`` placeholder, which no default can stand in for.
+    """
+    if n.condition == "?":
+        raise NotImplementedError(
+            f"unresolved condition placeholder ``?`` on a {n.kind} node. The C++ AST builder could not render "
+            "the condition; check bridge/ast/expressions.cpp ``buildExpr`` against this kernel's HLFIR."
+        )
+    return n.condition or "True"
+
+
 class StagedCondition(NamedTuple):
     state: SDFGState
     expr: str
@@ -1093,10 +1131,7 @@ def emit_while(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowR
     break-on-false into a ``break`` child node inside the body).
     """
     pre = ctx.flush_and_ensure(builder, region)
-    # ``?`` is the bridge's placeholder for an unextractable condition.
-    # Default to ``True`` so ast.parse succeeds and leaves the faithful
-    # structure visible in the SDFG for inspection.
-    cond = n.condition if n.condition and n.condition != "?" else "True"
+    cond = rendered_condition(n)
 
     # Mirror the ``emit_cond`` cond-rewrite pipeline so a real
     # ``DO WHILE (a(i) > thr)`` doesn't relapse the bugs already
@@ -1169,8 +1204,7 @@ def _prepare_cond_expr(
     Staging for one branch of ``emit_cond``: section-alias rewriting, scalar-output subscripting, tasklet-lifting for
     array-reading conditions, and caching of never-written conditions.
     """
-    cond = n.condition if n.condition and n.condition != "?" else "True"
-    cond = _rewrite_section_aliases_in_expr(builder, cond)
+    cond = _rewrite_section_aliases_in_expr(builder, rendered_condition(n))
 
     accesses = n.accesses
     will_lift = bool(accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in accesses)
@@ -1226,13 +1260,28 @@ def _prepare_cond_expr(
     return StagedCondition(pre, cond)
 
 
+def is_total(builder: SDFGBuilder, n: NodeLike) -> bool:
+    """Whether the condition of ``n`` is safe to evaluate ahead of the branches before it, as flattening stages it.
+
+    A branch before it may be what guards a division, an array read or a by-reference (possibly absent) scalar.
+    """
+    names = set(re.findall(r"[A-Za-z_]\w*", n.condition))
+    return not (
+        any(ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+        or "/" in n.condition
+        or names & {"int_floor", "FtnMod", "PyMod", "CMod"}
+        or any(builder.scalars[nm].intent in ("out", "inout") for nm in names & builder.scalars.keys())
+    )
+
+
 def emit_cond(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.
 
     ``else if`` chains emitted by the bridge as nested ``conditional`` nodes
-    are flattened into a single multi-branch ``ConditionalBlock``.
+    are flattened into a single multi-branch ``ConditionalBlock`` while the
+    next condition :func:`is_total`; the rest stays nested in the else region.
     """
     pre = ctx.flush_and_ensure(builder, region)
 
@@ -1243,8 +1292,9 @@ def emit_cond(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         pre, cond = _prepare_cond_expr(builder, ctx, region, pre, cur)
         branches.append((cond, list(cur.children)))
         else_children = list(cur.else_children)
-        if len(else_children) == 1 and else_children[0].kind == "conditional" and else_children[0].condition:
-            cur = else_children[0]
+        nested = else_children[0] if len(else_children) == 1 else None
+        if nested is not None and nested.kind == "conditional" and nested.condition and is_total(builder, nested):
+            cur = nested
             continue
         tail_children = else_children
         break

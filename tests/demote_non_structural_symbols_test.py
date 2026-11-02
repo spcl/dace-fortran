@@ -10,7 +10,10 @@ from dace.transformation.dataflow import AugAssignToWCR
 from dace.transformation.interstate import LoopToMap
 from dace.transformation.passes import scalar_to_symbol
 
+from dace_fortran.dace_types import connectors
 from dace_fortran.demote_symbols import PROMOTED_INIT_STATE, DemoteNonStructuralSymbols
+from dace_fortran.pipelines import num_loops, optimize
+from tests._util import build_sdfg
 
 
 def counting_sdfg() -> dace.SDFG:
@@ -91,7 +94,7 @@ def test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression():
         sdfg.add_array(name, [1], dace.float64)
     start = sdfg.add_state("start", is_start_block=True)
     use = sdfg.add_state_after(start, "use", assignments={"z": "S[0]"})
-    tasklet = use.add_tasklet("combine", {"x", "y"}, {"o"}, "o = x - z + y")
+    tasklet = use.add_tasklet("combine", connectors(["x", "y"]), {"o"}, "o = x - z + y")
     use.add_edge(use.add_read("X"), None, tasklet, "x", dace.Memlet("X[0]"))
     use.add_edge(use.add_read("Y"), None, tasklet, "y", dace.Memlet("Y[0]"))
     use.add_edge(tasklet, "o", use.add_write("R"), None, dace.Memlet("R[0]"))
@@ -164,7 +167,31 @@ def test_the_promotion_state_is_the_one_dace_creates():
     assert f'"{PROMOTED_INIT_STATE}"' in inspect.getsource(scalar_to_symbol)
 
 
+def test_symbol_a_later_condition_reads_stays_a_symbol(tmp_path):
+    """``k`` holds the last iteration's value at the IF, which a privatized scalar would lose."""
+    src = """
+subroutine last(n, b, x)
+  integer, intent(in) :: n
+  real(8), intent(out) :: b(n)
+  real(8), intent(inout) :: x(1)
+  integer :: i, k
+  do i = 1, n
+    k = i * 2
+    b(i) = k + 1
+  end do
+  if (k > 3) x(1) = 1.0d0
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="last", entry="last").build()
+    optimize(sdfg)
+    assert "k" in sdfg.symbols and "k" not in sdfg.arrays
+    assert num_loops(sdfg) == 1, "LoopToMap privatized the value the IF reads"
+
+
 if __name__ == "__main__":
+    import tempfile
+    from pathlib import Path
+
     test_a_promoted_scalars_entry_value_does_not_become_a_write()
     test_a_programs_own_initial_value_stays_a_write()
     test_the_promotion_state_is_the_one_dace_creates()
@@ -172,3 +199,5 @@ if __name__ == "__main__":
     test_a_demoted_value_keeps_its_arithmetic_as_written()
     test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression()
     test_an_index_read_inside_a_branch_condition_stays_a_symbol()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_symbol_a_later_condition_reads_stays_a_symbol(Path(tmp))

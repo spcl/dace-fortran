@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import gc
+import re
 import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
@@ -674,6 +675,34 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
         sdfg.symbol_repo.set_type(target, dtype)
 
 
+def refuse_extent_writes(builder: SDFGBuilder) -> None:
+    """Refuse a body that assigns a symbol an explicit extent names.
+
+    Fortran fixes those bounds at entry, while a descriptor names the live symbol, so its strides would follow the
+    assignment. An allocatable is exempt: its extents are fixed by the ``ALLOCATE``, tracked apart from the name.
+
+    :raises NotImplementedError: naming the symbol and the array.
+    """
+
+    def assigned(nodes: Sequence[NodeLike]) -> set[str]:
+        names = {c.target for c in nodes if c.kind == "assign" and c.target in builder.symbols}
+        for c in nodes:
+            names |= assigned(c.children) | assigned(c.else_children)
+        return names
+
+    written = assigned(builder.ast)
+    for v in builder.arrays.values():
+        hit = written.intersection(re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)))
+        # A reallocation's buffer ``<x>_alloc<N>`` shares the companion of ``<x>``.
+        base = re.sub(r"_alloc\d+$", "", v.fortran_name)
+        allocatable = v.module_origin_allocatable or f"{base}_allocated" in builder.symbols
+        if hit and v.role == "array" and not allocatable:
+            raise NotImplementedError(
+                f"assignment to {sorted(hit)} in the body: extent of explicit-shape array {v.fortran_name!r}, "
+                "whose bounds Fortran fixes at entry. Assign a copy of the extent instead."
+            )
+
+
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
@@ -1124,6 +1153,7 @@ class SDFGBuilder:
         # don't-care default.
         sdfg = AutoDimSDFG(sdfg_name(self))
         add_descriptors(self, sdfg)
+        refuse_extent_writes(self)
         # Constant-pool (Flang's ``_QQro.<...>`` globals): for every
         # ``parameter``-attributed declare whose backing global carries
         # a dense init, register the data via ``sdfg.add_constant``.
@@ -1600,11 +1630,9 @@ class SDFGBuilder:
                 continue  # array not on the SDFG surface (trimmed)
             if sym not in sdfg.symbols:
                 sdfg.add_symbol(sym, dace.int64)
-            # 1-based Fortran element read; assumes lower bound 1, matching the
-            # constant-index ``emit_symbol_init`` seeding.  A multi-index element
-            # (``mat(i, j)`` -> ``idx = "i,j"``) is split per dimension so each
-            # gets its own ``- 1`` -> ``mat[(i) - 1, (j) - 1]``.
-            dims = ", ".join(f"({p.strip()}) - 1" for p in idx.split(","))
+            # Fortran element read.  A multi-index element (``mat(i, j)`` -> ``idx = "i,j"``) is
+            # split per dimension: ``mat[(i) - offset_mat_d0, (j) - offset_mat_d1]``.
+            dims = ", ".join(f"({p.strip()}) - offset_{arr}_d{d}" for d, p in enumerate(idx.split(",")))
             seeds[sym] = f"{arr}[{dims}]"
             self._value_symbol_provenance[sym] = (arr, idx)
         # A constant-index element as an extent (``orbital(1 : ngk(1), :)`` -> ``__sym_ngk_1``) is named like the
@@ -1616,7 +1644,8 @@ class SDFGBuilder:
                     continue
                 if sym not in sdfg.symbols:
                     sdfg.add_symbol(sym, dace.int64)
-                seeds[sym] = f"{element.array}[{', '.join(f'{i - 1}' for i in element.indices)}]"
+                subscript = ", ".join(f"{i} - offset_{element.array}_d{d}" for d, i in enumerate(element.indices))
+                seeds[sym] = f"{element.array}[{subscript}]"
                 self._value_symbol_provenance[sym] = (element.array, ",".join(map(str, element.indices)))
         if not seeds:
             return

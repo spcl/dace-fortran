@@ -1317,6 +1317,25 @@ end subroutine main
     assert line == "x = ptr"
 
 
+def test_exploit_locally_constant_pointer_folds_while_its_subscript_is_unwritten():
+    """Nothing writes ``i`` after ``=>``, so ``ptr`` still names ``arr(i)``."""
+    line = folded_result("""
+subroutine main(n, x)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(out) :: x
+  real, target :: arr(4)
+  real, pointer :: ptr
+  integer :: i
+  arr = 1.0
+  i = n
+  ptr => arr(i)
+  x = ptr
+end subroutine main
+""")
+    assert line == "x = arr(i)"
+
+
 def test_exploit_locally_constant_not_kept_across_a_call():
     """The callee may write a bare actual argument."""
     line = folded_result("""
@@ -1509,6 +1528,7 @@ end module m
     test_forwarded_caller_optional_presence_not_folded()
     test_exploit_locally_constant_not_kept_after_do()
     test_exploit_locally_constant_pointer_keeps_its_variable_subscript()
+    test_exploit_locally_constant_pointer_folds_while_its_subscript_is_unwritten()
     test_exploit_locally_constant_not_kept_across_a_call()
     test_exploit_locally_constant_component_not_kept_after_whole_struct_write()
     test_real4_parameter_element_keeps_its_value_when_widened()

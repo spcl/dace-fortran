@@ -871,8 +871,10 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # has shape ``(10,)`` stride ``(100,)``.
             src_v = builder.arrays.get(v.view_source)
             src_dims = shape_syms.get(v.view_source) if src_v is not None else None
-            src_strides = _fortran_strides([_dim(s) for s in src_dims]) if src_dims and len(src_dims) > 1 else None
+            src_strides = _fortran_strides([_dim(s) for s in src_dims]) if src_dims else None
             view_strides = []
+            # The bridge keeps the unstrided extent: the elements of a strided section dimension, by view dimension.
+            section_extents = {}
             # Whole-array rank reinterpretation -- ssor's ``tv(N)``
             # 1D passed unmodified to buts's ``tv(5, M, K)`` 3D.
             # ``extract_vars`` signals this with a single empty
@@ -885,8 +887,12 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
                 for src_d, sub in enumerate(v.view_subset):
                     if ":" not in sub:
                         continue  # scalar dim  --  drops out of the view
-                    _lo, _hi, *step = sub.split(":")
-                    sec_stride = int(step[0]) if step else 1
+                    lo, hi, *step = sub.split(":")
+                    sec_stride = dace.symbolic.pystr_to_symbolic(step[0]) if step else 1
+                    if step:
+                        section_extents[len(view_strides)] = dace.symbolic.pystr_to_symbolic(
+                            f"int_floor(({hi}) - ({lo}) - 1 + {sec_stride}, {sec_stride})"
+                        )
                     view_strides.append(src_strides[src_d] * sec_stride)
             # Only honour the derived strides if their length matches
             # the view's rank.  ``view_reshape`` cases use a
@@ -897,6 +903,8 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # ``[1, ...]`` is correct.
             if len(view_strides) != len(dims):
                 view_strides = [1] * len(dims) if len(dims) > 0 else None
+            else:
+                dims = [section_extents.get(d, extent) for d, extent in enumerate(dims)]
             # An assumed-size dummy has no extent of its own: aliasing a whole actual (``ind(*)`` <- ``igk(n, nks)``)
             # or, by sequence association, an element of one (``ind(*)`` <- ``igk(1, ik)``), its last dimension is
             # what the actual's storage from that element on leaves after the leading ones.

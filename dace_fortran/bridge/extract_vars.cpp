@@ -3513,6 +3513,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
+      // The builder cannot bake a complex initializer yet and would zero the global instead.
+      if (v.const_data.empty() && gop && (gop.getInitVal() || !gop.getRegion().empty()) &&
+          mlir::isa<mlir::ComplexType>(fir::unwrapSequenceType(gop.getType())))
+        throw std::runtime_error("COMPLEX initial data of " + v.fortran_name + " is not lowered");
       const bool written = globalIsWritten(sym, module, &writtenGlobals);
       const bool isParameter = (gop && gop.getConstant().has_value() && *gop.getConstant());
       // A genuine module-scope VARIABLE is ``_QM<module>E<entity>`` -- the

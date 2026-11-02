@@ -488,7 +488,7 @@ std::string traceToDecl(mlir::Value val, int max) {
       auto falseC = traceConstInt(s.getFalseValue());
       bool const trueZero = trueC && *trueC == 0;
       bool const falseZero = falseC && *falseC == 0;
-      if (trueZero != falseZero) {
+      if (trueZero != falseZero && isExtentClamp(s)) {
         val = trueZero ? s.getFalseValue() : s.getTrueValue();
         continue;
       }
@@ -535,6 +535,11 @@ std::optional<double> scalarConstantValue(mlir::Value v) {
   return std::nullopt;
 }
 
+bool isExtentClamp(mlir::arith::SelectOp sel) {
+  auto cmp = sel.getCondition().getDefiningOp<mlir::arith::CmpIOp>();
+  return cmp && cmp.getLhs().getType().isIndex();
+}
+
 std::optional<int64_t> traceConstInt(mlir::Value v) {
   for (int i = 0; i < limits::kTraceConstIntMax; ++i) {
     auto* d = v.getDefiningOp();
@@ -554,7 +559,7 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
         if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
           if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) false_is_zero = (ia.getInt() == 0);
       }
-      if (false_is_zero) {
+      if (false_is_zero && isExtentClamp(s)) {
         v = s.getTrueValue();
         continue;
       }

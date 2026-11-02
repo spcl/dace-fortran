@@ -6,7 +6,9 @@ import numpy as np
 from dace.sdfg import dealias
 from dace.sdfg.state import LoopRegion
 
+from dace_fortran.omp_threads import OMP_NUM_THREADS_SYMBOL
 from dace_fortran.persistent_transients import MakeTransientsPersistent
+from dace_fortran.pipelines import optimize
 
 N = dace.symbol("N")
 
@@ -47,11 +49,11 @@ def allocates_in_init(sdfg: dace.SDFG, name: str) -> bool:
 
 
 def test_free_symbol_sized_transient_is_promoted():
-    """The shape reads only N, an argument of the SDFG, so one allocation serves the whole run."""
+    """The caller fixes N, an argument of the SDFG, so one allocation serves the whole run."""
     sdfg = loop_with_transient("persist_free_symbol", [N])
     assert not allocates_in_init(sdfg, "buf"), "the malloc must start out inside the loop"
 
-    assert MakeTransientsPersistent().apply_pass(sdfg, {})[sdfg.cfg_id] == {"buf"}
+    assert MakeTransientsPersistent({"N"}).apply_pass(sdfg, {})[sdfg.cfg_id] == {"buf"}
     assert sdfg.arrays["buf"].lifetime == dace.AllocationLifetime.Persistent
     assert allocates_in_init(sdfg, "buf")
 
@@ -69,6 +71,19 @@ def test_the_auto_optimize_helper_delegates():
     sdfg = loop_with_transient("persist_helper", [N])
     assert make_transients_persistent(sdfg, dace.DeviceType.CPU)[sdfg.cfg_id] == {"buf"}
     assert sdfg.arrays["buf"].lifetime == dace.AllocationLifetime.Persistent
+
+
+def test_free_symbol_nobody_fixed_keeps_a_per_call_size():
+    """``__dace_init`` runs once: sized from the first call, a later larger N would overrun the buffer."""
+    sdfg = loop_with_transient("persist_per_call", [N])
+    assert MakeTransientsPersistent().apply_pass(sdfg, {}) is None
+    assert sdfg.arrays["buf"].lifetime != dace.AllocationLifetime.Persistent
+    compiled = sdfg.compile()
+    for size in (8, 4096):
+        a = np.arange(float(size))
+        out = np.zeros(size)
+        compiled(a=a, out=out, N=size)
+        assert np.allclose(out, a * 2.0)
 
 
 def test_a_reassigned_size_symbol_blocks_promotion():
@@ -135,11 +150,29 @@ def test_stronger_lifetimes_are_not_demoted():
         assert sdfg.arrays["buf"].lifetime == lifetime
 
 
+def test_thread_count_sized_buffer_stays_out_of_init():
+    """``optimize`` binds the thread count in the body, where ``__dace_init`` cannot read it."""
+    sdfg = dace.SDFG("thread_buffer")
+    sdfg.add_array("buf", [OMP_NUM_THREADS_SYMBOL], dace.float64, transient=True)
+    sdfg.add_array("out", [1], dace.float64)
+    state = sdfg.add_state()
+    write = state.add_tasklet("write", {}, {"o"}, "o = 1.0")
+    read = state.add_tasklet("read", {"i"}, {"o"}, "o = i")
+    buf = state.add_access("buf")
+    state.add_edge(write, "o", buf, None, dace.Memlet("buf[0]"))
+    state.add_edge(buf, None, read, "i", dace.Memlet("buf[0]"))
+    state.add_edge(read, "o", state.add_access("out"), None, dace.Memlet("out[0]"))
+    optimize(sdfg)
+    assert sdfg.arrays["buf"].lifetime != dace.AllocationLifetime.Persistent
+
+
 if __name__ == "__main__":
     test_free_symbol_sized_transient_is_promoted()
     test_the_auto_optimize_helper_delegates()
+    test_free_symbol_nobody_fixed_keeps_a_per_call_size()
     test_a_reassigned_size_symbol_blocks_promotion()
     test_constant_sized_transient_is_promoted()
     test_reassigned_size_symbol_is_not_promoted()
     test_loop_variable_sized_nested_transient_is_not_promoted()
     test_stronger_lifetimes_are_not_demoted()
+    test_thread_count_sized_buffer_stays_out_of_init()

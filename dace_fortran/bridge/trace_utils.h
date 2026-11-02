@@ -121,6 +121,8 @@ void clearAllocAliases();
 /// Trace an SSA value to a compile-time integer constant through any number of fir.convert wrappings; nullopt if not
 /// constant-foldable.
 std::optional<int64_t> traceConstInt(mlir::Value v);
+/// True for Flang's clamp of an extent to zero: its compare runs in ``index``, which a Fortran MERGE or MAX never does.
+bool isExtentClamp(mlir::arith::SelectOp sel);
 
 /// The value a ``fir.global`` body hands to its ``fir.has_value`` terminator; null without an initialiser body.
 mlir::Value globalInitValue(fir::GlobalOp gop);
