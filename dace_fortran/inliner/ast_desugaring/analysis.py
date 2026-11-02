@@ -620,17 +620,18 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
     :param alias_map: The alias map for resolving symbols.
     :return: The evaluated value as a numpy scalar, or None if the expression is not constant.
     """
-    if isinstance(expr, (f03.Part_Ref, f03.Data_Ref)):
+    if isinstance(expr, f03.Data_Ref):
         return None
-    if isinstance(expr, f03.Name):
-        spec = search_real_local_alias_spec(expr, alias_map)
+    if isinstance(expr, (f03.Name, f03.Part_Ref)):
+        name, subsc = expr.children if isinstance(expr, f03.Part_Ref) else (expr, None)
+        spec = search_real_local_alias_spec(name, alias_map)
         if not spec:
             return None
         decl = alias_map[spec]
         if not isinstance(decl, f03.Entity_Decl):
             return None
         typ = find_type_of_entity(decl, alias_map)
-        if not typ or not typ.const or typ.shape:
+        if not typ or not typ.const or len(typ.shape) != bool(subsc):
             return None
         init = ast_utils.atmost_one(ast_utils.children_of_type(decl, f03.Initialization))
         if init is None:
@@ -638,6 +639,21 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
         _, iexpr = init.children
         if f"{iexpr}" == "NULL()":
             return None
+        if subsc:
+            # Rank-1 element: all values must fold, else a value's position is unknown.
+            shape = walk(decl.children[1] or decl.parent.parent.children[1], f03.Explicit_Shape_Spec)
+            idx = const_eval_basic_type(subsc.children[0], alias_map)
+            if idx is None or len(shape) != 1 or not isinstance(iexpr, f03.Array_Constructor):
+                return None
+            lbound = shape[0].children[0]
+            lbound = const_eval_basic_type(lbound, alias_map) if lbound else 1
+            vals: list[Any] = [const_eval_basic_type(v, alias_map) for v in iexpr.children[1].children]
+            if lbound is None or any(v is None for v in vals) or not lbound <= idx < lbound + len(vals):
+                return None
+            try:
+                return optimizations.val_2_np_lit(vals[int(idx) - int(lbound)], typ.spec)
+            except NotImplementedError:
+                return None
         val = const_eval_basic_type(iexpr, alias_map)
         if val is None:
             # A self-contained program's PARAMETER always has a constant

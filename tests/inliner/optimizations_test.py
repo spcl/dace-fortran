@@ -116,6 +116,86 @@ END MODULE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_constant_parameter_array_elements():
+    """
+    Tests that a rank-1 PARAMETER array element const-evaluates in the array's type,
+    also where it names a kind, and that an element it cannot resolve stays in place.
+    """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module main
+  implicit none
+  integer, parameter :: kinds(2) = [4, 8]
+  integer, parameter :: wp = kinds(2)
+  integer(kind=kinds(2)), parameter :: big = 3000000000_8
+  real(kind=kinds(2)), parameter :: third = 1.0d0 / 3.0d0
+  real, parameter :: arr(3) = [3, 4, 5]
+  real, parameter :: weird(-1:1) = [3, 4, 5]
+  integer, parameter, dimension(0:1) :: dims = (/ 6, 7 /)
+  logical(4), parameter :: flags(2) = [.true., .false.]
+  integer, parameter :: nested(3) = [kinds, 3]
+contains
+  subroutine foo(i, r1, r2, r3, r4, n1, n2, n3, b1)
+    integer, intent(in) :: i
+    real, intent(out) :: r1, r2, r3
+    real(kind=wp), intent(out) :: r4
+    integer(kind=8), intent(out) :: n1
+    integer, intent(out) :: n2, n3
+    logical, intent(out) :: b1
+    r1 = arr(1) / 2
+    r2 = weird(0)
+    r3 = arr(i)
+    r4 = third
+    n1 = big
+    n2 = dims(1)
+    n3 = nested(3)
+    b1 = flags(1)
+  end subroutine foo
+end module main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+MODULE main
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: kinds(2) = [4, 8]
+  INTEGER, PARAMETER :: wp = kinds(2)
+  INTEGER(KIND = 8), PARAMETER :: big = 3000000000_8
+  REAL(KIND = 8), PARAMETER :: third = 0.3333333333333333D0
+  REAL, PARAMETER :: arr(3) = [3, 4, 5]
+  REAL, PARAMETER :: weird(- 1 : 1) = [3, 4, 5]
+  INTEGER, PARAMETER, DIMENSION(0 : 1) :: dims = (/6, 7/)
+  LOGICAL(KIND = 4), PARAMETER :: flags(2) = [.TRUE., .FALSE.]
+  INTEGER, PARAMETER :: nested(3) = [kinds, 3]
+  CONTAINS
+  SUBROUTINE foo(i, r1, r2, r3, r4, n1, n2, n3, b1)
+    INTEGER, INTENT(IN) :: i
+    REAL, INTENT(OUT) :: r1, r2, r3
+    REAL(KIND = 8), INTENT(OUT) :: r4
+    INTEGER(KIND = 8), INTENT(OUT) :: n1
+    INTEGER, INTENT(OUT) :: n2, n3
+    LOGICAL, INTENT(OUT) :: b1
+    r1 = 1.5D0
+    r2 = 4.0
+    r3 = arr(i)
+    r4 = 0.3333333333333333D0
+    n1 = 3000000000_8
+    n2 = 7
+    n3 = nested(3)
+    b1 = flags(1)
+  END SUBROUTINE foo
+END MODULE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 def test_constant_resolving_named_kind_int_literal():
     """
     An integer literal with a *named* kind (`5_i8`) must const-fold the same as
@@ -1279,6 +1359,7 @@ end subroutine main
 if __name__ == "__main__":
     test_constant_resolving_expressions()
     test_constant_expression_replacement()
+    test_constant_parameter_array_elements()
     test_constant_resolving_non_expressions()
     test_config_injection_type()
     test_config_injection_instance()
