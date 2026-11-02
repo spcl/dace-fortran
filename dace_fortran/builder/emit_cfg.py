@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Sequence
+from itertools import pairwise
 from typing import TYPE_CHECKING, NamedTuple
 
 import dace
@@ -617,16 +618,12 @@ def _sibling_rw_hazard(assigns: Sequence[NodeLike]) -> bool:
 
 
 def _rhs_free_symbols(rhs: str) -> set[str]:
-    """Names an interstate-assignment RHS reads.
+    """Names an interstate-assignment RHS reads, the array of a subscript included.
 
-    Symbolic parse first -- robust to substrings and to the ``int32(...)`` typecast, which is a
-    function, not a symbol.  Identifier regex as the fallback for expressions sympy rejects
-    (conservative: also yields function names, which only ever over-approximates the read set).
+    An identifier scan: a symbolic parse sees ``idx[i]`` as a call and loses ``idx``.  It also
+    yields function names, which only ever over-approximates the read set.
     """
-    try:
-        return {str(s) for s in dace.symbolic.pystr_to_symbolic(rhs).free_symbols}
-    except Exception:
-        return set(re.findall(r"[A-Za-z_]\w*", str(rhs)))
+    return set(re.findall(r"[A-Za-z_]\w*", str(rhs)))
 
 
 def _hoist_hazard_targets(hoisted_pairs: Sequence[tuple[str, str]], later_targets: set[str]) -> set[str]:
@@ -867,7 +864,8 @@ def emit_loop(
                 ctx.sdfg.add_symbol(sym, dace.int64)
         symbol_assign_pairs: list[tuple[str, str]] = []
         for a in symbol_assigns:
-            symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg)))
+            rhs = array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg, indirect_syms)
+            symbol_assign_pairs.append((a.target, rhs))
 
         def _emit_one(st: SDFGState, a: NodeLike, i: int) -> None:
             # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
@@ -884,7 +882,10 @@ def emit_loop(
         hazardous = _hoist_hazard_targets(symbol_assign_pairs, compute_targets)
         hazardous |= _hoist_hazard_targets(per_sym_assigns, compute_targets | {t for t, _ in symbol_assign_pairs})
 
-        if hazardous:
+        # A symbol assign after a compute cannot hoist over it either: the compute may read the old value.
+        if hazardous or any(
+            a.target not in builder.symbols and b.target in builder.symbols for a, b in pairwise(child_assigns)
+        ):
             # At least one hoisted assignment reads a value something it skips past defines, so the
             # hoist would rotate it by an iteration (see ``_hoist_hazard_targets``).  Emit the batch
             # statement by statement in SOURCE order instead: computes land in the current state,
@@ -927,6 +928,7 @@ def emit_loop(
                         cur, edge, batch_lhs = nxt, InterstateEdge(), set()
                     edge.assignments[tgt] = rhs
                     batch_lhs.add(tgt)
+                    emitted_syms -= {sym for expr, sym in indirect_syms.items() if tgt in _rhs_free_symbols(expr)}
                     continue
                 # A pending symbol edge -- or a sibling array/scalar hazard -- closes the state
                 # first; the first compute always opens one so nothing lands in ``pre``.
@@ -936,6 +938,7 @@ def emit_loop(
                     cur, edge, batch_lhs = nxt, InterstateEdge(), set()
                 _emit_one(cur, a, compute_i)
                 compute_i += 1
+                emitted_syms -= {sym for expr, sym in indirect_syms.items() if a.target in _rhs_free_symbols(expr)}
             if edge.assignments:  # trailing symbol assignments still need a state to land on
                 loop.add_edge(cur, loop.add_state(f"body_{builder.nid()}"), edge)
             return
