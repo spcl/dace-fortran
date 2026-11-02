@@ -445,8 +445,8 @@ def _find_type_decl_node(node: f03.Entity_Decl) -> Base | None:
 _BITS_PER_BYTE = 8
 
 #: ``SELECTED_REAL_KIND(p, r)``: the first kind whose (max decimal precision, max decimal exponent range) holds both;
-#: anything larger is DOUBLE_KIND.
-_REAL_KIND_LIMITS = ((2, 2, 14), (4, 8, 126))
+#: limits are flang's; anything larger is DOUBLE_KIND.
+_REAL_KIND_LIMITS = ((2, 3, 4), (3, 2, 37), (4, 6, 37))
 
 
 def _eval_selected_int_kind(p: Union[int, np.integer]) -> int:
@@ -664,9 +664,11 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
             ):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = const_eval_basic_type(p, alias_map), const_eval_basic_type(r, alias_map)
-            if p is None or r is None:
+            # P and R are optional and bind by position or keyword; an absent one is 0.
+            x = (a.children if isinstance(a, f03.Actual_Arg_Spec) else (k, a) for k, a in zip("PR", args, strict=False))
+            vals = {str(k).upper(): const_eval_basic_type(v, alias_map) for k, v in x}
+            p, r = vals.get("P", 0), vals.get("R", 0)
+            if p is None or r is None or "RADIX" in vals:
                 return None
             return np.int32(_eval_selected_real_kind(int(p), int(r)))
         elif intr.string == "SELECTED_INT_KIND":

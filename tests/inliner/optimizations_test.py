@@ -1099,6 +1099,54 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_exploit_locally_constant_selected_real_kind():
+    """``SELECTED_REAL_KIND`` folds to flang's kind; P and R are optional, and may come by keyword in any order."""
+    want = {
+        "selected_real_kind(6, 37)": "4",
+        "selected_real_kind(12, 307)": "8",
+        "selected_real_kind(7, 5)": "8",
+        "selected_real_kind(3, 5)": "4",
+        "selected_real_kind(1, 5)": "3",
+        "selected_real_kind(3)": "2",
+        "selected_real_kind(4)": "4",
+        "selected_real_kind(6)": "4",
+        "selected_real_kind(7)": "8",
+        "selected_real_kind(8)": "8",
+        "selected_real_kind(12)": "8",
+        "selected_real_kind(pq)": "8",
+        "selected_real_kind(r=4)": "2",
+        "selected_real_kind(r=5)": "3",
+        "selected_real_kind(r=37)": "3",
+        "selected_real_kind(r=38)": "8",
+        "selected_real_kind(r=126)": "8",
+        "selected_real_kind(p=12, r=1)": "8",
+        "selected_real_kind(R=37, P=1)": "3",
+        "selected_real_kind(6, r=37)": "4",
+        # A non-constant argument or a RADIX stays for flang to resolve.
+        "selected_real_kind(n)": "k",
+        "selected_real_kind(r=n)": "k",
+        "selected_real_kind(1, n)": "k",
+        "selected_real_kind(radix=3, p=3)": "k",
+    }
+    body = "\n".join(f"  k = {call}\n  dummy = k" for call in want)
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(f"""
+subroutine main(n)
+  implicit none
+  integer, intent(in) :: n
+  integer, parameter :: pq = 7
+  integer :: k, dummy
+{body}
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    assert [line.strip() for line in got.splitlines() if "dummy =" in line] == [f"dummy = {v}" for v in want.values()]
+
+
 if __name__ == "__main__":
     test_constant_resolving_expressions()
     test_constant_expression_replacement()
@@ -1111,6 +1159,7 @@ if __name__ == "__main__":
     test_exploit_locally_constant_variables()
     test_exploit_locally_constant_struct_members()
     test_exploit_locally_constant_pointers()
+    test_exploit_locally_constant_selected_real_kind()
     test_replace_case_selector_consts()
     test_constant_function_evaluation()
 
