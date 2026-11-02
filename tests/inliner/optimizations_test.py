@@ -1290,9 +1290,9 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
-def folded_result(body: str) -> str:
+def folded_result(body: str, optimize=optimizations.exploit_locally_constant_variables) -> str:
     sources, _ = SourceCodeBuilder().add_file(body).check_with_gfortran().get()
-    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    got = optimize(parse_and_improve(sources)).tofortran()
     (line,) = [line.strip() for line in got.split("\n") if line.strip().startswith("x =")]
     return line
 
@@ -1356,60 +1356,36 @@ end subroutine main
     assert line == "x = s % a"
 
 
-if __name__ == "__main__":
-    test_constant_resolving_expressions()
-    test_constant_expression_replacement()
-    test_constant_parameter_array_elements()
-    test_constant_resolving_non_expressions()
-    test_config_injection_type()
-    test_config_injection_instance()
-    test_config_injection_array()
-    test_config_injection_allocatable_fixing()
-    test_practically_constant_arguments()
-    test_exploit_locally_constant_variables()
-    test_exploit_locally_constant_struct_members()
-    test_exploit_locally_constant_pointers()
-    test_exploit_locally_constant_selected_real_kind()
-    test_replace_case_selector_consts()
-    test_constant_function_evaluation()
-
-
-def test_const_eval_keyword_value_matching_keyword_name():
-    """A ``kw=value`` actual argument whose VALUE name equals the keyword name
-    (e.g. ``use_g2g=use_g2g``, where the value is a module PARAMETER and the
-    keyword is the callee's dummy of the same name) must still resolve + fold the
-    value to the parameter's constant.
-
-    Regression: the keyword-skip in ``search_scope_spec`` / ``search_local_alias_spec``
-    compared NAMES (``kw.string == node.string``) instead of node IDENTITY, so the
-    value reference was wrongly treated as "a keyword" and left unresolved -- which
-    later let pruning drop the parameter and leave a dangling reference (the ICON
-    halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
-    sources, _ = (
-        SourceCodeBuilder()
-        .add_file("""
-module m
+def test_real4_parameter_element_keeps_its_value_when_widened():
+    """A real(8) array built from single-precision literals holds their exact value, not their shortest decimal."""
+    line = folded_result(
+        """
+subroutine main(x)
   implicit none
-  logical, parameter :: use_g2g = .false.
-contains
-  subroutine main(x)
-    real, intent(inout) :: x
-    call recv(x, use_g2g=use_g2g)
-  end subroutine main
-  subroutine recv(x, use_g2g)
-    real, intent(inout) :: x
-    logical, intent(in) :: use_g2g
-  end subroutine recv
-end module m
-""")
-        .check_with_gfortran()
-        .get()
+  real(8), parameter :: t(2) = [0.1, 0.2]
+  real(8), intent(out) :: x
+  x = t(1)
+end subroutine main
+""",
+        optimizations.const_eval_nodes,
     )
-    ast = parse_and_improve(sources)
-    ast = optimizations.const_eval_nodes(ast)
-    got = ast.tofortran()
-    # the value reference folded to the parameter's constant (not left symbolic)
-    assert "use_g2g = .FALSE." in got, got
+    assert line == "x = 0.10000000149011612D0"
+
+
+def test_real_value_in_an_integer_parameter_array_stays_a_read():
+    """The array's kind cannot hold the value, so the element is not folded."""
+    line = folded_result(
+        """
+subroutine main(x)
+  implicit none
+  integer, parameter :: t(2) = [1.5, 2.5]
+  integer, intent(out) :: x
+  x = t(1)
+end subroutine main
+""",
+        optimizations.const_eval_nodes,
+    )
+    assert line == "x = t(1)"
 
 
 def test_forwarded_caller_optional_presence_not_folded():
@@ -1474,7 +1450,66 @@ end subroutine main
     assert "PRESENT(opt_start_level)" in got, got
     assert "start_level = 1" in got, got
     assert ".TRUE." not in got, got
+
+
+if __name__ == "__main__":
+    test_constant_resolving_expressions()
+    test_constant_expression_replacement()
+    test_constant_parameter_array_elements()
+    test_constant_resolving_non_expressions()
+    test_config_injection_type()
+    test_config_injection_instance()
+    test_config_injection_array()
+    test_config_injection_allocatable_fixing()
+    test_practically_constant_arguments()
+    test_exploit_locally_constant_variables()
+    test_exploit_locally_constant_struct_members()
+    test_exploit_locally_constant_pointers()
+    test_exploit_locally_constant_selected_real_kind()
+    test_replace_case_selector_consts()
+    test_constant_function_evaluation()
+
+
+def test_const_eval_keyword_value_matching_keyword_name():
+    """A ``kw=value`` actual argument whose VALUE name equals the keyword name
+    (e.g. ``use_g2g=use_g2g``, where the value is a module PARAMETER and the
+    keyword is the callee's dummy of the same name) must still resolve + fold the
+    value to the parameter's constant.
+
+    Regression: the keyword-skip in ``search_scope_spec`` / ``search_local_alias_spec``
+    compared NAMES (``kw.string == node.string``) instead of node IDENTITY, so the
+    value reference was wrongly treated as "a keyword" and left unresolved -- which
+    later let pruning drop the parameter and leave a dangling reference (the ICON
+    halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module m
+  implicit none
+  logical, parameter :: use_g2g = .false.
+contains
+  subroutine main(x)
+    real, intent(inout) :: x
+    call recv(x, use_g2g=use_g2g)
+  end subroutine main
+  subroutine recv(x, use_g2g)
+    real, intent(inout) :: x
+    logical, intent(in) :: use_g2g
+  end subroutine recv
+end module m
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+    got = ast.tofortran()
+    # the value reference folded to the parameter's constant (not left symbolic)
+    assert "use_g2g = .FALSE." in got, got
+    test_forwarded_caller_optional_presence_not_folded()
     test_exploit_locally_constant_not_kept_after_do()
     test_exploit_locally_constant_pointer_keeps_its_variable_subscript()
     test_exploit_locally_constant_not_kept_across_a_call()
     test_exploit_locally_constant_component_not_kept_after_whole_struct_write()
+    test_real4_parameter_element_keeps_its_value_when_widened()
+    test_real_value_in_an_integer_parameter_array_stays_a_read()

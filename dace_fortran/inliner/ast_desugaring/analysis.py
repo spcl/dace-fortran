@@ -647,12 +647,12 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
                 return None
             lbound = shape[0].children[0]
             lbound = const_eval_basic_type(lbound, alias_map) if lbound else 1
-            vals: list[Any] = [const_eval_basic_type(v, alias_map) for v in iexpr.children[1].children]
-            if lbound is None or any(v is None for v in vals) or not lbound <= idx < lbound + len(vals):
+            elements: list[Any] = [const_eval_basic_type(v, alias_map) for v in iexpr.children[1].children]
+            if lbound is None or any(v is None for v in elements) or not lbound <= idx < lbound + len(elements):
                 return None
             try:
-                return optimizations.val_2_np_lit(vals[int(idx) - int(lbound)], typ.spec)
-            except NotImplementedError:
+                return optimizations.val_2_np_lit(elements[int(idx) - int(lbound)], typ.spec)
+            except (NotImplementedError, ValueError):
                 return None
         val = const_eval_basic_type(iexpr, alias_map)
         if val is None:

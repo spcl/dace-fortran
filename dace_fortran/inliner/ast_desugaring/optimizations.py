@@ -369,7 +369,8 @@ def val_2_np_lit(val: Union[str, bool, float, np.generic], type_spec: types.SPEC
     :param type_spec: The target Fortran type specification (e.g., ('INTEGER4',)).
     :return: A NumPy scalar (e.g., np.int32, np.float64) representing the value.
     """
-    text = str(val).lower()
+    # A numpy scalar prints its shortest decimal at its own width, which is not its value at a wider one
+    text = str(val.item() if isinstance(val, np.generic) else val).lower()
     # Convert the string value to the appropriate NumPy type based on the Fortran type specification.
     if type_spec == ("INTEGER1",):
         return np.int8(text)
