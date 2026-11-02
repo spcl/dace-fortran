@@ -45,7 +45,7 @@ from dace import SDFGState
 from dace.sdfg.nodes import LibraryNode
 from dace.transformation.transformation import ExpandTransformation
 
-from dace_fortran.dace_types import library_node
+from dace_fortran.dace_types import connectors, library_node
 
 if TYPE_CHECKING:
     from dace_fortran.external_functions import ExternalFunction
@@ -587,8 +587,8 @@ def inline_external(sdfg: dace.SDFG, name: str, callee_sdfg: dace.SDFG) -> int:
         symbol_mapping = {s: s for s in callee_sdfg.free_symbols if s in sdfg.symbols or s in sdfg.arrays}
         nested = state.add_nested_sdfg(
             callee_sdfg,
-            inputs=set(in_map.keys()),
-            outputs=set(out_map.keys()),
+            inputs=connectors(in_map),
+            outputs=connectors(out_map),
             symbol_mapping=symbol_mapping,
             name=f"{name}_inlined_{replaced}",
         )

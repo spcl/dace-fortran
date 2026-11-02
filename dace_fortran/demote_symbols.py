@@ -18,7 +18,7 @@ from dace.sdfg.state import ConditionalBlock, LoopRegion, SDFGState
 from dace.transformation import pass_pipeline as ppl
 from ordered_set import OrderedSet
 
-from dace_fortran.dace_types import explicit_cf_compatible
+from dace_fortran.dace_types import connectors, explicit_cf_compatible
 
 #: The state ScalarToSymbolPromotion puts first to initialize a promoted transient a read may reach unassigned.
 PROMOTED_INIT_STATE = "init_promoted_scalars"
@@ -100,7 +100,7 @@ def assignment_tasklet(state: SDFGState, lhs: str, rhs: str) -> None:
     body = ReadsToConnectors().visit(ast.parse(rhs.strip(), mode="eval")).body
     out = f"_out_{lhs}"
     tasklet = state.add_tasklet(
-        f"assign_{lhs}", {conn for conn, _ in reads.values()}, {out}, f"{out} = {ast.unparse(body)}"
+        f"assign_{lhs}", connectors(conn for conn, _ in reads.values()), {out}, f"{out} = {ast.unparse(body)}"
     )
     accesses: dict[str, nodes.AccessNode] = {}
     for expr, (conn, data) in reads.items():
