@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from itertools import pairwise
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import dace
 from dace import InterstateEdge
@@ -394,7 +394,7 @@ def _fortran_subs_to_dace(expr: str, builder: SDFGBuilder) -> str:
     cursor = 0
     for start, end, arr, parts in matches:
         out.append(expr[cursor:start])
-        new_inner = ", ".join(f"({p}) - offset_{arr}_d{d}" for d, p in enumerate(parts))
+        new_inner = ", ".join(f"({_fortran_subs_to_dace(p, builder)}) - offset_{arr}_d{d}" for d, p in enumerate(parts))
         out.append(f"{arr}[{new_inner}]")
         cursor = end
     out.append(expr[cursor:])
@@ -436,27 +436,25 @@ def routine_write_set(builder: SDFGBuilder) -> set:
 
     A name absent from the result is therefore read-only for the whole routine.
     """
-    if builder.write_set is not None:
-        return builder.write_set
+    if builder.write_set is None:
+        builder.write_set = written_names(builder.ast)
+    return builder.write_set
 
+
+def written_names(nodes: Sequence[NodeLike]) -> set:
+    """Every name ``nodes`` may store into; see :func:`routine_write_set`."""
     written: set = set()
-
-    def visit(nodes: Sequence[NodeLike]) -> None:
-        for c in nodes:
-            if c.target:
-                written.add(c.target)
-            if c.loop_iter:
-                written.add(c.loop_iter)
-            for a in c.accesses or []:
-                if (not a.is_read) and a.array_name:
-                    written.add(a.array_name)
-            for arg in c.call_args or []:
-                written.add(str(arg).split("[", 1)[0].strip())
-            visit(c.children)
-            visit(c.else_children)
-
-    visit(builder.ast)
-    builder.write_set = written
+    for c in nodes:
+        if c.target:
+            written.add(c.target)
+        if c.loop_iter:
+            written.add(c.loop_iter)
+        for a in c.accesses or []:
+            if (not a.is_read) and a.array_name:
+                written.add(a.array_name)
+        for arg in c.call_args or []:
+            written.add(str(arg).split("[", 1)[0].strip())
+        written |= written_names(c.children) | written_names(c.else_children)
     return written
 
 
@@ -547,7 +545,12 @@ def _deref_scalar_arrays_for_interstate(expr_str: str, ctx: Ctx) -> str:
 
 
 def _hoist_bound_to_symbol(
-    ctx: Ctx, region: ControlFlowRegion, builder: SDFGBuilder, expr_str: str, prefix: str
+    ctx: Ctx,
+    region: ControlFlowRegion,
+    builder: SDFGBuilder,
+    expr_str: str,
+    prefix: str,
+    body_writes: Collection[str] = (),
 ) -> str | None:
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
@@ -555,10 +558,12 @@ def _hoist_bound_to_symbol(
 
     :param expr_str: the rendered bound expression.
     :param prefix: symbol-name prefix (``loopend`` / ``loopbegin``).
+    :param body_writes: names the loop body may store into. Fortran fixes the trip count at entry, so
+                        a bare name among them is hoisted too; the loop condition re-reads it otherwise.
     :returns: the new symbol name, or ``None`` when ``expr_str`` is a
               trivial bound (the caller keeps its original value).
     """
-    if _is_trivial_bound(expr_str, builder):
+    if _is_trivial_bound(expr_str, builder) and expr_str.strip() not in body_writes:
         return None
     sym = f"{prefix}_{builder.nid()}"
     if sym not in ctx.sdfg.symbols:
@@ -722,11 +727,12 @@ def emit_loop(
     # then doesn't need to embed expression-rewrite logic in bound
     # rendering (the hoisted assignment goes through the same
     # interstate-edge symbol-staging path indirect-array reads use).
-    # Bare-symbol bounds are skipped; the staging would be pure noise.
-    _b = _hoist_bound_to_symbol(ctx, region, builder, str(bound), "loopend")
+    # Bare-symbol bounds the body leaves alone are skipped; the staging would be pure noise.
+    body_writes = written_names(n.children)
+    _b = _hoist_bound_to_symbol(ctx, region, builder, str(bound), "loopend", body_writes)
     if _b is not None:
         bound = _b
-    _l = _hoist_bound_to_symbol(ctx, region, builder, str(lower), "loopbegin")
+    _l = _hoist_bound_to_symbol(ctx, region, builder, str(lower), "loopbegin", body_writes)
     if _l is not None:
         lower = _l
 
@@ -742,6 +748,7 @@ def emit_loop(
     # one as init.
     step = n.loop_step
     step_expr = n.loop_step_expr or ""
+    trip = ""
 
     if step_expr:
         # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
@@ -754,20 +761,25 @@ def emit_loop(
         # 1-based -> DaCe 0-based conversion of ``arr(idx)`` to
         # ``arr[(idx) - offset_arr_d0]`` happens once on the
         # hoisted interstate-edge assignment instead of being
-        # embedded in the loop body.  Treat as forward iteration;
-        # runtime-negative symbols yield zero-or-one iterations
-        # under ``uid <= bound``, matching Fortran's mismatched-
-        # direction trip-count semantics.
+        # embedded in the loop body.  The sign is a runtime value and
+        # DaCe reads a loop end only off ``iter < end``, so the loop counts
+        # Fortran's trip count and derives the iterator from it.
         step_expr = _fortran_subs_to_dace(step_expr, builder)
-        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep")
+        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep", body_writes)
         if _s is not None:
             step_expr = _s
+        trips = f"Max(int_floor(({bound}) - ({lower}) + ({step_expr}), {step_expr}), 0)"
+        trip_sym = _hoist_bound_to_symbol(ctx, region, builder, trips, "looptrips", body_writes)
+        trip = f"{uid}_trip_{builder.nid()}"
+        ctx.sdfg.add_symbol(trip, dace.int64)
+        if uid not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(uid, dace.int64)
         loop = LoopRegion(
             label=f"loop_{uid}_{builder.nid()}",
-            condition_expr=f"{uid} < {bound} + 1",
-            loop_var=uid,
-            initialize_expr=f"{uid} = {lower}",
-            update_expr=f"{uid} = {uid} + {step_expr}",
+            condition_expr=f"{trip} < {trip_sym}",
+            loop_var=trip,
+            initialize_expr=f"{trip} = 0",
+            update_expr=f"{trip} = {trip} + 1",
         )
     elif step >= 0:
         loop = LoopRegion(
@@ -792,7 +804,18 @@ def emit_loop(
     if ctx.cur is not None:
         region.add_edge(ctx.cur, loop, InterstateEdge())
     ctx.cur = loop
+    emit_loop_body(builder, ctx, n, loop, iter_map)
+    if step_expr:
+        value = f"({lower}) + {trip} * ({step_expr})"
+        start = loop.start_block if loop.nodes() else loop.add_state(f"body_{builder.nid()}", is_start_block=True)
+        # dace annotates ``add_state_before``'s anchor as an SDFGState; any control-flow block works.
+        loop.add_state_before(cast("SDFGState", start), f"iter_{uid}", is_start_block=True, assignments={uid: value})
+        ctx.cur = region.add_state(f"post_{uid}_{builder.nid()}")
+        region.add_edge(loop, ctx.cur, InterstateEdge(assignments={uid: value}))
 
+
+def emit_loop_body(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, loop: LoopRegion, iter_map: dict[str, str]) -> None:
+    """Emit the children of the DO node ``n`` into ``loop``."""
     # Cache .children once  --  nanobind copies on every access.
     children = n.children
 
