@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import gc
+import re
 import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
@@ -673,6 +674,32 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
     sdfg.symbols.update(target_dtypes)
 
 
+def refuse_extent_writes(builder: SDFGBuilder) -> None:
+    """Refuse a body that assigns a symbol an explicit extent names.
+
+    Fortran fixes those bounds at entry, while a descriptor names the live symbol, so its strides would follow the
+    assignment. An allocatable is exempt: its extents are fixed by the ``ALLOCATE``, tracked apart from the name.
+
+    :raises NotImplementedError: naming the symbol and the array.
+    """
+
+    def assigned(nodes: Sequence[NodeLike]) -> set[str]:
+        names = {c.target for c in nodes if c.kind == "assign" and c.target in builder.symbols}
+        for c in nodes:
+            names |= assigned(c.children) | assigned(c.else_children)
+        return names
+
+    written = assigned(builder.ast)
+    for v in builder.arrays.values():
+        hit = written.intersection(re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)))
+        allocatable = v.module_origin_allocatable or f"{v.fortran_name}_allocated" in builder.symbols
+        if hit and v.role == "array" and not allocatable:
+            raise NotImplementedError(
+                f"assignment to {sorted(hit)} in the body: extent of explicit-shape array {v.fortran_name!r}, "
+                "whose bounds Fortran fixes at entry. Assign a copy of the extent instead."
+            )
+
+
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
@@ -1123,6 +1150,7 @@ class SDFGBuilder:
         # don't-care default.
         sdfg = AutoDimSDFG(sdfg_name(self))
         add_descriptors(self, sdfg)
+        refuse_extent_writes(self)
         # Constant-pool (Flang's ``_QQro.<...>`` globals): for every
         # ``parameter``-attributed declare whose backing global carries
         # a dense init, register the data via ``sdfg.add_constant``.
