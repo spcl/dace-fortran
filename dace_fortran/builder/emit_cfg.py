@@ -1072,6 +1072,19 @@ def materialize_indirect_syms(
     return indirect_syms
 
 
+def rendered_condition(n: NodeLike) -> str:
+    """The condition of ``n``, ``True`` when it has none.
+
+    :raises NotImplementedError: the bridge left the ``?`` placeholder, which no default can stand in for.
+    """
+    if n.condition == "?":
+        raise NotImplementedError(
+            f"unresolved condition placeholder ``?`` on a {n.kind} node. The C++ AST builder could not render "
+            "the condition; check bridge/ast/expressions.cpp ``buildExpr`` against this kernel's HLFIR."
+        )
+    return n.condition or "True"
+
+
 class StagedCondition(NamedTuple):
     state: SDFGState
     expr: str
@@ -1118,10 +1131,7 @@ def emit_while(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowR
     break-on-false into a ``break`` child node inside the body).
     """
     pre = ctx.flush_and_ensure(builder, region)
-    # ``?`` is the bridge's placeholder for an unextractable condition.
-    # Default to ``True`` so ast.parse succeeds and leaves the faithful
-    # structure visible in the SDFG for inspection.
-    cond = n.condition if n.condition and n.condition != "?" else "True"
+    cond = rendered_condition(n)
 
     # Mirror the ``emit_cond`` cond-rewrite pipeline so a real
     # ``DO WHILE (a(i) > thr)`` doesn't relapse the bugs already
@@ -1194,8 +1204,7 @@ def _prepare_cond_expr(
     Staging for one branch of ``emit_cond``: section-alias rewriting, scalar-output subscripting, tasklet-lifting for
     array-reading conditions, and caching of never-written conditions.
     """
-    cond = n.condition if n.condition and n.condition != "?" else "True"
-    cond = _rewrite_section_aliases_in_expr(builder, cond)
+    cond = _rewrite_section_aliases_in_expr(builder, rendered_condition(n))
 
     accesses = n.accesses
     will_lift = bool(accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in accesses)
@@ -1251,13 +1260,28 @@ def _prepare_cond_expr(
     return StagedCondition(pre, cond)
 
 
+def is_total(builder: SDFGBuilder, n: NodeLike) -> bool:
+    """Whether the condition of ``n`` is safe to evaluate ahead of the branches before it, as flattening stages it.
+
+    A branch before it may be what guards a division, an array read or a by-reference (possibly absent) scalar.
+    """
+    names = set(re.findall(r"[A-Za-z_]\w*", n.condition))
+    return not (
+        any(ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+        or "/" in n.condition
+        or names & {"int_floor", "FtnMod", "PyMod", "CMod"}
+        or any(builder.scalars[nm].intent in ("out", "inout") for nm in names & builder.scalars.keys())
+    )
+
+
 def emit_cond(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.
 
     ``else if`` chains emitted by the bridge as nested ``conditional`` nodes
-    are flattened into a single multi-branch ``ConditionalBlock``.
+    are flattened into a single multi-branch ``ConditionalBlock`` while the
+    next condition :func:`is_total`; the rest stays nested in the else region.
     """
     pre = ctx.flush_and_ensure(builder, region)
 
@@ -1268,8 +1292,9 @@ def emit_cond(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         pre, cond = _prepare_cond_expr(builder, ctx, region, pre, cur)
         branches.append((cond, list(cur.children)))
         else_children = list(cur.else_children)
-        if len(else_children) == 1 and else_children[0].kind == "conditional" and else_children[0].condition:
-            cur = else_children[0]
+        nested = else_children[0] if len(else_children) == 1 else None
+        if nested is not None and nested.kind == "conditional" and nested.condition and is_total(builder, nested):
+            cur = nested
             continue
         tail_children = else_children
         break
