@@ -39,7 +39,7 @@ from dace.transformation.interstate.move_if_into_map import MoveIfIntoMap
 from dace.transformation.interstate.sdfg_nesting import InlineSDFG
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
-from dace.transformation.passes.full_map_fusion import FullMapFusion
+from dace.transformation.passes.fuse_maps import FuseMaps as FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
