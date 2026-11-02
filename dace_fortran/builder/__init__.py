@@ -692,7 +692,9 @@ def refuse_extent_writes(builder: SDFGBuilder) -> None:
     written = assigned(builder.ast)
     for v in builder.arrays.values():
         hit = written.intersection(re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)))
-        allocatable = v.module_origin_allocatable or f"{v.fortran_name}_allocated" in builder.symbols
+        # A reallocation's buffer ``<x>_alloc<N>`` shares the companion of ``<x>``.
+        base = re.sub(r"_alloc\d+$", "", v.fortran_name)
+        allocatable = v.module_origin_allocatable or f"{base}_allocated" in builder.symbols
         if hit and v.role == "array" and not allocatable:
             raise NotImplementedError(
                 f"assignment to {sorted(hit)} in the body: extent of explicit-shape array {v.fortran_name!r}, "
