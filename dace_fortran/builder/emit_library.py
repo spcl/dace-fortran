@@ -1109,6 +1109,13 @@ def emit_unsupported_libcall(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region
     )
 
 
+def refuse_literal_window(routine: str, name: str, shape: Sequence[Any], sizes: Sequence[str]) -> None:
+    """For routines with no view lowering: a literal size that selects part of ``name``."""
+    for extent, size in zip(shape, sizes, strict=False):
+        if str(size).isdigit() and str(extent).isdigit() and str(size) != str(extent):
+            raise NotImplementedError(f"{routine}: size {size} selects part of {name!r} of extent {extent}")
+
+
 def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRegion) -> None:
     """Lower a recognised Fortran BLAS call (``kind == 'blascall'``) to a
     :mod:`dace.libraries.blas` library node.
@@ -1248,8 +1255,23 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 return True
         return False
 
+    def blas_flag(text: str) -> str:
+        letter = text.strip().strip("'\"").upper()[:1]
+        if not letter:
+            raise NotImplementedError(f"{routine}: a CHARACTER flag known only at run time has no lowering")
+        return letter
+
+    def whole(name: str, *sizes: str) -> bool:
+        """Whether the sizes of a call spell the declared shape of ``name``, so the call reads all of it."""
+        return [str(extent) for extent in ctx.sdfg.arrays[name].shape] == list(sizes)
+
+    def refuse_window(name: str, *sizes: str) -> None:
+        refuse_literal_window(routine, name, ctx.sdfg.arrays[name].shape, sizes)
+
     def _view(op: _Operand, shape: Sequence[Any], strides: Sequence[Any]) -> str:
         """A ``real_type`` view of ``op``'s storage in the column-major shape the routine addresses it by."""
+        if any(isinstance(stride, int) and stride < 0 for stride in strides):
+            raise NotImplementedError(f"{routine}: a negative increment on {op.name!r} has no lowering")
         view = f"{op.name}_{routine}_{builder.nid()}"
         ctx.sdfg.add_view(view, list(shape), real_type, strides=list(strides))
         return view
@@ -1271,10 +1293,22 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         state.add_edge(view_node, "views", state.add_write(op.name), None, _link(op))
 
     if routine in ("daxpy", "saxpy"):
-        alpha, x, y = n.call_args
-        node = blas_nodes.Axpy(f"axpy_{builder.nid()}", a=_scalar(alpha))
+        alpha, x_arg, y_arg, length, inc_x, inc_y = n.call_args
+        op_x, op_y = _operand(x_arg), _operand(y_arg)
+        size = _size(length)
+        node = blas_nodes.Axpy(f"axpy_{builder.nid()}", a=_scalar(alpha), n=size)
+        if (inc_x, inc_y) != ("1", "1") or _by_sequence_association(((op_x, 1), (op_y, 1))):
+            incx_stride, incy_stride = _size(inc_x), _size(inc_y)
+            _apply_promotions()
+            state.add_node(node)
+            _read_view(node, "_x", op_x, _view(op_x, (size,), (incx_stride,)), f"0:{size}")
+            y_view = _view(op_y, (size,), (incy_stride,))
+            _read_view(node, "_y", op_y, y_view, f"0:{size}")
+            _write_view(node, "_res", op_y, y_view, f"0:{size}")
+            return
         _apply_promotions()
         state.add_node(node)
+        x, y = op_x.name, op_y.name
         x_desc = ctx.sdfg.arrays[x]
         y_desc = ctx.sdfg.arrays[y]
         state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
@@ -1283,23 +1317,42 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         return
 
     if routine in ("dscal", "sscal"):
-        alpha, x = n.call_args
+        alpha, x_arg, length, inc_x = n.call_args
+        op_x = _operand(x_arg)
         node = blas_nodes.Scal(f"scal_{builder.nid()}", a=_scalar(alpha))
+        if inc_x != "1" or not whole(op_x.name, length) or _by_sequence_association(((op_x, 1),)):
+            size, incx_stride = _size(length), _size(inc_x)
+            _apply_promotions()
+            state.add_node(node)
+            x_view = _view(op_x, (size,), (incx_stride,))
+            _read_view(node, "_x", op_x, x_view, f"0:{size}")
+            _write_view(node, "_res", op_x, x_view, f"0:{size}")
+            return
         _apply_promotions()
         state.add_node(node)
+        x = op_x.name
         x_desc = ctx.sdfg.arrays[x]
         state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
         state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
         return
 
     if routine in ("dgemv", "sgemv"):
-        trans = n.expr.strip().strip("'\"").upper()[:1] or "N"
+        trans = blas_flag(n.expr)
         alpha, beta = n.call_args[0], n.call_args[3]
         op_a, op_x, op_y = (_operand(n.call_args[i]) for i in (1, 2, 4))
         # For real data a conjugate transpose (``'C'``) is the transpose.
         transposed = trans in ("T", "C")
         node = blas_nodes.Gemv(f"gemv_{builder.nid()}", transA=transposed, alpha=_scalar(alpha), beta=_scalar(beta))
-        if _by_sequence_association(((op_a, 2), (op_x, 1), (op_y, 1))):
+        m_arg, n_arg, lda_arg = n.call_args[5:8]
+        x_arg, y_arg = (m_arg, n_arg) if transposed else (n_arg, m_arg)
+        full = (
+            m_arg == lda_arg
+            and whole(op_a.name, lda_arg, n_arg)
+            and whole(op_x.name, x_arg)
+            and whole(op_y.name, y_arg)
+            and n.call_args[8:10] == ["1", "1"]
+        )
+        if not full or _by_sequence_association(((op_a, 2), (op_x, 1), (op_y, 1))):
             rows, cols, lda, incx, incy = (_size(a) for a in n.call_args[5:10])
             x_len, y_len = (rows, cols) if transposed else (cols, rows)
             _apply_promotions()
@@ -1321,11 +1374,22 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         return
 
     if routine in ("dgemm", "sgemm"):
-        tA, tB = (s.strip("'\"").upper()[:1] in ("T", "C") for s in n.expr.split(","))
+        tA, tB = (blas_flag(s) in ("T", "C") for s in n.expr.split(","))
         alpha, beta = n.call_args[0], n.call_args[3]
         op_a, op_b, op_c = (_operand(n.call_args[i]) for i in (1, 2, 4))
         node = blas_nodes.Gemm(f"gemm_{builder.nid()}", transA=tA, transB=tB, alpha=_scalar(alpha), beta=_scalar(beta))
-        if _by_sequence_association(((op_a, 2), (op_b, 2), (op_c, 2))):
+        m_arg, n_arg, k_arg, lda_arg, ldb_arg, ldc_arg = n.call_args[5:11]
+        a_cols_arg = m_arg if tA else k_arg
+        b_cols_arg = k_arg if tB else n_arg
+        full = (
+            whole(op_a.name, lda_arg, a_cols_arg)
+            and whole(op_b.name, ldb_arg, b_cols_arg)
+            and whole(op_c.name, ldc_arg, n_arg)
+            and lda_arg == (k_arg if tA else m_arg)
+            and ldb_arg == (n_arg if tB else k_arg)
+            and ldc_arg == m_arg
+        )
+        if not full or _by_sequence_association(((op_a, 2), (op_b, 2), (op_c, 2))):
             rows, cols, inner, lda, ldb, ldc = (_size(a) for a in n.call_args[5:11])
             a_rows, a_cols = (inner, rows) if tA else (rows, inner)
             b_rows, b_cols = (cols, inner) if tB else (inner, cols)
@@ -1351,19 +1415,25 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
 
     if routine in ("dcopy", "scopy"):
         # A BLAS copy is an element move; the standard copy node picks the lowering from the descriptors.
-        x, y = n.call_args
+        x, y, length, inc_x, inc_y = n.call_args
+        if (inc_x, inc_y) != ("1", "1"):
+            raise NotImplementedError(f"{routine}: increments {inc_x}, {inc_y} have no lowering")
+        refuse_window(x, length)
+        refuse_window(y, length)
         add_copy_node(builder, ctx, state, x, y)
         return
 
     if routine in ("dswap", "sswap"):
         # No vendor kernel gains anything on an element exchange: one sequential map over the vector.
-        x, y = n.call_args
+        x, y, length, inc_x, inc_y = n.call_args
         x_desc, y_desc = ctx.sdfg.arrays[x], ctx.sdfg.arrays[y]
-        if len(x_desc.shape) != 1 or len(y_desc.shape) != 1:
-            raise NotImplementedError(f"{routine} on {x!r}/{y!r}: only rank-1 operands are lowered")
+        if len(x_desc.shape) != 1 or len(y_desc.shape) != 1 or (inc_x, inc_y) != ("1", "1"):
+            raise NotImplementedError(f"{routine} on {x!r}/{y!r}: only rank-1 operands at unit increment are lowered")
+        extent = _size(length)
+        _apply_promotions()
         state.add_mapped_tasklet(
             f"swap_{builder.nid()}",
-            {"__i": f"0:{x_desc.shape[0]}"},
+            {"__i": f"0:{extent}"},
             {"__x": Memlet(f"{x}[__i]"), "__y": Memlet(f"{y}[__i]")},
             "__xo = __y\n__yo = __x",
             {"__xo": Memlet(f"{x}[__i]"), "__yo": Memlet(f"{y}[__i]")},
@@ -1375,7 +1445,15 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     if routine in ("dger", "sger"):
         alpha = n.call_args[0]
         op_x, op_y, op_a = (_operand(n.call_args[i]) for i in (1, 2, 3))
-        if _by_sequence_association(((op_x, 1), (op_y, 1), (op_a, 2))):
+        m_arg, n_arg, incx_arg, incy_arg, lda_arg = n.call_args[4:9]
+        full = (
+            m_arg == lda_arg
+            and whole(op_a.name, lda_arg, n_arg)
+            and whole(op_x.name, m_arg)
+            and whole(op_y.name, n_arg)
+            and (incx_arg, incy_arg) == ("1", "1")
+        )
+        if not full or _by_sequence_association(((op_x, 1), (op_y, 1), (op_a, 2))):
             rows, cols, incx, incy, lda = (_size(a) for a in n.call_args[4:9])
             node = blas_nodes.Ger(f"ger_{builder.nid()}", m=rows, n=cols, alpha=_scalar(alpha))
             _apply_promotions()
@@ -1395,8 +1473,13 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         return
 
     if routine in ("dsymv", "ssymv"):
-        uplo_l = n.expr.strip("'\"").upper()[:1] or "L"
-        alpha, A, x, beta, y = n.call_args
+        uplo_l = blas_flag(n.expr)
+        alpha, A, x, beta, y, n_arg, lda_arg, inc_x, inc_y = n.call_args
+        if (inc_x, inc_y) != ("1", "1"):
+            raise NotImplementedError(f"{routine}: increments {inc_x}, {inc_y} have no lowering")
+        refuse_window(A, lda_arg, n_arg)
+        refuse_window(x, n_arg)
+        refuse_window(y, n_arg)
         node = blas_nodes.Symv(f"symv_{builder.nid()}", uplo=(uplo_l == "U"), alpha=_scalar(alpha), beta=_scalar(beta))
         _apply_promotions()
         state.add_node(node)
@@ -1409,9 +1492,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
 
     if routine in ("dsymm", "ssymm"):
         flags = n.expr.split(",")
-        side_l = flags[0].strip("'\"").upper()[:1] or "L"
-        uplo_l = flags[1].strip("'\"").upper()[:1] or "L"
-        alpha, A, B, beta, C = n.call_args
+        side_l, uplo_l = blas_flag(flags[0]), blas_flag(flags[1])
+        alpha, A, B, beta, C, m_arg, n_arg, lda_arg, ldb_arg, ldc_arg = n.call_args
+        refuse_window(A, lda_arg, m_arg if side_l == "L" else n_arg)
+        refuse_window(B, ldb_arg, n_arg)
+        refuse_window(C, ldc_arg, n_arg)
         node = blas_nodes.Symm(
             f"symm_{builder.nid()}",
             side=(side_l == "R"),
@@ -1430,13 +1515,14 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
 
     if routine in ("dsyrk", "ssyrk"):
         flags = n.expr.split(",")
-        uplo_l = flags[0].strip("'\"").upper()[:1] or "L"
-        trans_l = flags[1].strip("'\"").upper()[:1] or "N"
-        alpha, A, beta, C = n.call_args
+        uplo_l, trans_l = blas_flag(flags[0]), blas_flag(flags[1])
+        alpha, A, beta, C, n_arg, k_arg, lda_arg, ldc_arg = n.call_args
+        refuse_window(A, lda_arg, n_arg if trans_l in ("T", "C") else k_arg)
+        refuse_window(C, ldc_arg, n_arg)
         node = blas_nodes.Syrk(
             f"syrk_{builder.nid()}",
             uplo=(uplo_l == "U"),
-            transA=(trans_l == "T"),
+            transA=(trans_l in ("T", "C")),
             alpha=_scalar(alpha),
             beta=_scalar(beta),
         )
@@ -1469,7 +1555,9 @@ def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     routine = n.callee.lower()
 
     if routine in ("dgetrf", "sgetrf"):
-        A, ipiv, info = n.call_args
+        A, ipiv, info, rows, cols, lda = n.call_args
+        refuse_literal_window(routine, A, ctx.sdfg.arrays[A].shape, (lda, cols))
+        refuse_literal_window(routine, A, ctx.sdfg.arrays[A].shape, (rows,))
         node = lapack_nodes.Getrf(f"getrf_{builder.nid()}")
         state.add_node(node)
         a_desc = ctx.sdfg.arrays[A]
@@ -1484,8 +1572,11 @@ def emit_lapack(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         return
 
     if routine in ("dpotrf", "spotrf"):
-        uplo_literal = n.expr.strip().strip("'\"").upper()[:1] or "L"
-        A, info = n.call_args
+        uplo_literal = n.expr.strip().strip("'\"").upper()[:1]
+        if not uplo_literal:
+            raise NotImplementedError(f"{routine}: a CHARACTER flag known only at run time has no lowering")
+        A, info, order, lda = n.call_args
+        refuse_literal_window(routine, A, ctx.sdfg.arrays[A].shape, (lda, order))
         node = lapack_nodes.Potrf(f"potrf_{builder.nid()}", lower=(uplo_literal == "L"))
         state.add_node(node)
         a_desc = ctx.sdfg.arrays[A]
@@ -1533,11 +1624,16 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     out_desc = ctx.sdfg.arrays[out_arr]
     # Only an FFTW plan carries extents, after the two buffers; QE's calls have no third entry or an axis tag.
     plan_dims = n.call_args[2:] if len(n.call_args) > 3 else []
-    if plan_dims and len(plan_dims) != len(in_desc.shape):
-        raise NotImplementedError(
-            f"FFTW plan of rank {len(plan_dims)} on {in_arr} of rank {len(in_desc.shape)}: the FFT node transforms "
-            "every axis of its buffer"
+    # FFTW plans row-major extents, so they read against the column-major shape in reverse
+    if plan_dims and [str(dim) for dim in reversed(plan_dims)] != [str(extent) for extent in in_desc.shape]:
+        literal = all(
+            str(dim).isdigit() and str(extent).isdigit() for dim, extent in zip(plan_dims, in_desc.shape, strict=False)
         )
+        if literal or len(plan_dims) != len(in_desc.shape):
+            raise NotImplementedError(
+                f"FFTW plan of extents {plan_dims} on {in_arr} of shape {in_desc.shape}: the FFT node transforms "
+                "every axis of its whole buffer"
+            )
     # QE convention: ``fwfft`` is the UN-normalized forward transform
     # (factor 1), ``invfft`` the inverse with a 1/N normalization. The FFT lib
     # node's pure DFT expansion applies ``factor`` as the output coefficient and

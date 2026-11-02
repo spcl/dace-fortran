@@ -758,7 +758,7 @@ static std::string resolveCallArg(mlir::Value v) {
 static std::string decodeCharLiteralSymbol(llvm::StringRef sym);
 
 /// A BLAS character flag (``'T'``) as its literal text, followed through an inlined wrapper's CHARACTER dummy (QE
-/// ``mydgemv(trans, ...)`` forwarding its ``trans``) back to the literal; else the plain resolved argument.
+/// ``mydgemv(trans, ...)`` forwarding its ``trans``) back to the literal; else empty, a flag known only at run time.
 static std::string blasFlagArg(mlir::Value v) {
   for (mlir::Value w = v; w;) {
     auto* d = w.getDefiningOp();
@@ -782,7 +782,7 @@ static std::string blasFlagArg(mlir::Value v) {
     else
       break;
   }
-  return resolveCallArg(v);
+  return {};
 }
 
 /// A BLAS scalar (``alpha``/``beta``) as its literal when it reaches the call through an inlined wrapper's dummy bound
@@ -870,6 +870,7 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   auto args = call.getArgOperands();
 
   auto push = [&](mlir::Value v) { n.call_args.push_back(resolveCallArg(v)); };
+  auto pushSize = [&](mlir::Value v) { n.call_args.push_back(blasScalarArg(v)); };
 
   if (routine == "daxpy" || routine == "saxpy") {
     // axpy(n, alpha, x, incx, y, incy) -- in-place y := alpha*x + y
@@ -877,9 +878,10 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    push(args[1]);  // alpha
-    push(args[2]);  // x
-    push(args[4]);  // y (inout)
+    push(args[1]);                                            // alpha
+    n.call_args.push_back(blasOperandArg(args[2]));           // x
+    n.call_args.push_back(blasOperandArg(args[4]));           // y (inout)
+    for (unsigned const i : {0U, 3U, 5U}) pushSize(args[i]);  // n, incx, incy
     return n;
   }
   if (routine == "dscal" || routine == "sscal") {
@@ -888,8 +890,9 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    push(args[1]);  // alpha
-    push(args[2]);  // x
+    push(args[1]);                                        // alpha
+    n.call_args.push_back(blasOperandArg(args[2]));       // x
+    for (unsigned const i : {0U, 3U}) pushSize(args[i]);  // n, incx
     return n;
   }
   if (routine == "ddot" || routine == "sdot") {
@@ -914,7 +917,7 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     n.call_args.push_back(blasScalarArg(args[8]));   // beta
     n.call_args.push_back(blasOperandArg(args[9]));  // y (inout)
     // Sizes, leading dimension and increments, for operands passed by sequence association.
-    for (unsigned const i : {1U, 2U, 5U, 7U, 10U}) push(args[i]);  // m, n, lda, incx, incy
+    for (unsigned const i : {1U, 2U, 5U, 7U, 10U}) pushSize(args[i]);  // m, n, lda, incx, incy
     return n;
   }
   if (routine == "dgemm" || routine == "sgemm") {
@@ -923,13 +926,13 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);        // transA,transB
-    n.call_args.push_back(blasScalarArg(args[5]));                     // alpha
-    n.call_args.push_back(blasOperandArg(args[6]));                    // A
-    n.call_args.push_back(blasOperandArg(args[8]));                    // B
-    n.call_args.push_back(blasScalarArg(args[10]));                    // beta
-    n.call_args.push_back(blasOperandArg(args[11]));                   // C (inout)
-    for (unsigned const i : {2U, 3U, 4U, 7U, 9U, 12U}) push(args[i]);  // m, n, k, lda, ldb, ldc
+    n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);            // transA,transB
+    n.call_args.push_back(blasScalarArg(args[5]));                         // alpha
+    n.call_args.push_back(blasOperandArg(args[6]));                        // A
+    n.call_args.push_back(blasOperandArg(args[8]));                        // B
+    n.call_args.push_back(blasScalarArg(args[10]));                        // beta
+    n.call_args.push_back(blasOperandArg(args[11]));                       // C (inout)
+    for (unsigned const i : {2U, 3U, 4U, 7U, 9U, 12U}) pushSize(args[i]);  // m, n, k, lda, ldb, ldc
     return n;
   }
   if (routine == "dnrm2" || routine == "snrm2" || routine == "dasum" || routine == "sasum" || routine == "idamax" ||
@@ -945,8 +948,9 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    push(args[1]);  // x
-    push(args[3]);  // y (out)
+    push(args[1]);                                            // x
+    push(args[3]);                                            // y (out)
+    for (unsigned const i : {0U, 2U, 4U}) pushSize(args[i]);  // n, incx, incy
     return n;
   }
   if (routine == "dswap" || routine == "sswap") {
@@ -955,8 +959,9 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    push(args[1]);  // x (inout)
-    push(args[3]);  // y (inout)
+    push(args[1]);                                            // x (inout)
+    push(args[3]);                                            // y (inout)
+    for (unsigned const i : {0U, 2U, 4U}) pushSize(args[i]);  // n, incx, incy
     return n;
   }
   if (routine == "dger" || routine == "sger") {
@@ -978,12 +983,13 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]);  // uplo
-    push(args[2]);                     // alpha
-    push(args[3]);                     // A
-    push(args[5]);                     // x
-    push(args[7]);                     // beta
-    push(args[8]);                     // y (inout)
+    n.expr = blasFlagArg(args[0]);                                // uplo
+    push(args[2]);                                                // alpha
+    push(args[3]);                                                // A
+    push(args[5]);                                                // x
+    push(args[7]);                                                // beta
+    push(args[8]);                                                // y (inout)
+    for (unsigned const i : {1U, 4U, 6U, 9U}) pushSize(args[i]);  // n, lda, incx, incy
     return n;
   }
   if (routine == "dsymm" || routine == "ssymm") {
@@ -992,12 +998,13 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
-    push(args[4]);   // alpha
-    push(args[5]);   // A
-    push(args[7]);   // B
-    push(args[9]);   // beta
-    push(args[10]);  // C (inout)
+    n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);
+    push(args[4]);                                                     // alpha
+    push(args[5]);                                                     // A
+    push(args[7]);                                                     // B
+    push(args[9]);                                                     // beta
+    push(args[10]);                                                    // C (inout)
+    for (unsigned const i : {2U, 3U, 6U, 8U, 11U}) pushSize(args[i]);  // m, n, lda, ldb, ldc
     return n;
   }
   if (routine == "dsyrk" || routine == "ssyrk") {
@@ -1006,11 +1013,12 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
-    push(args[4]);  // alpha
-    push(args[5]);  // A
-    push(args[7]);  // beta
-    push(args[8]);  // C (inout)
+    n.expr = blasFlagArg(args[0]) + "," + blasFlagArg(args[1]);
+    push(args[4]);                                                // alpha
+    push(args[5]);                                                // A
+    push(args[7]);                                                // beta
+    push(args[8]);                                                // C (inout)
+    for (unsigned const i : {2U, 3U, 6U, 9U}) pushSize(args[i]);  // n, k, lda, ldc
     return n;
   }
   n.kind.clear();
@@ -1030,9 +1038,10 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
       n.kind.clear();
       return n;
     }
-    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout: factor in place)
-    n.call_args.push_back(resolveCallArg(args[4]));  // ipiv (out)
-    n.call_args.push_back(resolveCallArg(args[5]));  // info (out)
+    n.call_args.push_back(resolveCallArg(args[2]));                                       // A (inout: factor in place)
+    n.call_args.push_back(resolveCallArg(args[4]));                                       // ipiv (out)
+    n.call_args.push_back(resolveCallArg(args[5]));                                       // info (out)
+    for (unsigned const i : {0U, 1U, 3U}) n.call_args.push_back(blasScalarArg(args[i]));  // m, n, lda
     return n;
   }
   if (routine == "dpotrf" || routine == "spotrf") {
@@ -1041,9 +1050,10 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
       n.kind.clear();
       return n;
     }
-    n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
-    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
-    n.call_args.push_back(resolveCallArg(args[4]));  // info (out)
+    n.expr = blasFlagArg(args[0]);                                                    // 'U' or 'L'
+    n.call_args.push_back(resolveCallArg(args[2]));                                   // A (inout)
+    n.call_args.push_back(resolveCallArg(args[4]));                                   // info (out)
+    for (unsigned const i : {1U, 3U}) n.call_args.push_back(blasScalarArg(args[i]));  // n, lda
     return n;
   }
   n.kind.clear();
@@ -1647,7 +1657,8 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
     std::string const outArr = traceToDecl(args[2]);
     if (planVar.empty() || inArr.empty()) return n;
     auto it = plans.find(planVar);
-    if (it == plans.end()) return n;  // unknown plan -- give up cleanly
+    // Plans live per block: an execute in a nested block would otherwise vanish
+    if (it == plans.end()) throw std::runtime_error("fftw_execute_dft: no plan \"" + planVar + "\" in this block");
     n.kind = "fftcall";
     n.callee = "fft_execute";
     n.target = outArr.empty() ? inArr : outArr;
