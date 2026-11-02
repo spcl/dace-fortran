@@ -126,8 +126,8 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
 
     The input subscripts are 0-based DaCe-form (built by
     ``buildExprWithSubscripts`` as ``(idx) - 1``); ``view_dim_map``'s
-    scalar slots are 1-based Fortran-form, so we subtract 1 when
-    splicing them in.
+    scalar slots are Fortran-form, so we subtract the source's lower
+    bound when splicing them in.
     """
     if not isinstance(expr, str):
         return expr
@@ -153,11 +153,11 @@ def _rewrite_section_aliases_in_expr(builder: SDFGBuilder, expr: str) -> str:
             continue
         v = builder.arrays[arr]
         new_parts = []
-        for _src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map):
+        for src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map):
             if dummy_dim is not None:
                 new_parts.append(parts[dummy_dim] if dummy_dim < len(parts) else "0")
             else:
-                new_parts.append(f"({slot}) - 1")
+                new_parts.append(f"({slot}) - offset_{v.view_source}_d{src_dim}")
         out = out[:start] + f"{v.view_source}[{', '.join(new_parts)}]" + out[end:]
     return out
 
@@ -353,15 +353,14 @@ def emit_symbol_init(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: Contro
     #     as data.
     #   * ``arr`` is a Scalar on the SDFG (the bridge folds length-1
     #     transients to Scalar) -- a Scalar has no subscript.
-    # Otherwise emit the (multi-dim) 0-based subscript; these source
-    # arrays use the default lower bound 1.
+    # Otherwise emit the (multi-dim) 0-based subscript.
     from dace.data import Scalar
 
     src_desc = ctx.sdfg.arrays.get(arr)
     if arr in ctx.sdfg.symbols or isinstance(src_desc, Scalar):
         read_expr = arr
     else:
-        read_expr = f"{arr}[{', '.join(str(i - 1) for i in idxs)}]"
+        read_expr = f"{arr}[{', '.join(f'{i} - offset_{arr}_d{d}' for d, i in enumerate(idxs))}]"
     region.add_edge(ctx.cur, dst, InterstateEdge(assignments={sym: read_expr}))
     ctx.cur = dst
 

@@ -1599,11 +1599,9 @@ class SDFGBuilder:
                 continue  # array not on the SDFG surface (trimmed)
             if sym not in sdfg.symbols:
                 sdfg.add_symbol(sym, dace.int64)
-            # 1-based Fortran element read; assumes lower bound 1, matching the
-            # constant-index ``emit_symbol_init`` seeding.  A multi-index element
-            # (``mat(i, j)`` -> ``idx = "i,j"``) is split per dimension so each
-            # gets its own ``- 1`` -> ``mat[(i) - 1, (j) - 1]``.
-            dims = ", ".join(f"({p.strip()}) - 1" for p in idx.split(","))
+            # Fortran element read.  A multi-index element (``mat(i, j)`` -> ``idx = "i,j"``) is
+            # split per dimension: ``mat[(i) - offset_mat_d0, (j) - offset_mat_d1]``.
+            dims = ", ".join(f"({p.strip()}) - offset_{arr}_d{d}" for d, p in enumerate(idx.split(",")))
             seeds[sym] = f"{arr}[{dims}]"
             self._value_symbol_provenance[sym] = (arr, idx)
         # A constant-index element as an extent (``orbital(1 : ngk(1), :)`` -> ``__sym_ngk_1``) is named like the
@@ -1615,7 +1613,8 @@ class SDFGBuilder:
                     continue
                 if sym not in sdfg.symbols:
                     sdfg.add_symbol(sym, dace.int64)
-                seeds[sym] = f"{element.array}[{', '.join(f'{i - 1}' for i in element.indices)}]"
+                subscript = ", ".join(f"{i} - offset_{element.array}_d{d}" for d, i in enumerate(element.indices))
+                seeds[sym] = f"{element.array}[{subscript}]"
                 self._value_symbol_provenance[sym] = (element.array, ",".join(map(str, element.indices)))
         if not seeds:
             return
