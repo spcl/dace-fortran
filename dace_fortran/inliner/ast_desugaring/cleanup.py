@@ -568,7 +568,7 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
         for tdecl in ast_utils.children_of_type(spart, f03.Type_Declaration_Stmt):
             _typ, attr, _ = tdecl.children
             if "PARAMETER" in f"{attr}":
-                # PARAMETER consts should already be propagated away.
+                # PARAMETERs are not global data: they and their references stay in place.
                 continue
             global_var_lines.append(tdecl.tofortran())
     all_derived_types = "\n".join(derived_type_lines)
@@ -603,6 +603,8 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
         mod, var = edecl_spec
         assert (mod,) in alias_map
         if not isinstance(alias_map[(mod,)], f03.Module_Stmt):
+            continue
+        if (typ := analysis.find_type_of_entity(alias_map[local_spec], alias_map)) and typ.const:
             continue
         if isinstance(nm.parent, f03.Part_Ref):
             _, subsc = nm.parent.children

@@ -366,8 +366,60 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_consolidate_global_data_keeps_parameter_arrays():
+    """A PARAMETER array that a variable index keeps alive stays a module entity, it is no `global_data` component."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module lib
+  implicit none
+  integer :: gvar = 2
+  real, parameter :: arr(3) = [3.0, 4.0, 5.0]
+end module lib
+
+subroutine main(i, res)
+  use lib
+  implicit none
+  integer, intent(in) :: i
+  real, intent(out) :: res
+  res = arr(i) + gvar
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = cleanup.consolidate_global_data_into_arg(ast)
+
+    got = ast.tofortran()
+    want = """
+MODULE global_mod
+  TYPE :: global_data_type
+    INTEGER :: gvar = 2
+  END TYPE global_data_type
+END MODULE global_mod
+MODULE lib
+  IMPLICIT NONE
+  INTEGER :: gvar = 2
+  REAL, PARAMETER :: arr(3) = [3.0, 4.0, 5.0]
+END MODULE lib
+SUBROUTINE main(global_data, i, res)
+  USE global_mod, ONLY: global_data_type
+  USE lib, ONLY: arr
+  IMPLICIT NONE
+  TYPE(global_data_type) :: global_data
+  INTEGER, INTENT(IN) :: i
+  REAL, INTENT(OUT) :: res
+  res = arr(i) + global_data % gvar
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 if __name__ == "__main__":
     test_globally_unique_names()
     test_remove_binds()
     test_remove_contiguous_statements()
     test_consolidate_global_data()
+    test_consolidate_global_data_keeps_parameter_arrays()

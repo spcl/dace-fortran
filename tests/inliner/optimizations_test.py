@@ -116,6 +116,86 @@ END MODULE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_constant_parameter_array_elements():
+    """
+    Tests that a rank-1 PARAMETER array element const-evaluates in the array's type,
+    also where it names a kind, and that an element it cannot resolve stays in place.
+    """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module main
+  implicit none
+  integer, parameter :: kinds(2) = [4, 8]
+  integer, parameter :: wp = kinds(2)
+  integer(kind=kinds(2)), parameter :: big = 3000000000_8
+  real(kind=kinds(2)), parameter :: third = 1.0d0 / 3.0d0
+  real, parameter :: arr(3) = [3, 4, 5]
+  real, parameter :: weird(-1:1) = [3, 4, 5]
+  integer, parameter, dimension(0:1) :: dims = (/ 6, 7 /)
+  logical(4), parameter :: flags(2) = [.true., .false.]
+  integer, parameter :: nested(3) = [kinds, 3]
+contains
+  subroutine foo(i, r1, r2, r3, r4, n1, n2, n3, b1)
+    integer, intent(in) :: i
+    real, intent(out) :: r1, r2, r3
+    real(kind=wp), intent(out) :: r4
+    integer(kind=8), intent(out) :: n1
+    integer, intent(out) :: n2, n3
+    logical, intent(out) :: b1
+    r1 = arr(1) / 2
+    r2 = weird(0)
+    r3 = arr(i)
+    r4 = third
+    n1 = big
+    n2 = dims(1)
+    n3 = nested(3)
+    b1 = flags(1)
+  end subroutine foo
+end module main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+MODULE main
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: kinds(2) = [4, 8]
+  INTEGER, PARAMETER :: wp = kinds(2)
+  INTEGER(KIND = 8), PARAMETER :: big = 3000000000_8
+  REAL(KIND = 8), PARAMETER :: third = 0.3333333333333333D0
+  REAL, PARAMETER :: arr(3) = [3, 4, 5]
+  REAL, PARAMETER :: weird(- 1 : 1) = [3, 4, 5]
+  INTEGER, PARAMETER, DIMENSION(0 : 1) :: dims = (/6, 7/)
+  LOGICAL(KIND = 4), PARAMETER :: flags(2) = [.TRUE., .FALSE.]
+  INTEGER, PARAMETER :: nested(3) = [kinds, 3]
+  CONTAINS
+  SUBROUTINE foo(i, r1, r2, r3, r4, n1, n2, n3, b1)
+    INTEGER, INTENT(IN) :: i
+    REAL, INTENT(OUT) :: r1, r2, r3
+    REAL(KIND = 8), INTENT(OUT) :: r4
+    INTEGER(KIND = 8), INTENT(OUT) :: n1
+    INTEGER, INTENT(OUT) :: n2, n3
+    LOGICAL, INTENT(OUT) :: b1
+    r1 = 1.5D0
+    r2 = 4.0
+    r3 = arr(i)
+    r4 = 0.3333333333333333D0
+    n1 = 3000000000_8
+    n2 = 7
+    n3 = nested(3)
+    b1 = flags(1)
+  END SUBROUTINE foo
+END MODULE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 def test_constant_resolving_named_kind_int_literal():
     """
     An integer literal with a *named* kind (`5_i8`) must const-fold the same as
@@ -1099,58 +1179,213 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
-if __name__ == "__main__":
-    test_constant_resolving_expressions()
-    test_constant_expression_replacement()
-    test_constant_resolving_non_expressions()
-    test_config_injection_type()
-    test_config_injection_instance()
-    test_config_injection_array()
-    test_config_injection_allocatable_fixing()
-    test_practically_constant_arguments()
-    test_exploit_locally_constant_variables()
-    test_exploit_locally_constant_struct_members()
-    test_exploit_locally_constant_pointers()
-    test_replace_case_selector_consts()
-    test_constant_function_evaluation()
+def test_exploit_locally_constant_selected_real_kind():
+    """``SELECTED_REAL_KIND`` folds to flang's kind; P and R are optional, and may come by keyword in any order."""
+    want = {
+        "selected_real_kind(6, 37)": "4",
+        "selected_real_kind(12, 307)": "8",
+        "selected_real_kind(7, 5)": "8",
+        "selected_real_kind(3, 5)": "4",
+        "selected_real_kind(1, 5)": "3",
+        "selected_real_kind(3)": "2",
+        "selected_real_kind(4)": "4",
+        "selected_real_kind(6)": "4",
+        "selected_real_kind(7)": "8",
+        "selected_real_kind(8)": "8",
+        "selected_real_kind(12)": "8",
+        "selected_real_kind(pq)": "8",
+        "selected_real_kind(r=4)": "2",
+        "selected_real_kind(r=5)": "3",
+        "selected_real_kind(r=37)": "3",
+        "selected_real_kind(r=38)": "8",
+        "selected_real_kind(r=126)": "8",
+        "selected_real_kind(p=12, r=1)": "8",
+        "selected_real_kind(R=37, P=1)": "3",
+        "selected_real_kind(6, r=37)": "4",
+        # A non-constant argument or a RADIX stays for flang to resolve.
+        "selected_real_kind(n)": "k",
+        "selected_real_kind(r=n)": "k",
+        "selected_real_kind(1, n)": "k",
+        "selected_real_kind(radix=3, p=3)": "k",
+    }
+    body = "\n".join(f"  k = {call}\n  dummy = k" for call in want)
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file(f"""
+subroutine main(n)
+  implicit none
+  integer, intent(in) :: n
+  integer, parameter :: pq = 7
+  integer :: k, dummy
+{body}
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    assert [line.strip() for line in got.splitlines() if "dummy =" in line] == [f"dummy = {v}" for v in want.values()]
 
 
-def test_const_eval_keyword_value_matching_keyword_name():
-    """A ``kw=value`` actual argument whose VALUE name equals the keyword name
-    (e.g. ``use_g2g=use_g2g``, where the value is a module PARAMETER and the
-    keyword is the callee's dummy of the same name) must still resolve + fold the
-    value to the parameter's constant.
-
-    Regression: the keyword-skip in ``search_scope_spec`` / ``search_local_alias_spec``
-    compared NAMES (``kw.string == node.string``) instead of node IDENTITY, so the
-    value reference was wrongly treated as "a keyword" and left unresolved -- which
-    later let pruning drop the parameter and leave a dangling reference (the ICON
-    halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
+def test_exploit_locally_constant_not_kept_after_do():
+    """
+    Tests that a do block's writes are unknown after it, since it may run zero times.
+    """
     sources, _ = (
         SourceCodeBuilder()
         .add_file("""
-module m
+subroutine main(n, r, s)
   implicit none
-  logical, parameter :: use_g2g = .false.
-contains
-  subroutine main(x)
-    real, intent(inout) :: x
-    call recv(x, use_g2g=use_g2g)
-  end subroutine main
-  subroutine recv(x, use_g2g)
-    real, intent(inout) :: x
-    logical, intent(in) :: use_g2g
-  end subroutine recv
-end module m
+  integer, intent(in) :: n
+  real, intent(out) :: r, s
+  real :: x
+  integer :: i, j
+
+  x = 1.
+  do i=1, n
+    x = 14.4
+  end do
+  r = x
+
+  x = 1.
+  s = 0.
+  do i=1, n
+    do j=1, n - 1
+      x = 2.
+    end do
+    s = s + x
+  end do
+end subroutine main
 """)
         .check_with_gfortran()
         .get()
     )
     ast = parse_and_improve(sources)
-    ast = optimizations.const_eval_nodes(ast)
+    ast = optimizations.exploit_locally_constant_variables(ast)
+
     got = ast.tofortran()
-    # the value reference folded to the parameter's constant (not left symbolic)
-    assert "use_g2g = .FALSE." in got, got
+    want = """
+SUBROUTINE main(n, r, s)
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: n
+  REAL, INTENT(OUT) :: r, s
+  REAL :: x
+  INTEGER :: i, j
+  x = 1.
+  DO i = 1, n
+    x = 14.4
+  END DO
+  r = x
+  x = 1.
+  s = 0.
+  DO i = 1, n
+    DO j = 1, n - 1
+      x = 2.
+    END DO
+    s = s + x
+  END DO
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def folded_result(body: str, optimize=optimizations.exploit_locally_constant_variables) -> str:
+    sources, _ = SourceCodeBuilder().add_file(body).check_with_gfortran().get()
+    got = optimize(parse_and_improve(sources)).tofortran()
+    (line,) = [line.strip() for line in got.split("\n") if line.strip().startswith("x =")]
+    return line
+
+
+def test_exploit_locally_constant_pointer_keeps_its_variable_subscript():
+    """``ptr`` stays bound to the element chosen at ``=>``, whatever ``i`` becomes."""
+    line = folded_result("""
+subroutine main(n, x)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(out) :: x
+  real, target :: arr(4)
+  real, pointer :: ptr
+  integer :: i
+  arr = 1.0
+  i = n
+  ptr => arr(i)
+  i = i + 1
+  x = ptr
+end subroutine main
+""")
+    assert line == "x = ptr"
+
+
+def test_exploit_locally_constant_not_kept_across_a_call():
+    """The callee may write a bare actual argument."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v
+  v = 1.
+  call f(v)
+  x = v
+contains
+  subroutine f(b)
+    real, intent(inout) :: b
+    b = 7.
+  end subroutine f
+end subroutine main
+""")
+    assert line == "x = v"
+
+
+def test_exploit_locally_constant_component_not_kept_after_whole_struct_write():
+    """Assigning the whole struct replaces every component."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type t
+    real :: a
+  end type t
+  type(t), intent(in) :: u
+  real, intent(out) :: x
+  type(t) :: s
+  s % a = 1.
+  s = u
+  x = s % a
+end subroutine main
+""")
+    assert line == "x = s % a"
+
+
+def test_real4_parameter_element_keeps_its_value_when_widened():
+    """A real(8) array built from single-precision literals holds their exact value, not their shortest decimal."""
+    line = folded_result(
+        """
+subroutine main(x)
+  implicit none
+  real(8), parameter :: t(2) = [0.1, 0.2]
+  real(8), intent(out) :: x
+  x = t(1)
+end subroutine main
+""",
+        optimizations.const_eval_nodes,
+    )
+    assert line == "x = 0.10000000149011612D0"
+
+
+def test_real_value_in_an_integer_parameter_array_stays_a_read():
+    """The array's kind cannot hold the value, so the element is not folded."""
+    line = folded_result(
+        """
+subroutine main(x)
+  implicit none
+  integer, parameter :: t(2) = [1.5, 2.5]
+  integer, intent(out) :: x
+  x = t(1)
+end subroutine main
+""",
+        optimizations.const_eval_nodes,
+    )
+    assert line == "x = t(1)"
 
 
 def test_forwarded_caller_optional_presence_not_folded():
@@ -1215,3 +1450,66 @@ end subroutine main
     assert "PRESENT(opt_start_level)" in got, got
     assert "start_level = 1" in got, got
     assert ".TRUE." not in got, got
+
+
+if __name__ == "__main__":
+    test_constant_resolving_expressions()
+    test_constant_expression_replacement()
+    test_constant_parameter_array_elements()
+    test_constant_resolving_non_expressions()
+    test_config_injection_type()
+    test_config_injection_instance()
+    test_config_injection_array()
+    test_config_injection_allocatable_fixing()
+    test_practically_constant_arguments()
+    test_exploit_locally_constant_variables()
+    test_exploit_locally_constant_struct_members()
+    test_exploit_locally_constant_pointers()
+    test_exploit_locally_constant_selected_real_kind()
+    test_replace_case_selector_consts()
+    test_constant_function_evaluation()
+
+
+def test_const_eval_keyword_value_matching_keyword_name():
+    """A ``kw=value`` actual argument whose VALUE name equals the keyword name
+    (e.g. ``use_g2g=use_g2g``, where the value is a module PARAMETER and the
+    keyword is the callee's dummy of the same name) must still resolve + fold the
+    value to the parameter's constant.
+
+    Regression: the keyword-skip in ``search_scope_spec`` / ``search_local_alias_spec``
+    compared NAMES (``kw.string == node.string``) instead of node IDENTITY, so the
+    value reference was wrongly treated as "a keyword" and left unresolved -- which
+    later let pruning drop the parameter and leave a dangling reference (the ICON
+    halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module m
+  implicit none
+  logical, parameter :: use_g2g = .false.
+contains
+  subroutine main(x)
+    real, intent(inout) :: x
+    call recv(x, use_g2g=use_g2g)
+  end subroutine main
+  subroutine recv(x, use_g2g)
+    real, intent(inout) :: x
+    logical, intent(in) :: use_g2g
+  end subroutine recv
+end module m
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+    got = ast.tofortran()
+    # the value reference folded to the parameter's constant (not left symbolic)
+    assert "use_g2g = .FALSE." in got, got
+    test_forwarded_caller_optional_presence_not_folded()
+    test_exploit_locally_constant_not_kept_after_do()
+    test_exploit_locally_constant_pointer_keeps_its_variable_subscript()
+    test_exploit_locally_constant_not_kept_across_a_call()
+    test_exploit_locally_constant_component_not_kept_after_whole_struct_write()
+    test_real4_parameter_element_keeps_its_value_when_widened()
+    test_real_value_in_an_integer_parameter_array_stays_a_read()

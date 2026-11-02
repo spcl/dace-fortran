@@ -445,8 +445,8 @@ def _find_type_decl_node(node: f03.Entity_Decl) -> Base | None:
 _BITS_PER_BYTE = 8
 
 #: ``SELECTED_REAL_KIND(p, r)``: the first kind whose (max decimal precision, max decimal exponent range) holds both;
-#: anything larger is DOUBLE_KIND.
-_REAL_KIND_LIMITS = ((2, 2, 14), (4, 8, 126))
+#: limits are flang's; anything larger is DOUBLE_KIND.
+_REAL_KIND_LIMITS = ((2, 3, 4), (3, 2, 37), (4, 6, 37))
 
 
 def _eval_selected_int_kind(p: Union[int, np.integer]) -> int:
@@ -620,17 +620,18 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
     :param alias_map: The alias map for resolving symbols.
     :return: The evaluated value as a numpy scalar, or None if the expression is not constant.
     """
-    if isinstance(expr, (f03.Part_Ref, f03.Data_Ref)):
+    if isinstance(expr, f03.Data_Ref):
         return None
-    if isinstance(expr, f03.Name):
-        spec = search_real_local_alias_spec(expr, alias_map)
+    if isinstance(expr, (f03.Name, f03.Part_Ref)):
+        name, subsc = expr.children if isinstance(expr, f03.Part_Ref) else (expr, None)
+        spec = search_real_local_alias_spec(name, alias_map)
         if not spec:
             return None
         decl = alias_map[spec]
         if not isinstance(decl, f03.Entity_Decl):
             return None
         typ = find_type_of_entity(decl, alias_map)
-        if not typ or not typ.const or typ.shape:
+        if not typ or not typ.const or len(typ.shape) != bool(subsc):
             return None
         init = ast_utils.atmost_one(ast_utils.children_of_type(decl, f03.Initialization))
         if init is None:
@@ -638,6 +639,21 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
         _, iexpr = init.children
         if f"{iexpr}" == "NULL()":
             return None
+        if subsc:
+            # Rank-1 element: all values must fold, else a value's position is unknown.
+            shape = walk(decl.children[1] or decl.parent.parent.children[1], f03.Explicit_Shape_Spec)
+            idx = const_eval_basic_type(subsc.children[0], alias_map)
+            if idx is None or len(shape) != 1 or not isinstance(iexpr, f03.Array_Constructor):
+                return None
+            lbound = shape[0].children[0]
+            lbound = const_eval_basic_type(lbound, alias_map) if lbound else 1
+            elements: list[Any] = [const_eval_basic_type(v, alias_map) for v in iexpr.children[1].children]
+            if lbound is None or any(v is None for v in elements) or not lbound <= idx < lbound + len(elements):
+                return None
+            try:
+                return optimizations.val_2_np_lit(elements[int(idx) - int(lbound)], typ.spec)
+            except (NotImplementedError, ValueError):
+                return None
         val = const_eval_basic_type(iexpr, alias_map)
         if val is None:
             # A self-contained program's PARAMETER always has a constant
@@ -664,9 +680,11 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
             ):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = const_eval_basic_type(p, alias_map), const_eval_basic_type(r, alias_map)
-            if p is None or r is None:
+            # P and R are optional and bind by position or keyword; an absent one is 0.
+            x = (a.children if isinstance(a, f03.Actual_Arg_Spec) else (k, a) for k, a in zip("PR", args, strict=False))
+            vals = {str(k).upper(): const_eval_basic_type(v, alias_map) for k, v in x}
+            p, r = vals.get("P", 0), vals.get("R", 0)
+            if p is None or r is None or "RADIX" in vals:
                 return None
             return np.int32(_eval_selected_real_kind(int(p), int(r)))
         elif intr.string == "SELECTED_INT_KIND":
@@ -1348,7 +1366,8 @@ def track_local_consts(
 
     def _integrate_subresults(tp: dict[ConstKey, types.LITERAL_TYPES], tm: set[ConstKey]) -> None:
         assert not (tm & tp.keys())
-        for k in tm:
+        # A write to a whole root covers its components
+        for k in tm | {k for k in plus if isinstance(k, RootComponent) and k.root in tm}:
             if k in plus:
                 del plus[k]
             minus.add(k)
@@ -1535,7 +1554,11 @@ def track_local_consts(
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
-        if lspec and ltyp and ltyp.pointer:
+        # A subscript binds here, so a later use must not re-evaluate a variable one
+        subscripts = walk(walk(rv, f03.Section_Subscript_List), f03.Name)
+        if lspec and any(const_eval_basic_type(sub, alias_map) is None for sub in subscripts):
+            _integrate_subresults({}, {lspec})
+        elif lspec and ltyp and ltyp.pointer:
             plus[lspec] = rv
             if lspec in minus:
                 minus.remove(lspec)
@@ -1617,18 +1640,8 @@ def track_local_consts(
                 op, alias_map, {k: v for k, v in plus.items() if k not in net_tpm}, net_tpm | minus
             )
             _integrate_subresults(tp, tm)
-
-        _, loop_ctl = do_stmt.children
-        _, loop_var, _, _ = loop_ctl.children
-        if loop_var:
-            loop_var, _ = loop_var
-            assert isinstance(loop_var, f03.Name)
-            loop_var_spec = search_real_local_alias_spec(loop_var, alias_map)
-            # An unresolvable loop variable (externalized scope) is not a tracked
-            # local -- there is nothing to mark non-constant, so skip it.
-            if loop_var_spec:
-                loop_var_spec = ident_spec(alias_map[loop_var_spec])
-                _integrate_subresults({}, {loop_var_spec})
+        # A zero-trip loop keeps the old values, so the body's writes and the iterator are unknown here.
+        _integrate_subresults({}, net_tpm)
     elif isinstance(
         node,
         (
@@ -1707,6 +1720,9 @@ def track_local_consts(
         args = args.children if args else tuple()
         for a in args:
             tp, tm = track_local_consts(a, alias_map)
+            loc = search_real_local_alias_spec(a, alias_map) if isinstance(a, f03.Name) else None
+            if loc and not isinstance(node, f03.Intrinsic_Function_Reference):
+                tm.add(ident_spec(alias_map[loc]))  # The callee may write its actual
             _integrate_subresults({}, tm | tp.keys())
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")

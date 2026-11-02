@@ -215,7 +215,7 @@ toml = [
 [[package]]
 name = "dace"
 version = "2.0.0b1"
-source = { git = "https://github.com/spcl/dace.git?rev=707fc8d8ccf97d3dab4d5e942623ea474cf2045c#707fc8d8ccf97d3dab4d5e942623ea474cf2045c" }
+source = { git = "https://github.com/spcl/dace.git?rev=33fbd3a13a012f26948fbda28a0e20620543961f#33fbd3a13a012f26948fbda28a0e20620543961f" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
@@ -293,7 +293,7 @@ testing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=707fc8d8ccf97d3dab4d5e942623ea474cf2045c" },
+    { name = "dace", git = "https://github.com/spcl/dace.git?rev=33fbd3a13a012f26948fbda28a0e20620543961f" },
     { name = "fparser", specifier = ">0.2" },
     { name = "nanobind" },
     { name = "networkx" },
