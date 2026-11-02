@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tests._helpers import xfail
 from tests._util import build_sdfg
 
 
@@ -78,6 +79,38 @@ end subroutine
     out = np.zeros(2, dtype=np.int64)
     sdfg(x=np.int64(10), out=out)
     assert out.tolist() == [80, 5]
+
+
+def test_ishft_runs_in_the_kind_of_a_widened_operand(tmp_path: Path):
+    """A transparent ``int(a, 8)`` must not leave the shift in 32 bits."""
+    src = """
+subroutine probe_ishft_widen(a, out)
+  integer(4), intent(in)  :: a
+  integer(8), intent(out) :: out(2)
+  out(1) = ishft(int(a, 8), 32)
+  out(2) = ishft(int(a, 8), -1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_ishft_widen").build()
+    out = np.zeros(2, dtype=np.int64)
+    sdfg(a=np.int32(-1), out=out)
+    assert out.tolist() == [-(1 << 32), (1 << 63) - 1]
+
+
+@xfail("no int16 cast in symbolic expressions yet, so the shift runs in the promoted int")
+def test_ishft_runs_in_a_narrow_kind(tmp_path: Path):
+    """C++ promotes integer(2) arithmetic to int; the logical shift must not see the extra bits."""
+    src = """
+subroutine probe_ishft_narrow(a, out)
+  integer(2), intent(in)  :: a
+  integer(2), intent(out) :: out(1)
+  out(1) = ishft(a + 1_2, -1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_ishft_narrow").build()
+    out = np.zeros(1, dtype=np.int16)
+    sdfg(a=np.int16(-2), out=out)
+    assert out.tolist() == [32767]
 
 
 def test_bit_query_and_extract(tmp_path: Path):
