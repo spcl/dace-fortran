@@ -225,9 +225,9 @@ def emit_tasklet(
     r_scl |= _len1_views
     target = assign_node.target
 
-    # Index arrays (e.g. edge_idx) move onto the interstate edge as symbols, not connectors.
-    indirect_arrays = {indirect_host(expr) for expr in indirect_syms}
-    r_arr -= indirect_arrays
+    # Index arrays (e.g. edge_idx) move onto the interstate edge as symbols, not connectors, unless this
+    # statement also reads the array as a value.
+    r_arr -= {indirect_host(expr) for expr in indirect_syms} - {ac.array_name for ac in accesses if ac.is_read}
 
     # ONE connector + ONE memlet per textual occurrence (never deduplicated): deduplication misaligns the
     # occurrence-to-access mapping when the accesses list and the expression disagree on count (e.g. MIN/MAX
@@ -494,13 +494,13 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
 
     # Self-update (``i = i + 1``): read and write need DIFFERENT access nodes
     # so the state stays a DAG (no cycle on one node).  Same applies when an
-    # EARLIER tasklet in this state already read ``target`` via the cached node.
+    # EARLIER tasklet in this state already read or wrote ``target`` via the cached node.
     # Velocity-tendencies triggers this across two lines:
     # ``max_vcfl_dyn = MAX(p_diag%max_vcfl_dyn, ...)`` then
     # ``p_diag%max_vcfl_dyn = max_vcfl_dyn`` (2nd write's target was 1st read).
     cache = builder.access_caches.get(state)
-    cached_has_readers = cache is not None and target in cache and state.out_degree(cache[target]) > 0
-    if (target in reads) or cached_has_readers:
+    cached_is_used = cache is not None and target in cache and state.degree(cache[target]) > 0
+    if (target in reads) or cached_is_used:
         a = state.add_access(target)
         if cache is not None:
             cache[target] = a
