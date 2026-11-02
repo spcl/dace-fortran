@@ -30,9 +30,11 @@ import numpy as np
 from dace import SDFG, Memlet, dtypes, subsets
 from dace.sdfg import nodes
 from dace.sdfg.graph import MultiConnectorEdge
+from dace.sdfg.propagation import propagate_memlets_sdfg
 from dace.sdfg.state import LoopRegion, SDFGState
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
+from dace.transformation.dataflow.prune_connectors import PruneConnectors
 from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.move_if_into_map import MoveIfIntoMap
@@ -319,9 +321,14 @@ def optimize(
     # that MapCollapse below turns into one multi-dimensional map (VT: nproma x nlev kernels).
     sdfg.apply_transformations_repeated(MoveIfIntoMap, validate=validate)
     sdfg.apply_transformations_repeated(InlineSDFG, validate=validate)
+    # Inlining leaves the map memlets covering whole arrays; fusion needs them narrowed to what each map touches.
+    propagate_memlets_sdfg(sdfg)
     # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
     # vertical -- horizontal fuses maps that only share an input, no producer/consumer edge.
     FullMapFusion(validate=validate).apply_pass(sdfg, {})
+    # A fused producer leaves its consumer's input connector unused, which blocks inlining the body for MapCollapse.
+    sdfg.apply_transformations_repeated(PruneConnectors, validate=validate)
+    sdfg.apply_transformations_repeated(InlineSDFG, validate=validate)
     sdfg.apply_transformations_repeated(MapCollapse, validate=validate)
     # A freshly-collapsed nest can expose a fusion the pass above missed.
     FullMapFusion(validate=validate).apply_pass(sdfg, {})
