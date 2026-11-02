@@ -392,8 +392,9 @@ def optimize(
     # A freshly-collapsed nest can expose a fusion the pass above missed.
     FullMapFusion(validate=validate).apply_pass(sdfg, {})
 
-    MakeTransientsPersistent().apply_pass(sdfg, {})
+    # In this order: the bound thread count is assigned in the body, which ``__dace_init`` cannot read.
     BindOmpThreadCount().apply_pass(sdfg, {})
+    MakeTransientsPersistent().apply_pass(sdfg, {})
 
     if validate:
         sdfg.validate()

@@ -6,7 +6,9 @@ import numpy as np
 from dace.sdfg import dealias
 from dace.sdfg.state import LoopRegion
 
+from dace_fortran.omp_threads import OMP_NUM_THREADS_SYMBOL
 from dace_fortran.persistent_transients import MakeTransientsPersistent
+from dace_fortran.pipelines import optimize
 
 N = dace.symbol("N")
 
@@ -135,6 +137,22 @@ def test_stronger_lifetimes_are_not_demoted():
         assert sdfg.arrays["buf"].lifetime == lifetime
 
 
+def test_thread_count_sized_buffer_stays_out_of_init():
+    """``optimize`` binds the thread count in the body, where ``__dace_init`` cannot read it."""
+    sdfg = dace.SDFG("thread_buffer")
+    sdfg.add_array("buf", [OMP_NUM_THREADS_SYMBOL], dace.float64, transient=True)
+    sdfg.add_array("out", [1], dace.float64)
+    state = sdfg.add_state()
+    write = state.add_tasklet("write", {}, {"o"}, "o = 1.0")
+    read = state.add_tasklet("read", {"i"}, {"o"}, "o = i")
+    buf = state.add_access("buf")
+    state.add_edge(write, "o", buf, None, dace.Memlet("buf[0]"))
+    state.add_edge(buf, None, read, "i", dace.Memlet("buf[0]"))
+    state.add_edge(read, "o", state.add_access("out"), None, dace.Memlet("out[0]"))
+    optimize(sdfg)
+    assert sdfg.arrays["buf"].lifetime != dace.AllocationLifetime.Persistent
+
+
 if __name__ == "__main__":
     test_free_symbol_sized_transient_is_promoted()
     test_the_auto_optimize_helper_delegates()
@@ -143,3 +161,4 @@ if __name__ == "__main__":
     test_reassigned_size_symbol_is_not_promoted()
     test_loop_variable_sized_nested_transient_is_not_promoted()
     test_stronger_lifetimes_are_not_demoted()
+    test_thread_count_sized_buffer_stays_out_of_init()
