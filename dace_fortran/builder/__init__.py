@@ -1229,13 +1229,16 @@ class SDFGBuilder:
         # An extent the kernel's own ALLOCATE assigns starts at 0, Fortran's unallocated array: a path that skips the
         # ALLOCATE would otherwise read it unset. The binding hands such an array in unallocated (no copy-in), so 0 is
         # its host extent too.
-        # Assigned is enough: a path that skips every assignment is exactly the read this initializes.
         assigned = {str(k) for e in sdfg.all_interstate_edges() for k in e.data.assignments}
+        # Not ``arglist()``: it raises on a free symbol nobody declared, which validation must reject by name below.
+        incoming = {str(s) for s in sdfg.free_symbols} | {k for k, v in sdfg.arrays.items() if not v.transient}
         allocated_extents = sorted(
             f"{name}_d{dim}"
             for name, desc in sdfg.arrays.items()
             for dim, extent in enumerate(desc.shape)
-            if str(extent) == f"{name}_d{dim}" and str(extent) in assigned
+            if str(extent) == f"{name}_d{dim}"
+            and str(extent) in assigned
+            and (desc.transient or str(extent) not in incoming)  # a used array's shape symbols always count as free
         )
         if allocated_extents:
             sdfg.add_state_before(

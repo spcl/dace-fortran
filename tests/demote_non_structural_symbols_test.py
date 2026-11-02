@@ -1,13 +1,16 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
 """Only iteration domains and data accesses keep their symbols; every other interstate symbol becomes a scalar."""
 
+import inspect
+
 import dace
 import numpy as np
 from dace.sdfg.state import ConditionalBlock, ControlFlowRegion, LoopRegion
 from dace.transformation.dataflow import AugAssignToWCR
 from dace.transformation.interstate import LoopToMap
+from dace.transformation.passes import scalar_to_symbol
 
-from dace_fortran.demote_symbols import DemoteNonStructuralSymbols
+from dace_fortran.demote_symbols import PROMOTED_INIT_STATE, DemoteNonStructuralSymbols
 
 
 def counting_sdfg() -> dace.SDFG:
@@ -131,7 +134,40 @@ def test_an_index_read_inside_a_branch_condition_stays_a_symbol():
     assert R[0] == 0.9
 
 
+def entry_writes(sdfg: dace.SDFG, name: str) -> int:
+    """Writes of ``name`` in the states outside the loop."""
+    states = [state for state in sdfg.nodes() if isinstance(state, dace.SDFGState)]
+    return sum(state.in_degree(n) for state in states for n in state.data_nodes() if n.data == name)
+
+
+def test_a_promoted_scalars_entry_value_does_not_become_a_write():
+    """The value promotion invents is undefined in the program; as a write it would pin the scalar outside the loop."""
+    sdfg = counting_sdfg()
+    sdfg.start_block.label = PROMOTED_INIT_STATE
+
+    DemoteNonStructuralSymbols().apply_pass(sdfg, {})
+
+    assert entry_writes(sdfg, "k") == 0
+
+
+def test_a_programs_own_initial_value_stays_a_write():
+    """``k = 0`` the program wrote is the counter's start value."""
+    sdfg = counting_sdfg()
+
+    DemoteNonStructuralSymbols().apply_pass(sdfg, {})
+
+    assert entry_writes(sdfg, "k") >= 1
+
+
+def test_the_promotion_state_is_the_one_dace_creates():
+    """The label is the only mark promotion leaves; a rename in DaCe must fail here, not silently lose a map."""
+    assert f'"{PROMOTED_INIT_STATE}"' in inspect.getsource(scalar_to_symbol)
+
+
 if __name__ == "__main__":
+    test_a_promoted_scalars_entry_value_does_not_become_a_write()
+    test_a_programs_own_initial_value_stays_a_write()
+    test_the_promotion_state_is_the_one_dace_creates()
     test_a_counter_becomes_a_scalar_and_its_loop_maps()
     test_a_demoted_value_keeps_its_arithmetic_as_written()
     test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression()

@@ -391,6 +391,28 @@ END SUBROUTINE intrinsic_math_test_exponent_function
     assert res[3] == 9
 
 
+def test_fortran_frontend_exponent_double_precision(tmp_path):
+    """A double must not bind to C's ``ilogb``, which is one below ``EXPONENT``."""
+    src = """
+SUBROUTINE intrinsic_math_test_exponent_double_function(d, res)
+double precision, dimension(3) :: d
+integer, dimension(3) :: res
+
+res(1) = EXPONENT(d(1))
+res(2) = EXPONENT(d(2))
+res(3) = EXPONENT(d(3))
+
+END SUBROUTINE intrinsic_math_test_exponent_double_function
+"""
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_math_test_exponent_double_function").build()
+
+    d = np.array([0.0, 8.0, 0.75], order="F", dtype=np.float64)
+    res = np.full([3], 42, order="F", dtype=np.int32)
+    sdfg(d=d, res=res)
+
+    assert res.tolist() == [0, 4, 0]
+
+
 def test_fortran_frontend_int(tmp_path):
     src = """
 SUBROUTINE intrinsic_math_test_int_function(d, d2, res, res2, res3, res4)

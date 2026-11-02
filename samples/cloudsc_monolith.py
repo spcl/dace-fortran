@@ -19,21 +19,22 @@ import dace
 import numpy as np
 
 import dace_fortran
-from dace_fortran.pipelines import num_loops, num_maps, optimize
+from dace_fortran.pipelines import assert_parallelized, num_loops, num_maps, optimize
 from tests._util import BITEXACT_CPU_ARGS
 from tests.cloudsc.full._harness import f2py_reference, run_against_reference
 from tests.cloudsc.full._registries import program_outputs
 
 SOURCE = Path(__file__).resolve().parents[1] / "tests" / "cloudsc" / "full" / "cloudsc.F90"
-MAPS = 291
-LOOPS = 8
+MAX_MAPS = 264
+SEQUENTIAL_LOOPS = 8
 
 
 def run(work_dir: Path) -> None:
     sdfg = dace_fortran.build_sdfg(SOURCE.read_text(), entry="cloudscouter", name="cloudsc_monolith")
     unoptimized = copy.deepcopy(sdfg)
+    loops_before = num_loops(sdfg)
     optimize(sdfg, symbols={"nclv": 5})
-    assert (num_maps(sdfg), num_loops(sdfg)) == (MAPS, LOOPS), f"{num_maps(sdfg)} maps, {num_loops(sdfg)} loops"
+    assert_parallelized(sdfg, loops_before=loops_before, max_maps=MAX_MAPS, sequential=SEQUENTIAL_LOOPS)
 
     # DaCe's default flags let gcc contract floating-point arithmetic differently in the unoptimized and the optimized
     # program; comparing them bit for bit needs value-preserving flags (-O3, no FMA contraction).
@@ -41,7 +42,7 @@ def run(work_dir: Path) -> None:
     got, want = run_against_reference(sdfg, f2py_reference(work_dir), unoptimized=unoptimized)
     for name in program_outputs:
         np.testing.assert_allclose(got[name.lower()], want[name.lower()], rtol=1e-11, atol=1e-11, err_msg=name)
-    print(f"cloudsc_monolith: {MAPS} maps, {LOOPS} sequential loops, matches gfortran")
+    print(f"cloudsc_monolith: {num_maps(sdfg)} maps, {num_loops(sdfg)} sequential loops, matches gfortran")
 
 
 if __name__ == "__main__":

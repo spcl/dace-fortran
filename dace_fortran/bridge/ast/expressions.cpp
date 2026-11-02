@@ -1312,13 +1312,13 @@ std::string buildExpr(mlir::Value val, int d) {
       }
       // Fortran EXPONENT(x)  --  returns ``e`` such that
       // ``x = mantissa * 2^e`` with ``0.5 <= |mantissa| < 1``.
-      // ``dace::math::ilogb`` provides this via ``std::frexp``
+      // ``ftn_exponent`` in DaCe's math.h provides this via ``std::frexp``
       // (returns ``int`` directly so callers can use the result
       // in a tasklet-integer context).
       if ((cname == "_FortranAExponent4_4" || cname == "_FortranAExponent8_4" || cname == "_FortranAExponent4_8" ||
            cname == "_FortranAExponent8_8" || cname == "_FortranAExponent4" || cname == "_FortranAExponent8") &&
           call.getNumOperands() >= 1) {
-        return "ilogb(" + buildExpr(call.getOperand(0), d + 1) + ")";
+        return "ftn_exponent(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
       // Fortran MODULO: floored remainder (sign of the divisor), the SDFG's ``FtnModulo``.
       if ((cname == "_FortranAModuloReal4" || cname == "_FortranAModuloReal8" || cname == "_FortranAModuloInteger4" ||

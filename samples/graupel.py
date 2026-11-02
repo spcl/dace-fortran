@@ -20,7 +20,7 @@ import numpy as np
 from dace.sdfg import nodes
 
 import dace_fortran
-from dace_fortran.pipelines import num_loops, num_maps, optimize
+from dace_fortran.pipelines import assert_parallelized, num_loops, num_maps, optimize
 from tests._util import BITEXACT_CPU_ARGS
 from tests.icon.graupel._graupel_harness import (
     DEP_SOURCES,
@@ -40,8 +40,8 @@ from tests.icon.graupel._graupel_harness import (
 )
 
 LEVELS = 20
-MAPS = 26
-LOOPS = 1
+MAX_MAPS = 14
+SEQUENTIAL_LOOPS = 1  # sedimentation
 
 
 def run(work_dir: Path) -> None:
@@ -52,8 +52,9 @@ def run(work_dir: Path) -> None:
     full = Config(ivstart=1, ivend=len(SCENARIOS), kstart=1)
     verify = physical_columns(LEVELS)
     zero_outputs(verify)
+    loops_before = num_loops(sdfg)
     optimize(sdfg, verify_inputs=sdfg_args(verify, full))
-    assert (num_maps(sdfg), num_loops(sdfg)) == (MAPS, LOOPS), f"{num_maps(sdfg)} maps, {num_loops(sdfg)} loops"
+    assert_parallelized(sdfg, loops_before=loops_before, max_maps=MAX_MAPS, sequential=SEQUENTIAL_LOOPS)
     assert any(
         isinstance(n, nodes.MapEntry) and str(n.map.range.ranges[0][0]) == "ivstart"
         for n, _ in sdfg.all_nodes_recursive()
@@ -72,7 +73,7 @@ def run(work_dir: Path) -> None:
         # gfortran -O0 and the C++ build differ by at most 1e-15 relative, except the 1e-19-sized decay tails
         assert_match(want, got, rtol=1e-10, atol=1e-14)
         assert np.array_equal(got["t"][:, : cfg.kstart - 1], inputs["t"][:, : cfg.kstart - 1])
-    print(f"graupel: {MAPS} maps, {LOOPS} sequential loop, matches gfortran")
+    print(f"graupel: {num_maps(sdfg)} maps, {num_loops(sdfg)} sequential loops, matches gfortran")
 
 
 if __name__ == "__main__":

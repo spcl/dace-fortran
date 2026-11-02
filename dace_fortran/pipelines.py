@@ -16,7 +16,7 @@ short-loop unroll sees literal trip counts and the shape and branch folding down
 literals to work on. ``len1_to_scalar`` runs with ``preserve_abi``, so the rest of the pipeline
 sees a plain scalar instead of a one-element buffer while the SDFG signature keeps its array form. The builder already runs it on frontend output; repeating it here
 covers an SDFG that reached ``optimize`` some other way, and the pass is idempotent.
-``mapfusion`` is ``FuseMaps`` (vertical +
+``mapfusion`` is ``FullMapFusion`` (vertical +
 horizontal fusion run together to a fixed point), applied a second time after ``map-collapse``
 since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-omp-thread-count``
 defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
@@ -30,14 +30,18 @@ import numpy as np
 from dace import SDFG, Memlet, dtypes, subsets
 from dace.sdfg import nodes
 from dace.sdfg.graph import MultiConnectorEdge
+from dace.sdfg.propagation import propagate_memlets_sdfg
 from dace.sdfg.state import LoopRegion, SDFGState
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
+from dace.transformation.dataflow.prune_connectors import PruneConnectors
 from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
 from dace.transformation.interstate.loop_to_map import LoopToMap
+from dace.transformation.interstate.move_if_into_map import MoveIfIntoMap
+from dace.transformation.interstate.sdfg_nesting import InlineSDFG
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
-from dace.transformation.passes.fuse_maps import FuseMaps
+from dace.transformation.passes.full_map_fusion import FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -313,12 +317,21 @@ def optimize(
     order_free_reductions(sdfg)
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
-    # FuseMaps: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
+    # LoopToMap nests every loop body; pushing guards into the inner maps and inlining the bodies leaves map nests
+    # that MapCollapse below turns into one multi-dimensional map (VT: nproma x nlev kernels).
+    sdfg.apply_transformations_repeated(MoveIfIntoMap, validate=validate)
+    sdfg.apply_transformations_repeated(InlineSDFG, validate=validate)
+    # Inlining leaves the map memlets covering whole arrays; fusion needs them narrowed to what each map touches.
+    propagate_memlets_sdfg(sdfg)
+    # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
     # vertical -- horizontal fuses maps that only share an input, no producer/consumer edge.
-    FuseMaps(validate=validate).apply_pass(sdfg, {})
+    FullMapFusion(validate=validate).apply_pass(sdfg, {})
+    # A fused producer leaves its consumer's input connector unused, which blocks inlining the body for MapCollapse.
+    sdfg.apply_transformations_repeated(PruneConnectors, validate=validate)
+    sdfg.apply_transformations_repeated(InlineSDFG, validate=validate)
     sdfg.apply_transformations_repeated(MapCollapse, validate=validate)
     # A freshly-collapsed nest can expose a fusion the pass above missed.
-    FuseMaps(validate=validate).apply_pass(sdfg, {})
+    FullMapFusion(validate=validate).apply_pass(sdfg, {})
 
     MakeTransientsPersistent().apply_pass(sdfg, {})
     BindOmpThreadCount().apply_pass(sdfg, {})
@@ -340,3 +353,28 @@ def num_maps(sdfg: SDFG) -> int:
 def num_loops(sdfg: SDFG) -> int:
     """Loops anywhere in ``sdfg``, nested SDFGs included -- what the pipeline left sequential."""
     return sum(1 for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion))
+
+
+def parallelization_rate(sdfg: SDFG, loops_before: int, sequential: int = 0) -> float:
+    """The share of the loops that can run in parallel which do, in [0, 1].
+
+    :param sdfg: the optimized SDFG.
+    :param loops_before: :func:`num_loops` of the SDFG before the pipeline.
+    :param sequential: loops that must stay sequential, such as one carrying a flux from level to level.
+    """
+    parallelizable = loops_before - sequential
+    return 1.0 if parallelizable <= 0 else (loops_before - num_loops(sdfg)) / parallelizable
+
+
+def assert_parallelized(sdfg: SDFG, *, loops_before: int, max_maps: int, sequential: int = 0) -> None:
+    """Fail unless every parallelizable loop became a map and at most ``max_maps`` maps remain.
+
+    The rate and a bound, not exact counts: a better pipeline fuses maps, and that must not read as a regression.
+    """
+    rate = parallelization_rate(sdfg, loops_before, sequential)
+    maps, loops = num_maps(sdfg), num_loops(sdfg)
+    if rate < 1.0 or maps > max_maps:
+        raise AssertionError(
+            f"{rate:.1%} parallelized ({loops} of {loops_before} loops left, {sequential} expected), "
+            f"{maps} maps with a bound of {max_maps}"
+        )
