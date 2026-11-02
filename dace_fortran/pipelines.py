@@ -24,7 +24,7 @@ defines the team-size symbol of thread-strided persistent maps at SDFG entry, wh
 
 import ast
 import copy
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from typing import Any, NamedTuple, Union, cast
 
 import numpy as np
@@ -353,6 +353,7 @@ def optimize(
     *,
     symbols: dict[str, Const] | None = None,
     scalars: dict[str, Const] | None = None,
+    fixed_symbols: Collection[str] = (),
     unroll_limit: int = 8,
     validate: bool = True,
     verify_inputs: dict[str, Any] | None = None,
@@ -362,6 +363,8 @@ def optimize(
     :param sdfg: the SDFG to optimize (mutated in place).
     :param symbols: free symbols to bake to constants (batched, one recursive walk).
     :param scalars: scalar data containers to bake to constants (batched).
+    :param fixed_symbols: free symbols with one value for every call of the compiled SDFG, so transients sized by
+                          them may be allocated once in ``__dace_init``. Any other free symbol keeps a per-call size.
     :param unroll_limit: fully unroll constant-trip loops at or below this many iterations.
     :param validate: validate the SDFG after each structural stage. STRUCTURAL only -- it says
                      nothing about whether the transformations preserved values.
@@ -417,7 +420,7 @@ def optimize(
 
     # In this order: the bound thread count is assigned in the body, which ``__dace_init`` cannot read.
     BindOmpThreadCount().apply_pass(sdfg, {})
-    MakeTransientsPersistent().apply_pass(sdfg, {})
+    MakeTransientsPersistent(fixed_symbols).apply_pass(sdfg, {})
 
     if validate:
         sdfg.validate()

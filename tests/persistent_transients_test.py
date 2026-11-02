@@ -49,11 +49,11 @@ def allocates_in_init(sdfg: dace.SDFG, name: str) -> bool:
 
 
 def test_free_symbol_sized_transient_is_promoted():
-    """The shape reads only N, an argument of the SDFG, so one allocation serves the whole run."""
+    """The caller fixes N, an argument of the SDFG, so one allocation serves the whole run."""
     sdfg = loop_with_transient("persist_free_symbol", [N])
     assert not allocates_in_init(sdfg, "buf"), "the malloc must start out inside the loop"
 
-    assert MakeTransientsPersistent().apply_pass(sdfg, {})[sdfg.cfg_id] == {"buf"}
+    assert MakeTransientsPersistent({"N"}).apply_pass(sdfg, {})[sdfg.cfg_id] == {"buf"}
     assert sdfg.arrays["buf"].lifetime == dace.AllocationLifetime.Persistent
     assert allocates_in_init(sdfg, "buf")
 
@@ -71,6 +71,19 @@ def test_the_auto_optimize_helper_delegates():
     sdfg = loop_with_transient("persist_helper", [N])
     assert make_transients_persistent(sdfg, dace.DeviceType.CPU)[sdfg.cfg_id] == {"buf"}
     assert sdfg.arrays["buf"].lifetime == dace.AllocationLifetime.Persistent
+
+
+def test_free_symbol_nobody_fixed_keeps_a_per_call_size():
+    """``__dace_init`` runs once: sized from the first call, a later larger N would overrun the buffer."""
+    sdfg = loop_with_transient("persist_per_call", [N])
+    assert MakeTransientsPersistent().apply_pass(sdfg, {}) is None
+    assert sdfg.arrays["buf"].lifetime != dace.AllocationLifetime.Persistent
+    compiled = sdfg.compile()
+    for size in (8, 4096):
+        a = np.arange(float(size))
+        out = np.zeros(size)
+        compiled(a=a, out=out, N=size)
+        assert np.allclose(out, a * 2.0)
 
 
 def test_a_reassigned_size_symbol_blocks_promotion():
@@ -156,6 +169,7 @@ def test_thread_count_sized_buffer_stays_out_of_init():
 if __name__ == "__main__":
     test_free_symbol_sized_transient_is_promoted()
     test_the_auto_optimize_helper_delegates()
+    test_free_symbol_nobody_fixed_keeps_a_per_call_size()
     test_a_reassigned_size_symbol_blocks_promotion()
     test_constant_sized_transient_is_promoted()
     test_reassigned_size_symbol_is_not_promoted()

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Allocate transients whose size is fixed for the whole run once, in ``__dace_init``."""
 
+from collections.abc import Collection
 from typing import Any
 
 from dace import SDFG, dtypes, symbolic
@@ -17,8 +18,12 @@ KEEP_LIFETIMES = (
 )
 
 
-def run_constant_symbols(sdfg: SDFG) -> set[str]:
-    """Root free symbols and constants that nothing in the tree reassigns."""
+def run_constant_symbols(sdfg: SDFG, fixed_symbols: Collection[str] = ()) -> set[str]:
+    """Constants and ``fixed_symbols`` that nothing in the tree reassigns.
+
+    A free symbol is a per-call argument, but ``__dace_init`` runs once per compiled object: only the caller can
+    promise it never changes.
+    """
     reassigned: set[str] = set()
     for nested in sdfg.all_sdfgs_recursive():
         for edge in nested.all_interstate_edges():
@@ -26,7 +31,7 @@ def run_constant_symbols(sdfg: SDFG) -> set[str]:
         for cfg in nested.all_control_flow_regions(recursive=True):
             if isinstance(cfg, LoopRegion) and cfg.loop_variable:
                 reassigned.add(cfg.loop_variable)
-    return ({str(s) for s in sdfg.free_symbols} | sdfg.constants_prop.keys()) - reassigned
+    return (set(fixed_symbols) | sdfg.constants_prop.keys()) - reassigned
 
 
 def root_names(nsdfg: SDFG, names: set[str]) -> set[str] | None:
@@ -44,7 +49,14 @@ def root_names(nsdfg: SDFG, names: set[str]) -> set[str] | None:
 
 class MakeTransientsPersistent(ppl.Pass):
     """Make every transient array allocated outside all scopes, whose size reads only run-constant symbols,
-    Persistent."""
+    Persistent.
+
+    :param fixed_symbols: free symbols the caller guarantees for every call of the compiled SDFG (ICON's ``nproma``).
+    """
+
+    def __init__(self, fixed_symbols: Collection[str] = ()):
+        super().__init__()
+        self.fixed_symbols = fixed_symbols
 
     def modifies(self) -> ppl.Modifies:
         return ppl.Modifies.Descriptors
@@ -54,7 +66,7 @@ class MakeTransientsPersistent(ppl.Pass):
 
     def apply_pass(self, sdfg: SDFG, pipeline_results: dict[str, Any]) -> dict[int, set[str]] | None:
         """:returns: cfg_id -> promoted names, or None if nothing was promoted."""
-        allowed = run_constant_symbols(sdfg)
+        allowed = run_constant_symbols(sdfg, self.fixed_symbols)
         promoted: dict[int, set[str]] = {}
         for nsdfg in sdfg.all_sdfgs_recursive():
             ok: set[str] = set()
