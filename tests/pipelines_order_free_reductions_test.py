@@ -38,6 +38,45 @@ END SUBROUTINE clip
 """
 
 
+_RESET_EACH_ITERATION = """
+SUBROUTINE nest(n, a, peak)
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(IN) :: a(n, n, n)
+  REAL(8), INTENT(OUT) :: peak(n)
+  REAL(8) :: top
+  INTEGER :: i, j, k, hits
+  DO k = 1, n
+    top = 0.0D0
+    DO j = 1, n
+      hits = 0
+      DO i = 1, n
+        IF (a(i, j, k) > 0.5D0) hits = hits + 1
+      END DO
+      IF (hits == 0) CYCLE
+      DO i = 1, n
+        top = MAX(top, a(i, j, k))
+      END DO
+    END DO
+    peak(k) = top
+  END DO
+END SUBROUTINE nest
+"""
+
+
+def test_value_reset_in_outer_loop_is_a_reduction_of_the_inner_loops(tmp_path):
+    """``top`` and ``hits`` restart inside ``k`` and ``j``: reading them there does not observe a partial reduction."""
+    sdfg = build_sdfg(_RESET_EACH_ITERATION, tmp_path / "sdfg", name="nest", entry="nest").build()
+    n = 6
+    a = np.random.default_rng(0).random((n, n, n)).copy(order="F")
+    reference = np.zeros(n)
+    sdfg(n=n, a=a, peak=reference)
+    optimize(sdfg)
+    assert not [b for b in sdfg.all_control_flow_regions(recursive=True) if isinstance(b, LoopRegion)]
+    peak = np.zeros(n)
+    sdfg(n=n, a=a, peak=peak)
+    assert np.array_equal(peak, reference)
+
+
 def test_max_count_and_flag_updates_map(tmp_path):
     """The loop maps, and the optimized SDFG matches the unoptimized one bit for bit."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="clip", entry="clip").build()
