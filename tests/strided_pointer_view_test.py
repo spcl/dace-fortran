@@ -58,6 +58,26 @@ end subroutine
     np.testing.assert_array_equal(a, [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
 
 
+def test_rank_one_strided_section_dummy_is_read_at_the_stride(tmp_path):
+    src = """
+subroutine reader(a, s)
+  real(8), intent(in) :: a(9)
+  real(8), intent(out) :: s(1)
+  call inner(a(1:9:2), s)
+contains
+  subroutine inner(x, s)
+    real(8), intent(in) :: x(:)
+    real(8), intent(out) :: s(1)
+    s(1) = sum(x)
+  end subroutine
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="reader", entry="reader").build()
+    s = np.zeros(1)
+    sdfg(a=np.arange(1.0, 10.0), s=s)
+    assert s[0] == 25.0
+
+
 if __name__ == "__main__":
     import pytest
 

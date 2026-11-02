@@ -63,7 +63,9 @@ std::string scfSynthName(mlir::Value v);
 // Renders an scf.index_switch selector value to its DaCe expression (while-carried synth, or the real host expression).
 std::string scfSwitchValueName(mlir::Value v);
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
+/// (result, yielded value) pairs of an enclosing scf.if to assign just before the keyed op of the walked arm.
+using YieldSnapshots = std::map<mlir::Operation*, std::vector<std::pair<mlir::Value, mlir::Value>>>;
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshots& snapshots = {});
 
 std::string yieldedExpr(mlir::Value v);
 

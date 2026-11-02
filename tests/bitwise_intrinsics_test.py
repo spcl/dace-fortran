@@ -5,6 +5,7 @@ not the sign-extending ``arith.shrsi`` -- the key gotcha the tests below pin."""
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from tests._helpers import xfail
 from tests._util import build_sdfg
@@ -111,6 +112,36 @@ end subroutine
     out = np.zeros(1, dtype=np.int16)
     sdfg(a=np.int16(-2), out=out)
     assert out.tolist() == [32767]
+
+
+@xfail("no int16 cast in symbolic expressions yet, so the mask is built in the promoted int")
+def test_ibits_runs_in_a_narrow_kind(tmp_path: Path):
+    """``ibits`` with a runtime length builds its mask with a logical shift, which integer(2) cannot express yet."""
+    src = """
+subroutine probe_ibits_narrow(i, n, out)
+  integer(2), intent(in)  :: i
+  integer, intent(in)  :: n
+  integer(2), intent(out) :: out(1)
+  out(1) = ibits(i, 0, n)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_ibits_narrow").build()
+    out = np.zeros(1, dtype=np.int16)
+    sdfg(i=np.int16(-1), n=np.int32(4), out=out)
+    assert out.tolist() == [15]
+
+
+def test_narrow_logical_shift_is_refused_loudly(tmp_path: Path):
+    src = """
+subroutine probe_refused_narrow(i, n, out)
+  integer(2), intent(in)  :: i
+  integer, intent(in)  :: n
+  integer(2), intent(out) :: out(1)
+  out(1) = ibits(i, 0, n)
+end subroutine
+"""
+    with pytest.raises(RuntimeError, match="integer\\(1\\) or integer\\(2\\)"):
+        build_sdfg(src, tmp_path, name="probe_refused_narrow").build()
 
 
 def test_bit_query_and_extract(tmp_path: Path):

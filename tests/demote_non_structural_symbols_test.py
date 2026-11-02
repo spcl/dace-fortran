@@ -10,6 +10,7 @@ from dace.transformation.dataflow import AugAssignToWCR
 from dace.transformation.interstate import LoopToMap
 from dace.transformation.passes import scalar_to_symbol
 
+from dace_fortran.dace_types import connectors
 from dace_fortran.demote_symbols import PROMOTED_INIT_STATE, DemoteNonStructuralSymbols
 from dace_fortran.pipelines import num_loops, optimize
 from tests._util import build_sdfg
@@ -93,7 +94,7 @@ def test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression():
         sdfg.add_array(name, [1], dace.float64)
     start = sdfg.add_state("start", is_start_block=True)
     use = sdfg.add_state_after(start, "use", assignments={"z": "S[0]"})
-    tasklet = use.add_tasklet("combine", {"x", "y"}, {"o"}, "o = x - z + y")
+    tasklet = use.add_tasklet("combine", connectors(["x", "y"]), {"o"}, "o = x - z + y")
     use.add_edge(use.add_read("X"), None, tasklet, "x", dace.Memlet("X[0]"))
     use.add_edge(use.add_read("Y"), None, tasklet, "y", dace.Memlet("Y[0]"))
     use.add_edge(tasklet, "o", use.add_write("R"), None, dace.Memlet("R[0]"))

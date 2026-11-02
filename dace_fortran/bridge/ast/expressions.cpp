@@ -1563,6 +1563,17 @@ std::string buildExpr(mlir::Value val, int d) {
     // width the unsigned shift runs in. Only int32 and int64 are casts in every expression context, interstate
     // included.
     auto resT = def->getResult(0).getType();
+    // A narrow logical right shift needs an int8/int16 cast symbolic expressions lack. BTEST masks bit 0 of the result,
+    // which the promoted int gets right.
+    auto masksBitZero = [](mlir::OpOperand& use) {
+      auto mask = mlir::dyn_cast<mlir::arith::AndIOp>(use.getOwner());
+      if (!mask) return false;
+      auto bit = traceConstInt(mask.getOperand(1 - use.getOperandNumber()));
+      return bit && *bit == 1;
+    };
+    if (nm == "arith.shrui" && (resT.isInteger(8) || resT.isInteger(16)) &&
+        !llvm::all_of(def->getResult(0).getUses(), masksBitZero))
+      throw std::runtime_error("ISHFT / IBITS on integer(1) or integer(2) is not lowered");
     std::string operand = buildExpr(def->getOperand(0), d + 1);
     if (resT.isInteger(32) || resT.isInteger(64)) operand = (resT.isInteger(32) ? "int32(" : "int64(") + operand + ")";
     return std::string(fn) + "(" + operand + ", " + buildExpr(def->getOperand(1), d + 1) + ")";

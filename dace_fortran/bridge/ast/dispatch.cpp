@@ -43,6 +43,32 @@ static bool isOptionalPresentSelect(IfOpT op) {
   return mlir::isa_and_nonnull<fir::AbsentOp>(term->getOperand(0).getDefiningOp());
 }
 
+/// The op of ``block`` right after the last op ``v`` takes its value from: a load, or an op whose regions compute a
+/// result. Renderers read memory by name, so a snapshot placed here sees the writes before those loads and none after.
+/// The block's first op when ``v`` has no such input in ``block``.
+static mlir::Operation* firstOpAfterInputsOf(mlir::Value v, mlir::Block& block) {
+  mlir::Operation* last = nullptr;
+  llvm::SmallPtrSet<mlir::Operation*, 16> seen;
+  llvm::SmallVector<mlir::Value, 16> worklist{v};
+  while (!worklist.empty()) {
+    auto* d = worklist.pop_back_val().getDefiningOp();
+    if (!d || d->getBlock() != &block || !seen.insert(d).second) continue;
+    if ((mlir::isa<fir::LoadOp>(d) || d->getNumRegions() > 0) && (!last || last->isBeforeInBlock(d))) last = d;
+    worklist.append(d->operand_begin(), d->operand_end());
+  }
+  return last ? last->getNextNode() : &block.front();
+}
+
+/// True iff ``v`` is a result of an scf.if in ``block``, through the integer casts lift-cf-to-scf threads it with.
+static bool isScfIfResultIn(mlir::Value v, mlir::Block& block) {
+  while (auto* d = v.getDefiningOp()) {
+    if (mlir::isa<mlir::scf::IfOp>(d)) return d->getBlock() == &block;
+    if (!mlir::isa<mlir::arith::TruncIOp, mlir::arith::ExtUIOp, fir::ConvertOp>(d)) return false;
+    v = d->getOperand(0);
+  }
+  return false;
+}
+
 static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   ASTNode c;
   c.kind = "conditional";
@@ -50,29 +76,15 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
 
   auto walkArm = [&](mlir::Region& region) -> std::vector<ASTNode> {
     if (region.empty()) return {};
-    auto arm = walkSCFBeforeRegion(region.front());
-    // scf.if yields values -> append one scalar_assign per result from the arm's scf.yield.
-    if (ifOp.getNumResults() > 0) {
-      mlir::scf::YieldOp yieldOp;
-      for (auto& op : region.front())
-        if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
-          yieldOp = y;
-          break;
-        }
-      if (yieldOp) {
-        for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
-          auto target = scfSynthName(ifOp.getResult(i));
-          auto expr = yieldedExpr(yieldOp.getOperand(i));
-          ASTNode a;
-          a.kind = "assign";
-          a.target = target;
-          a.expr = expr;
-          a.target_is_array = false;
-          arm.push_back(std::move(a));
-        }
+    // scf.if yields values -> one scalar_assign per result, snapshotted where the arm computes the value.
+    YieldSnapshots snapshots;
+    auto* terminator = region.front().getTerminator();
+    if (ifOp.getNumResults() > 0 && mlir::isa<mlir::scf::YieldOp>(terminator))
+      for (unsigned i = 0; i < ifOp.getNumResults(); ++i) {
+        mlir::Value const yielded = terminator->getOperand(i);
+        snapshots[firstOpAfterInputsOf(yielded, region.front())].emplace_back(ifOp.getResult(i), yielded);
       }
-    }
-    return arm;
+    return walkSCFBeforeRegion(region.front(), snapshots);
   };
 
   c.children = walkArm(ifOp.getThenRegion());
@@ -168,7 +180,7 @@ static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
   }
 }
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshots& snapshots) {
   std::vector<ASTNode> out;
   // Snapshot scf.condition's break value at body START, before an in-body scf.if mutates it, into __brk_<N>; without it
   // the break re-evaluates post-mutation values and fires one iteration early (NPB LU ssor convergence check).
@@ -189,7 +201,9 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     // break-check; without it a runtime-extent DO WHILE (MAXVAL(a) > 0) falls to inline-unroll which bails to "?".
     materialiseCondReductions(condVal, out);
     size_t const scMapBefore = kScfValueMap.size();
-    auto b = buildBoolExpr(condVal, 0);
+    // A condition an scf.if in this block yields is snapshotted inside that arm: the guard reads its synth scalar.
+    bool const armSnapshots = isScfIfResultIn(condVal, block);
+    auto b = armSnapshots ? std::string{} : buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
       // An array-element break condition (e.g. rsdnm(i) < tolrsd(i)) can't ride an interstate-edge assignment -- DaCe
       // strips the subscript to a bare pointer compare (see tests/lu_two_call_convergence_repro_test.py).
@@ -234,6 +248,15 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     }
   }
   for (auto& op : block) {
+    if (auto it = snapshots.find(&op); it != snapshots.end())
+      for (auto const& [result, yielded] : it->second) {
+        ASTNode a;
+        a.kind = "assign";
+        a.target = scfSynthName(result);
+        a.expr = yieldedExpr(yielded);
+        a.target_is_array = false;
+        out.push_back(std::move(a));
+      }
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       out.push_back(buildScfIfAsConditional(ifOp));

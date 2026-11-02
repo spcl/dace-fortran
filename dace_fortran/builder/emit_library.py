@@ -134,7 +134,7 @@ def section_alias_slab(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, 
         return None
     src_desc = ctx.sdfg.arrays[v.view_source]
     parts = [
-        f"0:{src_desc.shape[src_dim]}" if dummy_dim is not None else f"({slot}) - 1"
+        f"0:{src_desc.shape[src_dim]}" if dummy_dim is not None else f"({slot}) - offset_{v.view_source}_d{src_dim}"
         for src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map)
     ]
     return v.view_source, ", ".join(parts)
