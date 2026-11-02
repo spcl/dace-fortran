@@ -61,8 +61,8 @@ bool derivesFromBoxDims(mlir::Value v, mlir::Value box, int depth = 0) {
   return llvm::any_of(d->getOperands(), [&](mlir::Value o) { return derivesFromBoxDims(o, box, depth + 1); });
 }
 
-/// True iff a triplet of section ``dg`` keeps less than a whole dimension of its parent, or strides.
-bool narrowsParent(hlfir::DesignateOp dg) {
+/// True iff a triplet of section ``dg`` starts past its parent's first element, or strides.
+bool shiftsParent(hlfir::DesignateOp dg) {
   auto isOne = [](mlir::Value v) {
     auto c = fir::getIntIfConstant(v);
     return c && *c == 1;
@@ -75,11 +75,9 @@ bool narrowsParent(hlfir::DesignateOp dg) {
       continue;
     }
     mlir::Value const lo = indices[cursor];
-    mlir::Value const hi = indices[cursor + 1];
     mlir::Value const stride = indices[cursor + 2];
     cursor += 3;
-    bool const wholeLo = isOne(lo) || derivesFromBoxDims(lo, dg.getMemref());
-    if (!isOne(stride) || !wholeLo || !derivesFromBoxDims(hi, dg.getMemref())) return true;
+    if (!isOne(stride) || !(isOne(lo) || derivesFromBoxDims(lo, dg.getMemref()))) return true;
   }
   return false;
 }
@@ -105,8 +103,9 @@ struct FoldElementAliasesPass : public mlir::PassWrapper<FoldElementAliasesPass,
       if (!mrd) return;
       auto designate = mlir::dyn_cast<hlfir::DesignateOp>(mrd);
       if (!designate) return;
-      // A section dummy has its own extent and stride, unless every triplet spans its whole dimension.
-      if (narrowsParent(designate)) return;
+      // A section starting past its parent's first element, or striding, needs the alias: its elements are not the
+      // parent's at the same index.
+      if (shiftsParent(designate)) return;
 
       // Confirm the designate's base ultimately resolves to a
       // declare  --  without that anchor we don't have a "real"

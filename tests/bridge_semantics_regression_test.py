@@ -435,6 +435,53 @@ end subroutine""",
         {"a": THREE_BY_FOUR, "b": np.arange(7.0, 10.0), "n": I4(3), "k": I4(2), "d": F8(0)},
         None,
     ),
+    "section_alias_fill_lower_bound": (
+        """subroutine @(a, n, k)
+  integer, intent(in) :: n, k
+  real(8), intent(inout) :: a(n, 0:3)
+  call inner(a(:, k), n)
+contains
+  subroutine inner(x, l)
+    integer, intent(in) :: l
+    real(8), intent(inout) :: x(l)
+    x = 0
+  end subroutine
+end subroutine""",
+        {"a": THREE_BY_FOUR, "n": I4(3), "k": I4(2)},
+        None,
+    ),
+    "exit_after_increment": (
+        """subroutine @(a, r)
+  real(8), intent(in) :: a(3)
+  integer, intent(out) :: r
+  integer :: i, j
+  r = 0
+  i = 0
+  do j = 1, 3
+    i = i + 1
+    if (a(i) > 1.5d0) exit
+    r = j
+  end do
+end subroutine""",
+        {"a": np.array([1.0, 1.0, 2.0]), "r": I4(0)},
+        None,
+    ),
+    "exit_test_before_later_write": (
+        """subroutine @(a, r)
+  real(8), intent(in) :: a(4)
+  integer, intent(out) :: r
+  integer :: i, j
+  r = 0
+  i = 1
+  do j = 1, 3
+    if (a(i) > 1.5d0) exit
+    i = i + 1
+    r = j
+  end do
+end subroutine""",
+        {"a": np.array([1.0, 1.0, 2.0, 2.0]), "r": I4(0)},
+        None,
+    ),
     "any_of_section_in_condition": (
         """subroutine @(l, n, s)
   integer, intent(in) :: n
