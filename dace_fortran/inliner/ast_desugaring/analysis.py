@@ -461,13 +461,66 @@ def _eval_selected_int_kind(p: Union[int, np.integer]) -> int:
     return fitting[0]
 
 
-def _eval_selected_real_kind(p: int, r: int) -> int:
-    """Calculates the real kind value from a given precision and range."""
+def _eval_selected_real_kind(p: int | None, r: int | None) -> int:
+    """Calculates the real kind value from a given precision and range.
+
+    Either argument may be ``None`` when the caller supplied only the other
+    argument, matching Fortran's optional-argument semantics for
+    ``SELECTED_REAL_KIND``.
+    """
     # Copied logic from `replace_real_kind()` elsewhere in the project.
-    for kind, max_precision, max_range in _REAL_KIND_LIMITS:
-        if p <= max_precision and r <= max_range:
-            return kind
-    return types.DOUBLE_KIND
+    if p is not None and p >= 9:
+        return 8
+    if r is not None and r > 126:
+        return 8
+    if p is not None and p >= 3:
+        return 4
+    if r is not None and r > 14:
+        return 4
+    # If neither argument is supplied at all, the intrinsic is meaningless; the
+    # only valid one-argument forms specify at least one of P or R.
+    if p is None and r is None:
+        raise ValueError("SELECTED_REAL_KIND requires at least one argument")
+    return 2
+
+
+def _selected_real_kind_args(args: list[Base], alias_map: types.SPEC_TABLE) -> tuple[int | None, int | None]:
+    """Resolve the (precision, range) pair from a ``SELECTED_REAL_KIND`` call.
+
+    Handles positional and keyword forms, including the one-argument forms
+    ``SELECTED_REAL_KIND(p)`` and ``SELECTED_REAL_KIND(r=...)``.
+    """
+    srk_p: int | None = None
+    srk_r: int | None = None
+    if not args:
+        return srk_p, srk_r
+    # All-keyword calls parse to Actual_Arg_Spec_List of Actual_Arg_Spec items.
+    # Positional calls parse to Actual_Arg_Spec_List of raw expressions.
+    if all(isinstance(a, f03.Actual_Arg_Spec) for a in args):
+        for a in args:
+            kw, val = a.children
+            p_or_r = kw.string.upper()
+            val_int = const_eval_basic_type(val, alias_map)
+            if val_int is None:
+                return None, None
+            if p_or_r == "P":
+                srk_p = int(val_int)
+            elif p_or_r == "R":
+                srk_r = int(val_int)
+            else:
+                raise ValueError(f"Unexpected SELECTED_REAL_KIND keyword: {p_or_r}")
+        return srk_p, srk_r
+    # Positional: first argument is P, second (if present) is R.
+    p_val = const_eval_basic_type(args[0], alias_map)
+    if p_val is None:
+        return None, None
+    srk_p = int(p_val)
+    if len(args) >= 2:
+        r_val = const_eval_basic_type(args[1], alias_map)
+        if r_val is None:
+            return None, None
+        srk_r = int(r_val)
+    return srk_p, srk_r
 
 
 def _cdiv(x: types.NUMPY_TYPES, y: types.NUMPY_TYPES) -> types.NUMPY_TYPES:
@@ -620,8 +673,10 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
     :param alias_map: The alias map for resolving symbols.
     :return: The evaluated value as a numpy scalar, or None if the expression is not constant.
     """
-    if isinstance(expr, (f03.Part_Ref, f03.Data_Ref)):
-        return None
+    if isinstance(expr, f03.Part_Ref):
+        return _const_eval_part_ref(expr, alias_map)
+    if isinstance(expr, f03.Data_Ref):
+        return _const_eval_data_ref(expr, alias_map)
     if isinstance(expr, f03.Name):
         spec = search_real_local_alias_spec(expr, alias_map)
         if not spec:
@@ -664,17 +719,16 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
             ):
                 return INTR_FNS[intr.string](*avals)
         elif intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = const_eval_basic_type(p, alias_map), const_eval_basic_type(r, alias_map)
-            if p is None or r is None:
+            p, r = _selected_real_kind_args(args, alias_map)
+            if p is None and r is None:
                 return None
-            return np.int32(_eval_selected_real_kind(int(p), int(r)))
+            return np.int32(_eval_selected_real_kind(p, r))
         elif intr.string == "SELECTED_INT_KIND":
-            (p,) = args
-            p = const_eval_basic_type(p, alias_map)
-            if p is None:
+            (si_p,) = args
+            si_p = const_eval_basic_type(si_p, alias_map)
+            if si_p is None:
                 return None
-            return np.int32(_eval_selected_int_kind(int(p)))
+            return np.int32(_eval_selected_int_kind(int(si_p)))
         elif intr.string == "INT":
             kind: Union[int, types.NUMPY_TYPES] | None = types.DEFAULT_KIND
             value_arg, *kind_arg = args
@@ -730,6 +784,214 @@ def const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> types.NUMP
         x = x[2:-1]
         return np.int64(int(x, 16))
 
+    return None
+
+
+def _shape_dim_bounds(dim_spec: str) -> tuple[int | None, int | None]:
+    """Parse a dimension spec string into ``(lower, upper)`` bounds.
+
+    A plain upper bound ``'3'`` yields ``(None, 3)``; a full
+    ``'-1 : 1'`` string yields ``(-1, 1)``.  Returns ``(None, None)``
+    for unparseable specs.
+    """
+    # The string comes from ``TYPE_SPEC._parse_shape`` which normalises
+    # whitespace to a single space and lowercases the text.  A unary minus
+    # around a literal is therefore rendered as ``'- 1 : 1'``.
+    dim_spec = dim_spec.strip().replace(" ", "")
+    if ":" not in dim_spec:
+        try:
+            return None, int(dim_spec)
+        except Exception:
+            return None, None
+    lower_str, upper_str = dim_spec.split(":", 1)
+    try:
+        return int(lower_str), int(upper_str)
+    except Exception:
+        return None, None
+
+
+def _const_eval_array_element(
+    values: list[types.NUMPY_TYPES], shape: tuple[str, ...], subscripts: list[int]
+) -> types.NUMPY_TYPES | None:
+    """Convert Fortran subscripts (with optional explicit lower bounds)
+    into a flat index and return the corresponding constant value.
+
+    ``shape`` contains the dimension strings as stored in ``TYPE_SPEC.shape``.
+    For a 1-D array the string may be a plain upper bound (``'3'``) or a
+    lower:upper pair (``'-1 : 1'``).  Multi-dimensional arrays are supported
+    only when the initializer is already a flat list of values in Fortran
+    column-major order (e.g. from an ``Array_Constructor``).
+    """
+    if len(shape) != len(subscripts):
+        return None
+    try:
+        if len(shape) == 1:
+            lower, upper = _shape_dim_bounds(shape[0])
+            if upper is None:
+                return None
+            if lower is None:
+                lower = 1
+            if not (lower <= subscripts[0] <= upper):
+                return None
+            return values[subscripts[0] - lower]
+        # Multi-dimensional: assume column-major flat storage.  For now we only
+        # support 1-based lower bounds; non-1 lower bounds in higher dimensions
+        # are uncommon in parameter-array constant folding and left to flang.
+        strides = [1] * len(shape)
+        for i in range(len(shape) - 2, -1, -1):
+            _, upper = _shape_dim_bounds(shape[i + 1])
+            if upper is None:
+                return None
+            strides[i] = strides[i + 1] * upper
+        idx = 0
+        for i, (sub, dim) in enumerate(zip(subscripts, shape, strict=False)):
+            _, upper = _shape_dim_bounds(dim)
+            if upper is None or sub < 1 or sub > upper:
+                return None
+            idx += (sub - 1) * strides[i]
+        return values[idx]
+    except Exception:
+        return None
+
+
+def _const_eval_part_ref(pr: f03.Part_Ref, alias_map: types.SPEC_TABLE) -> types.NUMPY_TYPES | None:
+    """Evaluate a scalar reference to a constant array element.
+
+    Returns ``None`` for non-constant arrays, non-scalar references (slices),
+    or unsupported initializers.
+    """
+    name, subs = pr.children
+    if not isinstance(name, f03.Name):
+        return None
+    spec = search_real_local_alias_spec(name, alias_map)
+    if not spec:
+        return None
+    decl = alias_map.get(spec)
+    if not isinstance(decl, f03.Entity_Decl):
+        return None
+    typ = find_type_of_entity(decl, alias_map)
+    if not typ or not typ.const or not typ.shape:
+        return None
+    if subs is None:
+        return None
+    init = ast_utils.atmost_one(ast_utils.children_of_type(decl, f03.Initialization))
+    if init is None:
+        return None
+    _, iexpr = init.children
+
+    # Evaluate subscripts.
+    sub_vals: list[types.NUMPY_TYPES | None] = []
+    for s in subs.children:
+        if isinstance(s, f03.Subscript_Triplet):
+            return None
+        sub_vals.append(const_eval_basic_type(s, alias_map))
+    if any(s is None for s in sub_vals):
+        return None
+    subscripts = [int(s) for s in sub_vals if s is not None]
+
+    # Resolve the initializer to a flat list of values.
+    values = _const_eval_array_initializer(iexpr, alias_map)
+    if values is None:
+        return None
+    return _const_eval_array_element(values, typ.shape, subscripts)
+
+
+def _const_eval_array_initializer(iexpr: Base, alias_map: types.SPEC_TABLE) -> list[types.NUMPY_TYPES] | None:
+    """Return a flat list of constant values from a PARAMETER initializer.
+
+    Handles ``[a, b, c]`` array constructors; implied-do loops and
+    transformational intrinsics like ``RESHAPE`` are left for flang.
+    """
+    if isinstance(iexpr, f03.Array_Constructor):
+        ac_spec = iexpr.children[1]
+        if not isinstance(ac_spec, f03.Ac_Value_List):
+            return None
+        values: list[types.NUMPY_TYPES] = []
+        for v in ac_spec.children:
+            if isinstance(v, f03.Ac_Implied_Do):
+                return None
+            val = const_eval_basic_type(v, alias_map)
+            if val is None:
+                return None
+            values.append(val)
+        return values
+    return None
+
+
+def _const_eval_data_ref(dref: f03.Data_Ref, alias_map: types.SPEC_TABLE) -> types.NUMPY_TYPES | None:
+    """Evaluate a scalar constant data reference such as ``quux % iarr(2)``.
+
+    Only handles the case where the root is a scalar named constant and the
+    trailing component is a constant array element whose value is statically
+    known.
+    """
+    scope_spec = find_scope_spec(dref)
+    root, root_type, rest = dataref_root(dref, scope_spec, alias_map)
+    if not isinstance(root, f03.Name):
+        return None
+    root_spec = search_real_local_alias_spec(root, alias_map)
+    if not root_spec:
+        return None
+    root_decl = alias_map.get(root_spec)
+    if not isinstance(root_decl, f03.Entity_Decl):
+        return None
+    root_typ = find_type_of_entity(root_decl, alias_map)
+    if not root_typ or not root_typ.const or root_typ.shape:
+        return None
+    if not rest:
+        return None
+
+    # The initializer of a named constant of derived type is a Part_Ref (a
+    # structure constructor).  We cannot trace that here, so for now only handle
+    # the common pattern where the component itself is a PARAMETER-like array
+    # with a default initialization that overrides any constructor.
+    # TODO: Trace structure constructors once we can evaluate them.
+
+    # Walk down the component chain.  The final component must be a Part_Ref
+    # with constant subscripts; any preceding components must be scalar derived
+    # type constants (we do not currently trace array-of-struct elements).
+    cur_type = root_type
+    for i, comp in enumerate(rest):
+        is_last = i == len(rest) - 1
+        part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
+        if not isinstance(part_name, f03.Name):
+            return None
+        comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
+        if comp_spec is None:
+            return None
+        comp_decl = alias_map.get(comp_spec)
+        if not isinstance(comp_decl, (f03.Entity_Decl, f03.Component_Decl)):
+            return None
+        comp_type = find_type_of_entity(comp_decl, alias_map)
+        if comp_type is None:
+            return None
+        if isinstance(comp, f03.Part_Ref):
+            if not is_last:
+                # An indexed intermediate component (array of structs) is not
+                # handled.
+                return None
+            if not comp_type.shape:
+                return None
+            # Component initializer is the source of truth for constant arrays.
+            comp_init = ast_utils.atmost_one(ast_utils.children_of_type(comp_decl, f03.Component_Initialization))
+            if comp_init is None:
+                return None
+            _, ciexpr = comp_init.children
+            values = _const_eval_array_initializer(ciexpr, alias_map)
+            if values is None:
+                return None
+            sub_vals = []
+            _, subsc = comp.children
+            for s in subsc.children:
+                if isinstance(s, f03.Subscript_Triplet):
+                    return None
+                sv = const_eval_basic_type(s, alias_map)
+                if sv is None:
+                    return None
+                sub_vals.append(int(sv))
+            return _const_eval_array_element(values, comp_type.shape, sub_vals)
+        # Scalar component: keep descending.
+        cur_type = comp_type
     return None
 
 
@@ -1285,9 +1547,9 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> int | None:
         if args:
             args = args.children
         if intr.string == "SELECTED_REAL_KIND":
-            p, r = args
-            p, r = _const_eval_int(p, alias_map), _const_eval_int(r, alias_map)
-            assert p is not None and r is not None
+            p, r = _selected_real_kind_args(args, alias_map)
+            if p is None and r is None:
+                return None
             return _eval_selected_real_kind(p, r)
         if intr.string == "SELECTED_INT_KIND":
             assert len(args) == 1
@@ -1302,8 +1564,13 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> int | None:
     return None
 
 
-#: Key of a tracked local constant: a variable's spec, or a (root spec, component spec) pair for ``root % comp``.
-ConstKey = Union[types.SPEC, tuple[types.SPEC, types.SPEC]]
+#: Key of a tracked local constant: a variable's spec, a (root spec, component
+#: spec) pair for ``root % comp``, or a (root spec, component_path) pair where
+#: component_path is a tuple of component names and integer subscript tuples for
+#: indexed components (e.g. ``root % baz(3) % scalar`` or
+#: ``root % baz(2) % arr(4)``).
+IndexedComponent = tuple[Union[str, tuple[int, ...]], ...]
+ConstKey = Union[types.SPEC, tuple[types.SPEC, types.SPEC], tuple[types.SPEC, tuple[IndexedComponent, ...]]]
 
 
 class RootComponent(NamedTuple):
@@ -1324,6 +1591,69 @@ def track_local_consts(
 ) -> LocalConsts:
     plus: dict[ConstKey, types.LITERAL_TYPES] = copy(plus_init) if plus_init else {}
     minus: set[ConstKey] = copy(minus_init) if minus_init else set()
+
+    def _indexed_key(ref: Base) -> ConstKey | None:
+        """Build a constant key for a scalar array element or component reference.
+
+        For ``arr(i)`` returns ``(arr_spec, ((i,),))``.  For ``root % comp(i)``
+        returns ``(root_spec, (('comp', (i,)),))``.  For
+        ``root % baz(3) % scalar`` returns ``(root_spec, (('baz', (3,)), 'scalar'))``.
+        Returns ``None`` for non-scalar references (slices), references to
+        non-local roots, or non-constant subscripts.
+        """
+        scope_spec = search_scope_spec(ref)
+        if not scope_spec:
+            return None
+
+        components: list[IndexedComponent] = []
+
+        def _append_part(pr: f03.Part_Ref) -> bool:
+            name, subs = pr.children
+            if not isinstance(name, f03.Name):
+                return False
+            if subs is None:
+                return False
+            subscripts: list[int] = []
+            for s in subs.children:
+                if isinstance(s, f03.Subscript_Triplet):
+                    return False
+                sv = const_eval_basic_type(s, alias_map)
+                if sv is None or not types.is_numpy_int(sv):
+                    return False
+                subscripts.append(int(sv))
+            components.append((name.string.lower(), tuple(subscripts)))
+            return True
+
+        if isinstance(ref, f03.Part_Ref):
+            if not _append_part(ref):
+                return None
+            name, _ = ref.children
+            loc = search_real_local_alias_spec(name, alias_map)
+            if not loc:
+                return None
+            base_spec = ident_spec(alias_map[loc])
+        elif isinstance(ref, f03.Data_Ref):
+            root, _root_type, rest = dataref_root(ref, scope_spec, alias_map)
+            if not isinstance(root, f03.Name):
+                return None
+            loc = search_real_local_alias_spec(root, alias_map)
+            if not loc:
+                return None
+            base_spec = ident_spec(alias_map[loc])
+            for comp in rest:
+                if isinstance(comp, f03.Part_Ref):
+                    if not _append_part(comp):
+                        return None
+                elif isinstance(comp, f03.Name):
+                    components.append(comp.string.lower())
+                else:
+                    return None
+        else:
+            return None
+
+        if not components:
+            return None
+        return (base_spec, tuple(components))
 
     def _root_comp(dref: Union[f03.Data_Ref, f03.Data_Pointer_Object]) -> RootComponent | None:
         scope_spec = search_scope_spec(dref)
@@ -1410,6 +1740,14 @@ def track_local_consts(
             if (pointer and xtyp and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[spec])
         elif isinstance(x, f03.Data_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                scope_spec = find_scope_spec(x)
+                xtyp = find_type_dataref(x, scope_spec, alias_map)
+                if (pointer and xtyp.pointer) or value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             comp_key = _root_comp(x)
             if comp_key is None or comp_key not in plus:
                 for pr in x.children[1:]:
@@ -1426,6 +1764,12 @@ def track_local_consts(
             if (pointer and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[comp_key])
         elif isinstance(x, f03.Part_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                if value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             par, subsc = x.children
             _inject_knowns(par, value=False, pointer=True)
             assert isinstance(subsc, f03.Section_Subscript_List)
@@ -1503,15 +1847,30 @@ def track_local_consts(
                 lspec = ident_spec(alias_map[loc])
                 if isinstance(alias_map[lspec], f03.Entity_Decl):
                     ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+        elif isinstance(lv, f03.Part_Ref):
+            lspec = _indexed_key(lv)
+            if lspec is not None:
+                name, _ = lv.children
+                name_spec = search_real_local_alias_spec(name, alias_map)
+                assert name_spec
+                ltyp = find_type_of_entity(alias_map[name_spec], alias_map)
         elif isinstance(lv, f03.Data_Ref):
-            lspec = _root_comp(lv)
-            scope_spec = find_scope_spec(lv)
-            ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            idx_key = _indexed_key(lv)
+            if idx_key is not None:
+                lspec = idx_key
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            else:
+                lspec = _root_comp(lv)
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
             rval = const_eval_basic_type(rv, alias_map)
             if rval is None:
                 _integrate_subresults({}, {lspec})
-            elif not ltyp.shape:
+            elif not ltyp.shape or (isinstance(lspec, tuple) and len(lspec) >= 2):
+                # Scalar variable, or a scalar array element / component element
+                # represented by an indexed key.
                 plus[lspec] = types.numpy_type_to_literal(rval)
                 if lspec in minus:
                     minus.remove(lspec)
