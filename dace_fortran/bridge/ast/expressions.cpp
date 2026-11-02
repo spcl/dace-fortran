@@ -204,6 +204,121 @@ std::string lowerIsPresent(mlir::Value operand) {
 // ``bridge/ast/ast_helpers.h``).  Bodies appear later in this file
 // or in ``assigns.inc`` / ``control_flow.inc``.
 
+std::string castForConvert(mlir::Type inT, mlir::Type outT, std::string inner) {
+  auto intWidth = [](mlir::Type t) -> unsigned {
+    for (unsigned const w : {8U, 16U, 32U, 64U})
+      if (t.isInteger(w)) return w;
+    return 0;
+  };
+  unsigned const inI = intWidth(inT);
+  unsigned const outI = intWidth(outT);
+  auto inF = mlir::dyn_cast<mlir::FloatType>(inT);
+  auto outF = mlir::dyn_cast<mlir::FloatType>(outT);
+  if (inF && outI) return (outI == 64 ? "int64(" : "int32(") + inner + ")";
+  if (inI && outF) return (outF.getWidth() == 32 ? "float32(" : "float64(") + inner + ")";
+  // Between float kinds the value rounds in the narrower one, on either side of the convert.
+  if (inF && outF && inF.getWidth() != outF.getWidth())
+    return (std::min(inF.getWidth(), outF.getWidth()) == 32 ? "float32(" : "float64(") + inner + ")";
+  // ``int(a, 8) * int(b, 8)`` must not multiply in 32 bits.
+  if (inI && outI >= 32 && outI > inI) return (outI == 64 ? "int64(" : "int32(") + inner + ")";
+  return inner;
+}
+
+mlir::Value conjSource(fir::InsertValueOp ins) {
+  auto isImagSlot = [](mlir::ArrayAttr coords) {
+    if (coords.size() != 1) return false;
+    auto a = mlir::dyn_cast<mlir::IntegerAttr>(coords[0]);
+    return a && a.getInt() == 1;
+  };
+  auto neg = mlir::dyn_cast_or_null<mlir::arith::NegFOp>(ins.getVal().getDefiningOp());
+  if (!neg || !isImagSlot(ins.getCoor())) return {};
+  auto ext = mlir::dyn_cast_or_null<fir::ExtractValueOp>(neg.getOperand().getDefiningOp());
+  return ext && isImagSlot(ext.getCoor()) && ext.getAdt() == ins.getAdt() ? ins.getAdt() : mlir::Value{};
+}
+
+std::pair<mlir::Value, mlir::Value> complexDivSources(fir::CallOp call) {
+  auto callee = call.getCallee();
+  if (!callee || call.getNumOperands() != 4) return {};
+  auto name = callee->getRootReference().getValue();
+  if (name != "__divdc3" && name != "__divsc3") return {};
+  auto source = [](mlir::Value re, mlir::Value im) -> mlir::Value {
+    auto reOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(re.getDefiningOp());
+    auto imOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(im.getDefiningOp());
+    return reOp && imOp && reOp.getAdt() == imOp.getAdt() ? reOp.getAdt() : mlir::Value{};
+  };
+  return {source(call.getOperand(0), call.getOperand(1)), source(call.getOperand(2), call.getOperand(3))};
+}
+
+/// True for the cmp+select shape buildExpr prints as ``min(t, f)`` / ``max(t, f)``.
+static bool isMinMaxSelect(mlir::arith::SelectOp sel) {
+  auto* cdef = sel.getCondition().getDefiningOp();
+  mlir::Value const t = sel.getTrueValue();
+  mlir::Value const f = sel.getFalseValue();
+  if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpFOp>(cdef)) {
+    using P = mlir::arith::CmpFPredicate;
+    auto pred = cmp.getPredicate();
+    return (pred == P::OLT || pred == P::ULT || pred == P::OGT || pred == P::UGT) && cmp.getLhs() == t &&
+           cmp.getRhs() == f;
+  }
+  if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(cdef)) {
+    using P = mlir::arith::CmpIPredicate;
+    auto pred = cmp.getPredicate();
+    return (pred == P::slt || pred == P::ult || pred == P::sgt || pred == P::ugt) && cmp.getLhs() == t &&
+           cmp.getRhs() == f;
+  }
+  return false;
+}
+
+llvm::SmallVector<mlir::Value, 5> printedOperands(mlir::Operation* op) {
+  if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(op)) {
+    if (isMinMaxSelect(sel)) return {sel.getTrueValue(), sel.getFalseValue()};
+    return {sel.getTrueValue(), sel.getCondition(), sel.getFalseValue()};
+  }
+  if (auto ins = mlir::dyn_cast<fir::InsertValueOp>(op))
+    if (auto z = conjSource(ins)) return {z};
+  if (auto call = mlir::dyn_cast<fir::CallOp>(op))
+    if (auto [a, b] = complexDivSources(call); a && b) return {a, b};
+  if (op->getName().getStringRef() == "math.ipowi" && op->getResult(0).getType().isInteger(64))
+    return {op->getOperand(0), op->getOperand(1), op->getOperand(1), op->getOperand(0), op->getOperand(1)};
+  return llvm::SmallVector<mlir::Value, 5>(op->getOperands());
+}
+
+/// Fortran lower bound of dimension ``dim`` of the storage behind ``memref``, as the literal or offset symbol a memlet
+/// subtracts.
+static std::string rootLowerBound(mlir::Value memref, const std::string& arr, unsigned dim) {
+  hlfir::DeclareOp decl;
+  for (int hop = 0; hop < limits::kConvertChainDepth && memref && !decl; ++hop) {
+    auto* d = memref.getDefiningOp();
+    if (!d) break;
+    decl = mlir::dyn_cast<hlfir::DeclareOp>(d);
+    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d))
+      memref = dg.getMemref();
+    else if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d))
+      memref = rb.getBox();
+    else if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d))
+      memref = eb.getMemref();
+    else if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d))
+      memref = cv.getValue();
+    else if (!decl)
+      break;
+  }
+  if (!decl) return "1";
+  if (auto outer = asAssumedShapeAlias(decl)) decl = outer;
+  auto lbs = declareLowerBounds(decl);
+  if (dim >= lbs.size()) return "1";
+  return lbs[dim] ? std::to_string(*lbs[dim]) : "offset_" + arr + "_d" + std::to_string(dim);
+}
+
+std::string subscriptedElement(hlfir::DesignateOp dg, const std::string& arr) {
+  auto [root, dims] = expandDesignateChain(dg);
+  std::string s = arr + "[";
+  for (unsigned i = 0; i < dims.size(); ++i) {
+    if (i > 0) s += ", ";
+    s += "(" + dims[i].expr + ") - " + rootLowerBound(dg.getMemref(), arr, i);
+  }
+  return s + "]";
+}
+
 /// Build the index expression string for the ``dim``-th operand of a
 /// ``hlfir.designate``, applying the assumed-shape rebase when the
 /// designate's base is an inlined alias declare.  Rebase rule (Flang
@@ -304,7 +419,13 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::V
       }
       auto idxOps = parentDg.getIndices();
       if (found && cursor < idxOps.size()) {
-        if (auto lo = traceConstInt(idxOps[cursor])) {
+        auto stride = traceConstInt(idxOps[cursor + 2]);
+        if (!stride || *stride != 1) {
+          // The view's element k sits at lo + (k - 1) * stride of the parent.
+          auto const lo = buildIndexExpr(idxOps[cursor], depth + 1);
+          auto const step = buildIndexExpr(idxOps[cursor + 2], depth + 1);
+          raw = "(" + lo + " + (" + raw + " - 1) * " + step + ")";
+        } else if (auto lo = traceConstInt(idxOps[cursor])) {
           int64_t const adjust = *lo - 1;
           if (adjust > 0)
             raw = "(" + raw + " + " + std::to_string(adjust) + ")";
@@ -978,31 +1099,9 @@ std::string buildExpr(mlir::Value val, int d) {
           }
         }
     }
-    if (coords.size() == 1) {
-      // Coord must be the literal index 1 (the imaginary slot).
-      if (auto coordAttr = mlir::dyn_cast<mlir::IntegerAttr>(coords[0]))
-        if (coordAttr.getInt() == 1) {
-          auto val = ins.getVal();
-          auto adt = ins.getAdt();
-          if (auto neg = mlir::dyn_cast_or_null<mlir::arith::NegFOp>(val.getDefiningOp())) {
-            if (auto ext = mlir::dyn_cast_or_null<fir::ExtractValueOp>(neg.getOperand().getDefiningOp())) {
-              auto extCoords = ext.getCoor();
-              bool extIsImag = false;
-              if (extCoords.size() == 1)
-                if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(extCoords[0])) extIsImag = (a.getInt() == 1);
-              if (extIsImag && ext.getAdt() == adt) {
-                // Emit ``conj(<expr>)``  --  DaCe's tasklet
-                // codegen emits the bare name, which resolves to
-                // ``std::conj`` for ``std::complex<float>`` and
-                // ``std::complex<double>`` by argument lookup and
-                // to the global ``conj`` of DaCe's ``math.h`` for
-                // a real value.
-                return "conj(" + buildExpr(adt, d + 1) + ")";
-              }
-            }
-          }
-        }
-    }
+    // ``conj(<expr>)``: DaCe's tasklet codegen emits the bare name, which resolves to ``std::conj`` for complex
+    // operands by argument lookup and to the global ``conj`` of DaCe's ``math.h`` for a real value.
+    if (auto z = conjSource(ins)) return "conj(" + buildExpr(z, d + 1) + ")";
   }
 
   // Standalone ``fir.extract_value`` on a complex value -- Fortran
@@ -1092,8 +1191,19 @@ std::string buildExpr(mlir::Value val, int d) {
   // recognises ``**`` and rewrites it based on the tasklet's
   // input/output types  --  no variant marker needed at this layer.
   static const std::set<llvm::StringRef> pow_ops = {
-      "complex.powi", "math.fpowi", "math.powf", "math.powi", "math.ipowi",
+      "complex.powi",
+      "math.fpowi",
+      "math.powf",
+      "math.powi",
   };
+  // ``**`` runs in double for an integer base: keep the integer quotient of a negative exponent with the cast, and go
+  // through the exact ``ipow`` where a double cannot hold the kind. printedOperands lists this shape.
+  if (nm == "math.ipowi" && def->getNumOperands() == 2) {
+    std::string const a = buildExpr(def->getOperand(0), d + 1);
+    std::string const b = buildExpr(def->getOperand(1), d + 1);
+    if (!def->getResult(0).getType().isInteger(64)) return "int32(" + a + " ** " + b + ")";
+    return "(ipow(" + a + ", " + b + ") if (" + b + " >= 0) else int64(" + a + " ** " + b + "))";
+  }
   if (pow_ops.count(nm) && def->getNumOperands() == 2) {
     return "(" + buildExpr(def->getOperand(0), d + 1) + " ** " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
@@ -1263,10 +1373,10 @@ std::string buildExpr(mlir::Value val, int d) {
       // restores the kind.  Likewise for ``ANINT`` -> ``llvm.round``,
       // ``FLOOR`` -> ``llvm.floor``, ``CEILING`` -> ``llvm.ceil``.
       static const std::map<llvm::StringRef, std::string> float_round = {
-          {"llvm.trunc.f64", "trunc"}, {"llvm.trunc.f32", "trunc"},     {"llvm.round.f64", "round"},
-          {"llvm.round.f32", "round"}, {"llvm.floor.f64", "floor"},     {"llvm.floor.f32", "floor"},
-          {"llvm.ceil.f64", "ceil"},   {"llvm.ceil.f32", "ceil"},       {"llvm.rint.f64", "round"},
-          {"llvm.rint.f32", "round"},  {"llvm.nearbyint.f64", "round"}, {"llvm.nearbyint.f32", "round"},
+          {"llvm.trunc.f64", "trunc"},    {"llvm.trunc.f32", "trunc"},         {"llvm.round.f64", "round"},
+          {"llvm.round.f32", "round"},    {"llvm.floor.f64", "floor"},         {"llvm.floor.f32", "floor"},
+          {"llvm.ceil.f64", "ceil"},      {"llvm.ceil.f32", "ceil"},           {"llvm.rint.f64", "nearbyint"},
+          {"llvm.rint.f32", "nearbyint"}, {"llvm.nearbyint.f64", "nearbyint"}, {"llvm.nearbyint.f32", "nearbyint"},
       };
       if (auto it = float_round.find(cname); it != float_round.end() && call.getNumOperands() >= 1) {
         return it->second + "(" + buildExpr(call.getOperand(0), d + 1) + ")";
@@ -1278,20 +1388,8 @@ std::string buildExpr(mlir::Value val, int d) {
       // complex operands; reconstruct the original complex
       // operand identities and emit ``(complex_a / complex_b)``
       // at the tasklet level.
-      if ((cname == "__divdc3" || cname == "__divsc3") && call.getNumOperands() == 4) {
-        auto extractSource = [](mlir::Value re, mlir::Value im) -> mlir::Value {
-          auto reOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(re.getDefiningOp());
-          auto imOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(im.getDefiningOp());
-          if (!reOp || !imOp) return {};
-          if (reOp.getAdt() != imOp.getAdt()) return {};
-          return reOp.getAdt();
-        };
-        auto srcA = extractSource(call.getOperand(0), call.getOperand(1));
-        auto srcB = extractSource(call.getOperand(2), call.getOperand(3));
-        if (srcA && srcB) {
-          return "(" + buildExpr(srcA, d + 1) + " / " + buildExpr(srcB, d + 1) + ")";
-        }
-      }
+      if (auto [srcA, srcB] = complexDivSources(call); srcA && srcB)
+        return "(" + buildExpr(srcA, d + 1) + " / " + buildExpr(srcB, d + 1) + ")";
       // Two-arg ATAN2 runtime fallback.
       if (cname == "atan2" && call.getNumOperands() >= 2) {
         return "atan2(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
@@ -1371,54 +1469,7 @@ std::string buildExpr(mlir::Value val, int d) {
       NoSubscriptGuard const _g;
       return logicalTruth(conv.getValue(), d + 1, &buildExpr);
     }
-    bool const inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) || inT.isInteger(64);
-    bool const outIsInt = outT.isInteger(8) || outT.isInteger(16) || outT.isInteger(32) || outT.isInteger(64);
-    bool const inIsFloat = mlir::isa<mlir::FloatType>(inT);
-    bool const outIsFloat = mlir::isa<mlir::FloatType>(outT);
-    // Float -> integer: explicit truncating cast.  Use ``dace.intN``
-    // so the C++ codegen lowers via ``static_cast<int{32,64}>``.
-    if (inIsFloat && outIsInt) {
-      const char* cast = outT.isInteger(64) ? "int64" : "int32";
-      return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
-    }
-    // Integer -> float: same shape  --  codegen will widen at the
-    // arithmetic site.  Tag with ``float64`` / ``float32`` so the
-    // intent is explicit when the surrounding op is integer too.
-    if (inIsInt && outIsFloat) {
-      const char* cast = mlir::cast<mlir::FloatType>(outT).getWidth() == 32 ? "float32" : "float64";
-      return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
-    }
-    // Float -> wider float (f32 -> f64): wrap in an explicit
-    // ``dace.float32(...)`` BEFORE the widening so the inner
-    // expression's f32 arithmetic rounds at f32 precision.  In
-    // C++ codegen, ``static_cast<float>(double_val)`` rounds to
-    // the nearest f32, which matches Fortran's ``real(4)``
-    // semantics  --  ``5.5 + epsilon(1.0)`` evaluates to ``5.5``
-    // exactly because the epsilon is below f32's ulp at 5.5.
-    // Without this wrap the C++ promotes both operands to double
-    // and gives ``5.5 + 1.19e-7 = 5.5000001192...``.  Same-width
-    // converts (f64 -> f64) stay transparent.
-    if (inIsFloat && outIsFloat) {
-      auto inW = mlir::cast<mlir::FloatType>(inT).getWidth();
-      auto outW = mlir::cast<mlir::FloatType>(outT).getWidth();
-      if (inW < outW && !kSuppressFloatCast) {
-        const char* cast = inW == 32 ? "float32" : "float64";
-        return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
-      }
-      if (inW < outW) return buildExpr(conv.getValue(), d + 1);
-    }
-    // Integer -> wider integer in a value expression: without the cast
-    // ``int(a, 8) * int(b, 8)`` multiplies and wraps in 32 bits. Symbolic
-    // expressions stay bare, as for floats above, so bounds keep matching.
-    if (inIsInt && outIsInt && outT.getIntOrFloatBitWidth() > inT.getIntOrFloatBitWidth() && !kSuppressFloatCast) {
-      if (outT.isInteger(64) || outT.isInteger(32)) {
-        return std::string(outT.isInteger(64) ? "int64(" : "int32(") + buildExpr(conv.getValue(), d + 1) + ")";
-      }
-    }
-    // Same width or float -> narrower float (truncating cast)  --
-    // transparent (the underlying expression already has the
-    // narrower type, or the narrowing is desired).
-    return buildExpr(conv.getValue(), d + 1);
+    return castForConvert(inT, outT, buildExpr(conv.getValue(), d + 1));
   }
 
   // MLIR bool/int casts used by lift-cf-to-scf when threading keep-going
@@ -1676,17 +1727,7 @@ std::string buildExpr(mlir::Value val, int d) {
         if (auto* md = mm.getDefiningOp())
           if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
             auto arr = traceToDecl(dg.getResult());
-            auto idxs = dg.getIndices();
-            if (!arr.empty() && !idxs.empty()) {
-              std::string s = arr + "[";
-              bool first = true;
-              for (auto idx : idxs) {
-                if (!first) s += ", ";
-                s += "(" + buildIndexExpr(idx, d + 1) + ") - 1";
-                first = false;
-              }
-              return s + "]";
-            }
+            if (!arr.empty() && !dg.getIndices().empty()) return subscriptedElement(dg, arr);
           }
       }
       return n;
@@ -1780,7 +1821,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``5.5``.  Pairs with the ``fir.convert f32->f64`` wrap so
       // both the literal and the widening cast preserve the
       // intended precision.
-      if (isF32 && !kSuppressFloatCast) return "float32(" + lit + ")";
+      if (isF32) return "float32(" + lit + ")";
       return lit;
     }
     if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) {

@@ -41,7 +41,9 @@
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
+#include "flang/Optimizer/Dialect/FIROpsSupport.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -50,6 +52,37 @@
 namespace hlfir_bridge {
 
 namespace {
+
+/// True iff ``v`` is computed from a ``fir.box_dims`` of ``box``.
+bool derivesFromBoxDims(mlir::Value v, mlir::Value box, int depth = 0) {
+  auto* d = v.getDefiningOp();
+  if (!d || depth > 4) return false;
+  if (auto dims = mlir::dyn_cast<fir::BoxDimsOp>(d)) return dims.getVal() == box;
+  return llvm::any_of(d->getOperands(), [&](mlir::Value o) { return derivesFromBoxDims(o, box, depth + 1); });
+}
+
+/// True iff a triplet of section ``dg`` keeps less than a whole dimension of its parent, or strides.
+bool narrowsParent(hlfir::DesignateOp dg) {
+  auto isOne = [](mlir::Value v) {
+    auto c = fir::getIntIfConstant(v);
+    return c && *c == 1;
+  };
+  auto indices = dg.getIndices();
+  unsigned cursor = 0;
+  for (bool const triplet : dg.getIsTriplet()) {
+    if (!triplet) {
+      ++cursor;
+      continue;
+    }
+    mlir::Value const lo = indices[cursor];
+    mlir::Value const hi = indices[cursor + 1];
+    mlir::Value const stride = indices[cursor + 2];
+    cursor += 3;
+    bool const wholeLo = isOne(lo) || derivesFromBoxDims(lo, dg.getMemref());
+    if (!isOne(stride) || !wholeLo || !derivesFromBoxDims(hi, dg.getMemref())) return true;
+  }
+  return false;
+}
 
 struct FoldElementAliasesPass : public mlir::PassWrapper<FoldElementAliasesPass, mlir::OperationPass<mlir::ModuleOp>> {
   // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
@@ -72,6 +105,8 @@ struct FoldElementAliasesPass : public mlir::PassWrapper<FoldElementAliasesPass,
       if (!mrd) return;
       auto designate = mlir::dyn_cast<hlfir::DesignateOp>(mrd);
       if (!designate) return;
+      // A section dummy has its own extent and stride, unless every triplet spans its whole dimension.
+      if (narrowsParent(designate)) return;
 
       // Confirm the designate's base ultimately resolves to a
       // declare  --  without that anchor we don't have a "real"

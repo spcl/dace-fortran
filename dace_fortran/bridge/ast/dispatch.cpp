@@ -137,8 +137,17 @@ static bool isArrayElementLoad(mlir::Value v) {
 // Upper and lower bound of ``doLoop`` on ``n``: traceToDecl is a shortcut for the scalar case (DO i = 1, n), an
 // array-element bound (DO j = row_ptr(i), ...) goes through buildIndexExpr for its subscripted form.
 static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
+  // ``int(x)`` is a computed bound: only an integer chain may read as the name it traces to.
+  auto peelsFloat = [](mlir::Value v) {
+    for (auto cv = v.getDefiningOp<fir::ConvertOp>(); cv; cv = cv.getValue().getDefiningOp<fir::ConvertOp>())
+      if (mlir::isa<mlir::FloatType>(cv.getValue().getType())) return true;
+    return false;
+  };
+  bool const computed = peelsFloat(doLoop.getUpperBound());
   if (auto c = traceConstInt(doLoop.getUpperBound())) {
     n.loop_bound = std::to_string(*c);
+  } else if (computed) {
+    n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
   } else if (!isArrayElementLoad(doLoop.getUpperBound())) {
     n.loop_bound = traceToDecl(doLoop.getUpperBound());
   }
@@ -1442,7 +1451,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   n.call_args = {buf, partner, tag};
   // Renders an indexed scalar dest/src/tag (``neighbors(i)``) as an element subset so the memlet reads element [i-1],
   // not the whole array. Parallel to the first three call_args; the request/comm tail carries no subset.
-  n.call_arg_subsets = {"", mpiScalarElementSubset(args[3]), mpiScalarElementSubset(args[4])};
+  n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), mpiScalarElementSubset(args[3]),
+                        mpiScalarElementSubset(args[4])};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
     if (args.size() < 7) throw std::runtime_error("MPI " + mpiOp + ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
@@ -1759,6 +1769,10 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   if ((!isAll && !isAny) || def->getNumOperands() == 0) return "";
   mlir::Value const maskVal = def->getOperand(0);
   std::string maskName = traceToDecl(maskVal);
+  // A section mask reduces a view of its parent, not the whole array.
+  std::string maskSubset;
+  if (auto dg = maskVal.getDefiningOp<hlfir::DesignateOp>())
+    if (auto parts = renderDesignateSubsetStrings(dg); !parts.empty()) maskSubset = llvm::join(parts, ", ");
   // An INLINE elemental mask (e.g. ``IF (ANY(sectionA /= sectionB))``) has no declared name, so traceToDecl
   // returns "". Materialise it into a transient array via the same path materialiseCondReductions already uses
   // for SUM/MINVAL/MAXVAL/PRODUCT elemental sources, then reduce that transient.
@@ -1792,6 +1806,7 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   red.reduce_src = maskName;
   red.reduce_wcr = isAll ? "lambda a, b: a and b" : "lambda a, b: a or b";
   red.reduce_identity = isAll ? "True" : "False";
+  if (!maskSubset.empty()) red.options["src_subset"] = maskSubset;
   nodes.push_back(std::move(red));
   return tr;
 }
@@ -1811,6 +1826,9 @@ static std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Typ
     int64_t const minVal = (w == 64) ? std::numeric_limits<int64_t>::min() : (-(static_cast<int64_t>(1) << (w - 1)));
     return std::to_string(isInf ? maxVal : minVal);
   }
+  // Fortran's empty MAXVAL / MINVAL is -HUGE / HUGE of the kind.
+  if (elemTy.isF64()) return isInf ? "1.7976931348623157e+308" : "-1.7976931348623157e+308";
+  if (elemTy.isF32()) return isInf ? "3.4028234663852886e+38" : "-3.4028234663852886e+38";
   return baseIdent.str();
 }
 
@@ -2133,6 +2151,8 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
       if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
         if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>("hlfir.aos_marshal_groups"))
           n.aos_marshal_groups.assign(g.asArrayRef().begin(), g.asArrayRef().end());
+  // A call yielding a value renders inside the expression that reads it; this node then has nothing left to do.
+  if (call.getNumResults() > 0) n.options["renders_inline"] = "true";
   nodes.push_back(std::move(n));
 }
 
@@ -3114,8 +3134,13 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             }
             auto lib = buildLibCallNode(assign, sd, e.callee.str());
             if (needSubst) {
-              for (unsigned i = 0; i < elemSubst.size() && i < lib.call_args.size(); ++i)
-                if (!elemSubst[i].empty()) lib.call_args[i] = elemSubst[i];
+              // call_args carries the array operands only: DIM and BACK take no slot.
+              unsigned slot = 0;
+              for (unsigned i = 0; i < elemSubst.size() && slot < lib.call_args.size(); ++i) {
+                if (!isArrayRef(sd->getOperand(i).getType())) continue;
+                if (!elemSubst[i].empty()) lib.call_args[slot] = elemSubst[i];
+                ++slot;
+              }
             }
             nodes.push_back(std::move(lib));
             libMatched = true;
@@ -3267,6 +3292,14 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     // silently drop the assignment and miscompile with no error (verified: WHERE builds a zero-tasklet SDFG) -- throw
     // instead. Deliberately narrow: other unhandled ops (pure-value, declares, destroy, terminators, already-consumed)
     // keep falling through silently.
+    auto reductionMask = [](mlir::Operation* red) -> mlir::Value {
+      if (auto r = mlir::dyn_cast<hlfir::SumOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::ProductOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::MinvalOp>(red)) return r.getMask();
+      if (auto r = mlir::dyn_cast<hlfir::MaxvalOp>(red)) return r.getMask();
+      return {};
+    };
+    if (reductionMask(&op)) throw std::runtime_error("MASK= on SUM/PRODUCT/MINVAL/MAXVAL is not lowered");
     if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
       std::string locStr;
       llvm::raw_string_ostream locOS(locStr);
