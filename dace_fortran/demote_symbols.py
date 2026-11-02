@@ -141,6 +141,39 @@ def demote_symbol(sdfg: SDFG, name: str) -> None:
         assignment_tasklet(state, name, rhs)
 
 
+def enclosing_loops(block: Any) -> list[LoopRegion]:
+    """The loops around ``block`` within its SDFG, itself included, innermost first."""
+    loops: list[LoopRegion] = []
+    while block is not None and not isinstance(block, SDFG):
+        if isinstance(block, LoopRegion):
+            loops.append(block)
+        block = block.parent_graph
+    return loops
+
+
+def last_value_read_after_loop(sdfg: SDFG, name: str) -> bool:
+    """Whether control flow outside the loops storing ``name`` reads the value the last iteration stored.
+
+    LoopToMap looks for accesses in data nodes only, so it would privatize such a scalar. An update reading ``name``
+    is no plain store: it is either a reduction or refused as loop-carried.
+    """
+    stores: set[LoopRegion] = set()
+    for edge in sdfg.all_interstate_edges():
+        if name in edge.data.assignments and name not in edge.data.read_symbols():
+            stores.update(enclosing_loops(edge.src))
+    if not stores:
+        return False
+    return any(
+        name in edge.data.read_symbols() and stores.isdisjoint(enclosing_loops(edge.src))
+        for edge in sdfg.all_interstate_edges()
+    ) or any(
+        isinstance(block, ConditionalBlock)
+        and stores.isdisjoint(enclosing_loops(block))
+        and any(name in code.get_free_symbols() for code in block.get_meta_codeblocks())
+        for block in sdfg.all_control_flow_blocks()
+    )
+
+
 def drop_undefined_init(sdfg: SDFG, name: str) -> None:
     """Forget the entry value ScalarToSymbolPromotion gave ``name`` to keep it out of the signature.
 
@@ -174,7 +207,7 @@ class DemoteNonStructuralSymbols(ppl.Pass):
                 if name not in sd.symbols or name in outside:
                     continue
                 structural = structural if structural is not None else structural_symbols(sd)
-                if name in structural:
+                if name in structural or last_value_read_after_loop(sd, name):
                     continue
                 drop_undefined_init(sd, name)
                 demote_symbol(sd, name)
