@@ -1364,10 +1364,21 @@ def track_local_consts(
         comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
         return RootComponent(root_spec, comp_spec)
 
+    def _subscript_locals(value: Union[Base, types.LITERAL_TYPES]) -> set[types.SPEC]:
+        if not isinstance(value, Base):
+            return set()
+        locs = [
+            search_real_local_alias_spec(n, alias_map) for n in walk(walk(value, f03.Section_Subscript_List), f03.Name)
+        ]
+        return {ident_spec(alias_map[loc]) for loc in locs if loc}
+
     def _integrate_subresults(tp: dict[ConstKey, types.LITERAL_TYPES], tm: set[ConstKey]) -> None:
         assert not (tm & tp.keys())
-        # A write to a whole root covers its components
-        for k in tm | {k for k in plus if isinstance(k, RootComponent) and k.root in tm}:
+        # A write to a whole root covers its components; a pointer bound its subscripts at ``=>``, so a write to one
+        # ends the pointer's alias
+        covered = {k for k in plus if isinstance(k, RootComponent) and k.root in tm}
+        rebound = {k for k, v in plus.items() if (tm | tp.keys()) & _subscript_locals(v)}
+        for k in tm | covered | rebound:
             if k in plus:
                 del plus[k]
             minus.add(k)
@@ -1531,9 +1542,7 @@ def track_local_consts(
             if rval is None:
                 _integrate_subresults({}, {lspec})
             elif not ltyp.shape:
-                plus[lspec] = types.numpy_type_to_literal(rval)
-                if lspec in minus:
-                    minus.remove(lspec)
+                _integrate_subresults({lspec: types.numpy_type_to_literal(rval)}, set())
         tp, tm = track_local_consts(rv, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.Pointer_Assignment_Stmt):
@@ -1554,11 +1563,7 @@ def track_local_consts(
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
-        # A subscript binds here, so a later use must not re-evaluate a variable one
-        subscripts = walk(walk(rv, f03.Section_Subscript_List), f03.Name)
-        if lspec and any(const_eval_basic_type(sub, alias_map) is None for sub in subscripts):
-            _integrate_subresults({}, {lspec})
-        elif lspec and ltyp and ltyp.pointer:
+        if lspec and ltyp and ltyp.pointer:
             plus[lspec] = rv
             if lspec in minus:
                 minus.remove(lspec)
