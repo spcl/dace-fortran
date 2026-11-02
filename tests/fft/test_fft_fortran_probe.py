@@ -15,6 +15,9 @@ is dropped (the lib node's expansion owns the plan lifecycle).
 
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 import dace_fortran
 
 _HERE = Path(__file__).resolve().parent
@@ -42,7 +45,40 @@ def test_fft_probe_3d_lowers_to_lib_node(tmp_path):
     _build_and_assert_fft(src, "fft_probe::run_fft_3d", "run_fft_3d", tmp_path / "sdfg_3d")
 
 
-if __name__ == "__main__":
-    import pytest
+_PLAN_ON_BUFFER = """
+  SUBROUTINE {name}(x)
+    COMPLEX(C_DOUBLE_COMPLEX), INTENT(INOUT) :: x({extents})
+    TYPE(C_PTR) :: plan
+    plan = fftw_plan_dft_2d(3, 2, x, x, {direction}, FFTW_ESTIMATE)
+    CALL fftw_execute_dft(plan, x, x)
+    CALL fftw_destroy_plan(plan)
+  END SUBROUTINE {name}
+"""
 
+
+def _probe_with(name: str, extents: str, direction: str) -> str:
+    head = _SRC.read_text().split("CONTAINS")[0]
+    return (
+        f"{head}CONTAINS{_PLAN_ON_BUFFER.format(name=name, extents=extents, direction=direction)}END MODULE fft_probe\n"
+    )
+
+
+def test_fftw_backward_stays_unnormalized(tmp_path):
+    """FFTW scales neither direction: backward over 6 points is 6 * ifft2."""
+    src = _probe_with("run_backward", "2, 3", "FFTW_BACKWARD")
+    sdfg = _build_and_assert_fft(src, "fft_probe::run_backward", "run_backward", tmp_path / "sdfg")
+    start = (np.arange(6.0) + 1j * np.arange(6.0)[::-1]).reshape(2, 3, order="F")
+    x = start.copy(order="F")
+    sdfg(x=x)
+    np.testing.assert_allclose(x, np.fft.ifft2(start) * 6, atol=1e-12)
+
+
+def test_plan_rank_must_match_the_buffer(tmp_path):
+    """A 2-D plan on a flat buffer has no faithful lowering yet, so it stops rather than transforming one axis."""
+    src = _probe_with("run_flat", "6", "FFTW_FORWARD")
+    with pytest.raises(NotImplementedError, match="rank 2"):
+        dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry="fft_probe::run_flat", name="run_flat")
+
+
+if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

@@ -1531,6 +1531,13 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
 
     in_desc = ctx.sdfg.arrays[in_arr]
     out_desc = ctx.sdfg.arrays[out_arr]
+    # Only an FFTW plan carries extents, after the two buffers; QE's calls have no third entry or an axis tag.
+    plan_dims = n.call_args[2:] if len(n.call_args) > 3 else []
+    if plan_dims and len(plan_dims) != len(in_desc.shape):
+        raise NotImplementedError(
+            f"FFTW plan of rank {len(plan_dims)} on {in_arr} of rank {len(in_desc.shape)}: the FFT node transforms "
+            "every axis of its buffer"
+        )
     # QE convention: ``fwfft`` is the UN-normalized forward transform
     # (factor 1), ``invfft`` the inverse with a 1/N normalization. The FFT lib
     # node's pure DFT expansion applies ``factor`` as the output coefficient and
@@ -1538,8 +1545,9 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
     # ``invfft(fwfft(x))`` is off by N per inverse transform (the vexx exchange
     # chain has two inverse FFTs -> the emitted result was off by exactly
     # N^2 = nrxxs^2). N is the transform length (the flat DFT size over nnr).
-    if is_inverse:
-        node.factor = 1 / cast(Any, in_desc.total_size)  # dace types total_size as a sympy Basic; Expr divides
+    # FFTW's backward transform stays unnormalized.
+    if is_inverse and not plan_dims:
+        node.factor = 1 / cast(Any, in_desc.num_elements())  # dace types num_elements as a sympy Basic; Expr divides
     # Use ``add_read`` / ``add_write`` (fresh nodes) rather than the cached
     # ``acc`` helper: when the Fortran source is in-place (the same array
     # for ``in`` and ``out``) the cache returns one shared access node and

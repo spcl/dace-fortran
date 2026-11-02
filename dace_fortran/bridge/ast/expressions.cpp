@@ -992,12 +992,11 @@ std::string buildExpr(mlir::Value val, int d) {
                 if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(extCoords[0])) extIsImag = (a.getInt() == 1);
               if (extIsImag && ext.getAdt() == adt) {
                 // Emit ``conj(<expr>)``  --  DaCe's tasklet
-                // codegen routes the bare name through
-                // ``dace::math::conj`` (defined in
-                // ``runtime/include/dace/math.h``) which
-                // forwards to ``std::conj`` for both
-                // ``std::complex<float>`` and
-                // ``std::complex<double>``.
+                // codegen emits the bare name, which resolves to
+                // ``std::conj`` for ``std::complex<float>`` and
+                // ``std::complex<double>`` by argument lookup and
+                // to the global ``conj`` of DaCe's ``math.h`` for
+                // a real value.
                 return "conj(" + buildExpr(adt, d + 1) + ")";
               }
             }
@@ -1501,8 +1500,13 @@ std::string buildExpr(mlir::Value val, int d) {
   }
   if ((nm == "arith.shli" || nm == "arith.shrui") && def->getNumOperands() == 2) {
     const char* fn = (nm == "arith.shli") ? "logical_left_shift" : "logical_right_shift";
-    return std::string(fn) + "(" + buildExpr(def->getOperand(0), d + 1) + ", " + buildExpr(def->getOperand(1), d + 1) +
-           ")";
+    // The operand's own C++ type is not the Fortran kind: an integer convert is transparent, so the cast restores the
+    // width the unsigned shift runs in. Only int32 and int64 are casts in every expression context, interstate
+    // included.
+    auto resT = def->getResult(0).getType();
+    std::string operand = buildExpr(def->getOperand(0), d + 1);
+    if (resT.isInteger(32) || resT.isInteger(64)) operand = (resT.isInteger(32) ? "int32(" : "int64(") + operand + ")";
+    return std::string(fn) + "(" + operand + ", " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Integer Fortran MOD lowers to ``arith.remsi`` / ``arith.remui``: the SDFG's truncated ``FtnMod``.
