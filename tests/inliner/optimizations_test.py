@@ -1147,6 +1147,135 @@ end subroutine main
     assert [line.strip() for line in got.splitlines() if "dummy =" in line] == [f"dummy = {v}" for v in want.values()]
 
 
+def test_exploit_locally_constant_not_kept_after_do():
+    """
+    Tests that a do block's writes are unknown after it, since it may run zero times.
+    """
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main(n, r, s)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(out) :: r, s
+  real :: x
+  integer :: i, j
+
+  x = 1.
+  do i=1, n
+    x = 14.4
+  end do
+  r = x
+
+  x = 1.
+  s = 0.
+  do i=1, n
+    do j=1, n - 1
+      x = 2.
+    end do
+    s = s + x
+  end do
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    ast = parse_and_improve(sources)
+    ast = optimizations.exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main(n, r, s)
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: n
+  REAL, INTENT(OUT) :: r, s
+  REAL :: x
+  INTEGER :: i, j
+  x = 1.
+  DO i = 1, n
+    x = 14.4
+  END DO
+  r = x
+  x = 1.
+  s = 0.
+  DO i = 1, n
+    DO j = 1, n - 1
+      x = 2.
+    END DO
+    s = s + x
+  END DO
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def folded_result(body: str) -> str:
+    sources, _ = SourceCodeBuilder().add_file(body).check_with_gfortran().get()
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    (line,) = [line.strip() for line in got.split("\n") if line.strip().startswith("x =")]
+    return line
+
+
+def test_exploit_locally_constant_pointer_keeps_its_variable_subscript():
+    """``ptr`` stays bound to the element chosen at ``=>``, whatever ``i`` becomes."""
+    line = folded_result("""
+subroutine main(n, x)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(out) :: x
+  real, target :: arr(4)
+  real, pointer :: ptr
+  integer :: i
+  arr = 1.0
+  i = n
+  ptr => arr(i)
+  i = i + 1
+  x = ptr
+end subroutine main
+""")
+    assert line == "x = ptr"
+
+
+def test_exploit_locally_constant_not_kept_across_a_call():
+    """The callee may write a bare actual argument."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v
+  v = 1.
+  call f(v)
+  x = v
+contains
+  subroutine f(b)
+    real, intent(inout) :: b
+    b = 7.
+  end subroutine f
+end subroutine main
+""")
+    assert line == "x = v"
+
+
+def test_exploit_locally_constant_component_not_kept_after_whole_struct_write():
+    """Assigning the whole struct replaces every component."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type t
+    real :: a
+  end type t
+  type(t), intent(in) :: u
+  real, intent(out) :: x
+  type(t) :: s
+  s % a = 1.
+  s = u
+  x = s % a
+end subroutine main
+""")
+    assert line == "x = s % a"
+
+
 if __name__ == "__main__":
     test_constant_resolving_expressions()
     test_constant_expression_replacement()
@@ -1264,3 +1393,7 @@ end subroutine main
     assert "PRESENT(opt_start_level)" in got, got
     assert "start_level = 1" in got, got
     assert ".TRUE." not in got, got
+    test_exploit_locally_constant_not_kept_after_do()
+    test_exploit_locally_constant_pointer_keeps_its_variable_subscript()
+    test_exploit_locally_constant_not_kept_across_a_call()
+    test_exploit_locally_constant_component_not_kept_after_whole_struct_write()

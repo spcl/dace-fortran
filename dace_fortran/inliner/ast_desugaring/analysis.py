@@ -1350,7 +1350,8 @@ def track_local_consts(
 
     def _integrate_subresults(tp: dict[ConstKey, types.LITERAL_TYPES], tm: set[ConstKey]) -> None:
         assert not (tm & tp.keys())
-        for k in tm:
+        # A write to a whole root covers its components
+        for k in tm | {k for k in plus if isinstance(k, RootComponent) and k.root in tm}:
             if k in plus:
                 del plus[k]
             minus.add(k)
@@ -1537,7 +1538,11 @@ def track_local_consts(
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
-        if lspec and ltyp and ltyp.pointer:
+        # A subscript binds here, so a later use must not re-evaluate a variable one
+        subscripts = walk(walk(rv, f03.Section_Subscript_List), f03.Name)
+        if lspec and any(const_eval_basic_type(sub, alias_map) is None for sub in subscripts):
+            _integrate_subresults({}, {lspec})
+        elif lspec and ltyp and ltyp.pointer:
             plus[lspec] = rv
             if lspec in minus:
                 minus.remove(lspec)
@@ -1619,18 +1624,8 @@ def track_local_consts(
                 op, alias_map, {k: v for k, v in plus.items() if k not in net_tpm}, net_tpm | minus
             )
             _integrate_subresults(tp, tm)
-
-        _, loop_ctl = do_stmt.children
-        _, loop_var, _, _ = loop_ctl.children
-        if loop_var:
-            loop_var, _ = loop_var
-            assert isinstance(loop_var, f03.Name)
-            loop_var_spec = search_real_local_alias_spec(loop_var, alias_map)
-            # An unresolvable loop variable (externalized scope) is not a tracked
-            # local -- there is nothing to mark non-constant, so skip it.
-            if loop_var_spec:
-                loop_var_spec = ident_spec(alias_map[loop_var_spec])
-                _integrate_subresults({}, {loop_var_spec})
+        # A zero-trip loop keeps the old values, so the body's writes and the iterator are unknown here.
+        _integrate_subresults({}, net_tpm)
     elif isinstance(
         node,
         (
@@ -1709,6 +1704,9 @@ def track_local_consts(
         args = args.children if args else tuple()
         for a in args:
             tp, tm = track_local_consts(a, alias_map)
+            loc = search_real_local_alias_spec(a, alias_map) if isinstance(a, f03.Name) else None
+            if loc and not isinstance(node, f03.Intrinsic_Function_Reference):
+                tm.add(ident_spec(alias_map[loc]))  # The callee may write its actual
             _integrate_subresults({}, tm | tp.keys())
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")
