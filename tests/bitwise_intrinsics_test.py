@@ -64,6 +64,22 @@ end subroutine
         assert int(o_negx[0]) == int(fortran_ishft(-100, -2))
 
 
+def test_ishft_integer8_with_literal_shift(tmp_path: Path):
+    """The 64-bit operand and the literal shift differ in C++ type, and both directions must compile."""
+    src = """
+subroutine probe_ishft8(x, out)
+  integer(8), intent(in)  :: x
+  integer(8), intent(out) :: out(2)
+  out(1) = ishft(x, 3)
+  out(2) = ishft(x, -1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_ishft8").build()
+    out = np.zeros(2, dtype=np.int64)
+    sdfg(x=np.int64(10), out=out)
+    assert out.tolist() == [80, 5]
+
+
 def test_bit_query_and_extract(tmp_path: Path):
     """``btest(x, p)`` and ``ibits(x, p, n)``  --  bit query + slice extract."""
     src = """
