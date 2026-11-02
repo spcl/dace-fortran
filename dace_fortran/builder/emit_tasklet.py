@@ -452,8 +452,7 @@ def emit_scalar_assign(builder: SDFGBuilder, state: SDFGState, target: str, valu
         _val_toks = _ident_tokens(src_name)
         _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars) | set(builder.symbols)))
         if not _reads_data:
-            assert tgt_var is not None
-            dims = tgt_var.shape_symbols
+            dims = state.sdfg.arrays[target].shape
             w = state.add_access(target)
             cache = builder.access_caches.get(state)
             if cache is not None:
