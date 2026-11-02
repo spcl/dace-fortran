@@ -67,5 +67,8 @@ class BindOmpThreadCount(ppl.Pass):
         )
         first.add_edge(tasklet, "__out", first.add_write(scalar), None, dace.Memlet(f"{scalar}[0]"))
 
-        sdfg.symbols[self.symbol] = dace.int32
+        if self.symbol in sdfg.symbols:
+            sdfg.symbol_repo.set_type(self.symbol, dace.int32)
+        else:
+            sdfg.add_symbol(self.symbol, dace.int32)
         return scalar
