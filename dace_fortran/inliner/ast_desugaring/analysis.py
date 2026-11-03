@@ -1621,11 +1621,11 @@ def track_local_consts(
         do_ops = node.children[1:-1]
         has_pointer_asgns = bool(walk(node, f03.Pointer_Assignment_Stmt))
 
+        # Everything updated anywhere in the body is not constant outside the loop.
         net_tpm: set[ConstKey] = set()
-        for op in do_ops:
-            tp, tm = track_local_consts(op, alias_map, {}, set())
-            net_tpm.update(tp.keys())
-            net_tpm.update(tm)
+        tp, tm = track_local_consts(do_ops, alias_map, {}, set())
+        net_tpm.update(tp.keys())
+        net_tpm.update(tm)
         loop_control = ast_utils.singular(ast_utils.children_of_type(do_stmt, f03.Loop_Control))
         _, cntexpr, _, _ = loop_control.children
         if cntexpr:
