@@ -675,32 +675,53 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
         sdfg.symbol_repo.set_type(target, dtype)
 
 
+def initial_values(v: VarLike) -> Any:
+    """The initial data of ``v`` per element, as a flat array; the bridge sends a complex element as (re, im)."""
+    import numpy as np
+
+    data = np.asarray(v.const_data, dtype=np.float64)
+    return data[::2] + 1j * data[1::2] if v.dtype.startswith("complex") else data
+
+
+def initial_value_text(value: Any) -> str:
+    """``value`` of :func:`initial_values` as tasklet source."""
+    return repr(complex(value)) if value.dtype.kind == "c" else repr(float(value))
+
+
 def refuse_extent_writes(builder: SDFGBuilder) -> None:
-    """Refuse a body that assigns a symbol an explicit extent names.
+    """Refuse a body that assigns a symbol an explicit extent names while that array is live.
 
     Fortran fixes those bounds at entry, while a descriptor names the live symbol, so its strides would follow the
-    assignment. An allocatable is exempt: its extents are fixed by the ``ALLOCATE``, tracked apart from the name.
+    assignment. A dummy is live from entry; a local from its first access, as one declared in a ``BLOCK`` or an inlined
+    callee takes its extent after the assignment. An allocatable is exempt: its extents are fixed by the ``ALLOCATE``,
+    tracked apart from the name.
 
     :raises NotImplementedError: naming the symbol and the array.
     """
+    accessed: set[str] = set()
 
-    def assigned(nodes: Sequence[NodeLike]) -> set[str]:
-        names = {c.target for c in nodes if c.kind == "assign" and c.target in builder.symbols}
+    def refuse_written(symbol: str) -> None:
+        for v in builder.arrays.values():
+            # A reallocation's buffer ``<x>_alloc<N>`` shares the companion of ``<x>``.
+            base = re.sub(r"_alloc\d+$", "", v.fortran_name)
+            allocatable = v.module_origin_allocatable or f"{base}_allocated" in builder.symbols
+            live = v.intent != "" or v.fortran_name in accessed
+            names = re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols))
+            if live and symbol in names and v.role == "array" and not allocatable:
+                raise NotImplementedError(
+                    f"assignment to ['{symbol}'] in the body: extent of explicit-shape array {v.fortran_name!r}, "
+                    "whose bounds Fortran fixes at entry. Assign a copy of the extent instead."
+                )
+
+    def visit(nodes: Sequence[NodeLike]) -> None:
         for c in nodes:
-            names |= assigned(c.children) | assigned(c.else_children)
-        return names
+            accessed.update(a.array_name for a in c.accesses or [])
+            if c.kind == "assign" and c.target in builder.symbols:
+                refuse_written(c.target)
+            visit(c.children)
+            visit(c.else_children)
 
-    written = assigned(builder.ast)
-    for v in builder.arrays.values():
-        hit = written.intersection(re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)))
-        # A reallocation's buffer ``<x>_alloc<N>`` shares the companion of ``<x>``.
-        base = re.sub(r"_alloc\d+$", "", v.fortran_name)
-        allocatable = v.module_origin_allocatable or f"{base}_allocated" in builder.symbols
-        if hit and v.role == "array" and not allocatable:
-            raise NotImplementedError(
-                f"assignment to {sorted(hit)} in the body: extent of explicit-shape array {v.fortran_name!r}, "
-                "whose bounds Fortran fixes at entry. Assign a copy of the extent instead."
-            )
+    visit(builder.ast)
 
 
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
@@ -1504,7 +1525,7 @@ class SDFGBuilder:
                 continue
             desc = sdfg.arrays[v.fortran_name]
             np_dtype = desc.dtype.as_numpy_dtype()
-            arr = np.asarray(v.const_data, dtype=np.float64).astype(np_dtype)
+            arr = initial_values(v).astype(np_dtype)
             # Scalar (rank 0) globals  --  e.g. ``real :: bob = 1`` at
             # module scope  --  pass through as a Python scalar so DaCe's
             # ``framecode.generate_constants`` writes a
@@ -1521,7 +1542,8 @@ class SDFGBuilder:
                 # booleans pass through as Python scalars (round-trip- and
                 # ``isinstance(..., int)``-friendly).
                 val = arr.reshape(())[()]
-                sdfg.add_constant(v.fortran_name, val if np.issubdtype(arr.dtype, np.floating) else val.item(), desc)
+                is_real = np.issubdtype(arr.dtype, np.inexact)
+                sdfg.add_constant(v.fortran_name, val if is_real else val.item(), desc)
                 continue
             # Array globals: reshape from row-major doubles transport
             # to the descriptor's declared shape.
@@ -1559,9 +1581,9 @@ class SDFGBuilder:
                 continue
             seeded.add(v.fortran_name)
             if v.rank == 0:
-                val = v.const_data[0]
+                val = initial_values(v)[0]
                 is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
-                expr = str(round(val)) if is_int else repr(float(val))
+                expr = str(round(val)) if is_int else initial_value_text(val)
                 if v.fortran_name in self.symbols:
                     symbol_inits.append((v.fortran_name, expr))
                 elif v.fortran_name in self.scalars:
@@ -1576,7 +1598,7 @@ class SDFGBuilder:
         for v in array_inits:
             desc = sdfg.arrays[v.fortran_name]
             shape = tuple(int(d) for d in desc.shape)
-            arr = np.asarray(v.const_data, dtype=np.float64)
+            arr = initial_values(v)
             if arr.size != int(np.prod(shape)):
                 continue
             # Make it a writable transient (a kwarg would force the caller to
@@ -1594,7 +1616,7 @@ class SDFGBuilder:
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
-                expr = str(round(float(val))) if is_int else repr(float(val))
+                expr = str(round(float(val))) if is_int else initial_value_text(val)
                 tname = "init_{}_{}".format(v.fortran_name, "_".join(str(i) for i in idx))
                 t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, f"_o = {expr}")
                 ctx.cur.add_edge(

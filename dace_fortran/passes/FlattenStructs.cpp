@@ -4434,6 +4434,10 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
                        fir::FortranVariableFlagsAttr::get(ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer
                                                                          : fir::FortranVariableFlagsEnum::allocatable));
         }
+      } else if (auto parent = argDecl.getFortranAttrs();
+                 !memberIsArray && parent && bitEnumContainsAny(*parent, fir::FortranVariableFlagsEnum::intent_in)) {
+        attrs.append("fortran_attrs",
+                     fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::intent_in));
       }
       attrs.append(declareSegments(b, /*hasShape=*/shape != nullptr));
 
@@ -4609,6 +4613,9 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         bool const isPointer = mlir::isa<fir::PointerType>(box.getEleTy());
         fortranAttrs = fir::FortranVariableFlagsAttr::get(
             ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer : fir::FortranVariableFlagsEnum::allocatable);
+      } else if (auto parent = argDecl.getFortranAttrs();
+                 parent && bitEnumContainsAny(*parent, fir::FortranVariableFlagsEnum::intent_in)) {
+        fortranAttrs = fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::intent_in);
       }
 
       llvm::SmallVector<mlir::Value, 2> operands{newArg};
