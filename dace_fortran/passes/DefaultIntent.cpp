@@ -68,8 +68,9 @@ void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
       auto* user = use.getOwner();
       bool const store = mlir::isa<fir::StoreOp>(user) && use.getOperandNumber() == 1;
       bool const assign = mlir::isa<hlfir::AssignOp>(user) && use.getOperandNumber() == 1;
-      reads |= store || !assign;  // a DO variable stores through fir.store and is a symbol even when unread
-      if (!store && !assign && !mlir::isa<fir::CallOp>(user)) continue;
+      bool const call = mlir::isa<fir::CallOp>(user);
+      reads |= store || !(assign || call);  // a DO variable stores through fir.store and is a symbol even when unread
+      if (!store && !assign && !call) continue;
       writes = true;
       auto* top = entry.findAncestorOpInBlock(*user);
       if (top && (!takeover || top->isBeforeInBlock(takeover))) takeover = top;

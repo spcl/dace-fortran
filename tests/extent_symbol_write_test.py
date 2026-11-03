@@ -9,15 +9,19 @@ from tests._util import build_sdfg
 
 
 @pytest.mark.parametrize(
-    "declaration",
-    ["real(8), intent(inout) :: a(n, 3)", "real(8), intent(inout) :: a(4, 3)\n  real(8) :: w(n, 2)"],
+    ("declaration", "access"),
+    [
+        ("real(8), intent(inout) :: a(n, 3)", "a(1, 1) = 1.0d0"),
+        ("real(8), intent(inout) :: a(4, 3)\n  real(8) :: w(n, 2)", "w(1, 1) = 1.0d0"),
+    ],
     ids=["dummy", "automatic"],
 )
-def test_writing_an_extent_symbol_is_refused(tmp_path, declaration):
+def test_writing_an_extent_symbol_is_refused(tmp_path, declaration, access):
     src = f"""
 subroutine shrink(n, a)
   integer, intent(inout) :: n
   {declaration}
+  {access}
   n = n - 1
   a(1, 2) = 5.0d0
 end subroutine
