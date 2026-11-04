@@ -770,6 +770,15 @@ subroutine main()
   ! TODO: `i` should be known at this point, since do loop is deterministic.
   i = i + 1
 
+  ! A locally constant set in the body of a loop carries to the later statements
+  ! of the same body (but not past the loop).
+  do i=1, 5
+    out = 14.4
+    if (cond) then
+      out = out * i
+    end if
+  end do
+
   ! A simple do-while loop with `i` as loop variable, `i` becomes unknown.
   i = 0
   do while (i < 10)
@@ -844,6 +853,12 @@ SUBROUTINE main
     out = out + 1.
   END DO
   i = i + 1
+  DO i = 1, 5
+    out = 14.4
+    IF (.TRUE.) THEN
+      out = 14.4 * i
+    END IF
+  END DO
   i = 0
   DO WHILE (i < 10)
     out = out + 1
