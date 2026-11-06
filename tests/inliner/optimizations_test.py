@@ -1533,3 +1533,186 @@ end module m
     test_exploit_locally_constant_component_not_kept_after_whole_struct_write()
     test_real4_parameter_element_keeps_its_value_when_widened()
     test_real_value_in_an_integer_parameter_array_stays_a_read()
+
+
+def test_exploit_locally_constant_array_elements():
+    """A scalar element written a constant is substituted where it is read."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main
+  implicit none
+  integer :: iarr(4) = 0
+  real :: rarr(4, 4) = 0.0
+
+  iarr(2) = 7
+  iarr(3) = iarr(2)
+
+  rarr(1, 1) = 3.2
+  rarr(2:3, 1) = rarr(1, 1)
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  INTEGER :: iarr(4) = 0
+  REAL :: rarr(4, 4) = 0.0
+  iarr(2) = 7
+  iarr(3) = 7
+  rarr(1, 1) = 3.2
+  rarr(2 : 3, 1) = 3.2
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_struct_element_components():
+    """Elements and nested indexed components of a local struct are substituted."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main
+  implicit none
+  type bar
+    integer :: iarr(4) = 0
+    real :: rarr(4, 4) = 0.0
+    real :: scalar
+  end type bar
+  type foo
+    integer :: iarr(6) = 0
+    type(bar) :: baz(3)
+  end type foo
+  type(foo) :: quux
+
+  quux % iarr(2) = 7
+  quux % iarr(1) = quux % iarr(2)
+
+  quux % baz(3) % scalar = 6.8
+  quux % baz(2) % iarr(4) = 9
+  quux % baz(2) % rarr(3, 2) = 3.2
+  quux % baz(1) % rarr(1, 1) = quux % baz(3) % scalar
+  quux % iarr(3) = quux % baz(2) % iarr(4)
+  quux % baz(1) % rarr(2, 1) = quux % baz(2) % rarr(3, 2)
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  TYPE :: bar
+    INTEGER :: iarr(4) = 0
+    REAL :: rarr(4, 4) = 0.0
+    REAL :: scalar
+  END TYPE bar
+  TYPE :: foo
+    INTEGER :: iarr(6) = 0
+    TYPE(bar) :: baz(3)
+  END TYPE foo
+  TYPE(foo) :: quux
+  quux % iarr(2) = 7
+  quux % iarr(1) = 7
+  quux % baz(3) % scalar = 6.8
+  quux % baz(2) % iarr(4) = 9
+  quux % baz(2) % rarr(3, 2) = 3.2
+  quux % baz(1) % rarr(1, 1) = 6.8
+  quux % iarr(3) = 9
+  quux % baz(1) % rarr(2, 1) = 3.2
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_element_kept_across_a_sibling_write():
+    """Writing one element leaves the constants of the others standing."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(3) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = 7.0"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_variable_subscript_write():
+    """``arr(i) = ...`` may overwrite any element, so no element keeps its value."""
+    line = folded_result("""
+subroutine main(n, v, x)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(n) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_section_write():
+    """A section write reaches every element it spans."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(1:3) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_whole_array_write():
+    """Assigning the whole array replaces its elements."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_containing_component_write():
+    """Writing a struct array component replaces the elements inside it."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz(3)
+  end type foo
+  type(foo), intent(in) :: u
+  integer, intent(out) :: x
+  type(foo) :: s
+  s % baz(2) % iarr(4) = 9
+  s % baz(2) = u % baz(1)
+  x = s % baz(2) % iarr(4)
+end subroutine main
+""")
+    assert line == "x = s % baz(2) % iarr(4)"
