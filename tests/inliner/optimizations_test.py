@@ -1716,3 +1716,62 @@ subroutine main(u, x)
 end subroutine main
 """)
     assert line == "x = s % baz(2) % iarr(4)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_whole_component_array_write():
+    """``quux % iarr = ...`` replaces every element of that component."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type foo
+    integer :: iarr(4)
+  end type foo
+  type(foo) :: quux
+  quux % iarr(2) = 7
+  quux % iarr = 0
+  x = quux % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % iarr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_containing_component_overwrite():
+    """``quux % baz = ...`` replaces the whole component, elements and all."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz
+  end type foo
+  type(foo), intent(in) :: u
+  integer, intent(out) :: x
+  type(foo) :: quux
+  quux % baz % iarr(2) = 7
+  quux % baz = u % baz
+  x = quux % baz % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % baz % iarr(2)"
+
+
+def test_exploit_locally_constant_element_survives_a_whole_component_write_to_another():
+    """A whole-component write covers only the component it names."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type foo
+    integer :: iarr(4)
+    integer :: jarr(4)
+  end type foo
+  type(foo) :: quux
+  quux % iarr(2) = 7
+  quux % jarr = 0
+  x = quux % iarr(2)
+end subroutine main
+""")
+    assert line == "x = 7"

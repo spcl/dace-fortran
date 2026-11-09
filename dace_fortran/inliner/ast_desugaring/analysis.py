@@ -1352,8 +1352,12 @@ PathStep = Union[str, tuple[int, ...], _AnyStep]
 class IndexedKey:
     """An element of a local array, or of an array component of a local struct.
 
-    ``arr(2)`` is ``IndexedKey(arr_spec, ((2,),))`` and ``quux % baz(2) % iarr(4)``
-    is ``IndexedKey(quux_spec, ('baz', (2,), 'iarr', (4,)))``.
+    ``arr(2)`` is ``IndexedKey(arr_spec, ('arr', (2,)))`` and
+    ``quux % baz(2) % iarr(4)`` is ``IndexedKey(quux_spec, ('baz', (2,), 'iarr', (4,)))``.
+    A bare ``Part_Ref`` repeats its own name in the path, a ``Data_Ref`` starts
+    at its first component; only the former ever meets a whole-root write,
+    which the invalidation in ``_integrate_subresults`` handles by root rather
+    than by path.
 
     ``path`` is kept flat rather than nested per component, so that one key's
     path being a prefix of another's means exactly "writes to the first reach
@@ -1387,6 +1391,27 @@ def _is_subscript_step(step: PathStep) -> bool:
 def _step_covers(written: PathStep, tracked: PathStep) -> bool:
     """Whether a written step may reach a tracked step in the same position."""
     return isinstance(written, _AnyStep) or isinstance(tracked, _AnyStep) or written == tracked
+
+
+def _written_step_covers(written: ConstKey, tracked: IndexedKey) -> bool:
+    """Whether the write ``written`` may reach the element ``tracked`` holds.
+
+    An element write covers the tracked path when its own path is a prefix of
+    it. A whole-component write covers it when the component it names is the
+    first step of the tracked path, since the component spec ends in the
+    component's own name."""
+    if isinstance(written, IndexedKey):
+        if written.root != tracked.root or len(written.path) > len(tracked.path):
+            return False
+        return all(_step_covers(ws, ts) for ws, ts in zip(written.path, tracked.path, strict=False))
+    if isinstance(written, RootComponent):
+        # ``quux % baz = ...`` writes the whole of ``baz``, whichever element
+        # was tracked under it.
+        if written.root != tracked.root:
+            return False
+        first = tracked.path[0] if tracked.path else None
+        return isinstance(first, str) and written.component[-1].lower() == first
+    return False
 
 
 class LocalConsts(NamedTuple):
@@ -1505,19 +1530,17 @@ def track_local_consts(
             A write to a whole root covers every component and element rooted
             there. A write to one element or component also covers the keys
             below it -- writing ``quux % baz(2)`` replaces the whole component,
-            and with it ``quux % baz(2) % iarr(4)``."""
+            and with it ``quux % baz(2) % iarr(4)``.
+
+            A :class:`RootComponent` write is a whole-component write --
+            ``quux % iarr = ...`` replaces every element of that component --
+            so it covers an element key whose path begins with that component,
+            and likewise ``quux % baz = ...`` covers ``quux % baz(2) % iarr(4)``."""
             if isinstance(tracked, (RootComponent, IndexedKey)) and tracked.root in tm:
                 return True
             if not isinstance(tracked, IndexedKey):
                 return False
-            return any(
-                isinstance(w, IndexedKey)
-                and w.root == tracked.root
-                and len(w.path) <= len(tracked.path)
-                # Both operands are already length-equal by the guard above.
-                and all(_step_covers(ws, ts) for ws, ts in zip(w.path, tracked.path, strict=False))
-                for w in tm
-            )
+            return any(_written_step_covers(w, tracked) for w in tm)
 
         covered = {k for k in plus if any(_covers(w, k) for w in tm)}
         # A pointer bound its subscripts at ``=>``, so a write to one ends the pointer's alias
