@@ -1375,6 +1375,141 @@ end subroutine main
     assert line == "x = s % a"
 
 
+def test_exploit_locally_constant_not_kept_across_a_call_with_a_subscripted_actual():
+    """A subscripted actual hands the callee that element, so only that element's
+    constant dies -- dropping the whole root would be both unsound (the root key
+    does not cover the element key) and needlessly pessimistic."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v(2)
+  v(1) = 1.
+  v(2) = 2.
+  call f(v(1))
+  x = v(1)
+end subroutine main
+""")
+    assert line == "x = v(1)"
+
+
+def test_exploit_locally_constant_sectioned_actual_invalidates_the_elements_beneath_it():
+    """A sectioned actual (``call f(v(2, :))``) hands the callee a view of a whole
+    dimension, so the callee may write any element of it.
+
+    The write key must therefore carry a wildcard for every dimension the actual
+    leaves open; keying it by the subscripts literally written would leave the
+    constant folded for ``v(2, 3)`` alive across the call."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  integer :: v(2, 3)
+  v(2, 3) = 5
+  call f(v(2, :))
+  x = v(2, 3)
+end subroutine main
+""")
+    assert line == "x = v(2, 3)"
+
+
+def test_exploit_locally_constant_pointer_target_substituted_in_a_sectioned_actual():
+    """An element or section of a locally-constant pointer keeps being resolved to
+    its target when passed as an actual.
+
+    Suppressing *value* folding for writable actuals must not suppress *pointer*
+    resolution: ``vp(:, :, k)`` is an actual of the pointer ``vp``, and its target
+    ``w(:, :, k)`` is what the committed ICON-O TU carries. Only a bare Name
+    actual (whose dummy may itself be a POINTER) is left untouched."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module m
+  implicit none
+  real, target :: w(3, 3, 2) = 0.
+contains
+  subroutine main(x)
+    real, intent(out) :: x
+    real, pointer :: vp(:, :, :)
+    integer :: k = 1
+    vp => w
+    call sink(vp(:, 2, k))
+  end subroutine main
+  subroutine sink(a)
+    real, intent(in) :: a(:)
+    print *, a(1)
+  end subroutine sink
+end module m
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    assert "CALL sink(w(:, 2, k))" in got
+    assert "CALL sink(vp" not in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_sibling_element_survives_a_subscripted_actual():
+    """The call writes ``v(1)`` only; ``v(2)`` is untouched and may still fold."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v(2)
+  v(1) = 1.
+  v(2) = 2.
+  call f(v(1))
+  x = v(2)
+end subroutine main
+""")
+    assert line == "x = 2.0"
+
+
+def test_exploit_locally_constant_broadcast_does_not_alias_a_multidim_element():
+    """Keying an element by one step per dimension must match the broadcast's
+    key: ``quux % marrs % scalar = 7`` overwrites all nine elements of the 2-D
+    array, so the constant folded for ``marrs(2, 3)`` must go."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: marrs(3, 3)
+  end type foo
+  type(foo) :: quux
+  quux % marrs(2, 3) % scalar = 5
+  quux % marrs % scalar = 7
+  x = quux % marrs(2, 3) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % marrs(2, 3) % scalar"
+
+
+def test_exploit_locally_constant_row_section_does_not_alias_a_multidim_element():
+    """A sectioned broadcast (``marrs(2, :)``) reaches ``marrs(2, 3)`` too."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: marrs(3, 3)
+  end type foo
+  type(foo) :: quux
+  quux % marrs(2, 3) % scalar = 5
+  quux % marrs(2, :) % scalar = 7
+  x = quux % marrs(2, 3) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % marrs(2, 3) % scalar"
+
+
 def test_real4_parameter_element_keeps_its_value_when_widened():
     """A real(8) array built from single-precision literals holds their exact value, not their shortest decimal."""
     line = folded_result(

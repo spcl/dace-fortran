@@ -8,7 +8,7 @@ import contextlib
 import math
 import operator
 import sys
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from copy import copy
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Union
@@ -1422,16 +1422,6 @@ def _written_step_covers(written: ConstKey, tracked: ConstKey) -> bool:
     return all(_step_covers(ws, ts) for ws, ts in zip(written.path, tracked.path, strict=False))
 
 
-def _subscripts_reach_one_value(typ: types.TYPE_SPEC, subscripts: Sequence[Base]) -> bool:
-    """Whether ``subscripts`` select one scalar out of ``typ``.
-
-    A section (``2:3``) or a dimension left subscript-free denotes an array
-    rather than a single element."""
-    if any(isinstance(s, f03.Subscript_Triplet) for s in subscripts):
-        return False
-    return len(typ.shape) <= len(subscripts)
-
-
 def _write_path(
     dref: Union[f03.Part_Ref, f03.Data_Ref], scope_spec: types.SPEC, alias_map: types.SPEC_TABLE
 ) -> tuple[types.SPEC, tuple[PathStep, ...]] | None:
@@ -1577,22 +1567,25 @@ def track_local_consts(
         path: list[PathStep] = []
 
         def _part_step(pr: f03.Part_Ref) -> bool:
-            """Append ``name(subscripts)`` to ``path``: its name, then its subscripts."""
+            """Append ``name(subscripts)`` to ``path``: its name, then one step
+            per subscript dimension.
+
+            One step per dimension -- ``('marr', (3,), (4,))`` for
+            ``marr(3, 4)`` -- not one tuple holding them all: this path is
+            matched step-wise against the one ``_write_path`` builds for a
+            broadcast, which fans the dimensions out the same way. Keeping the
+            two in one form is what lets a whole-array write cover the element
+            keys below it in any rank."""
             name, subs = pr.children
             if not isinstance(name, f03.Name) or subs is None:
                 return False
-            elements: list[int] = []
-            subscripts: tuple[int, ...] | None = None
+            path.append(name.string.lower())
             for s in subs.children:
                 if isinstance(s, f03.Subscript_Triplet):
-                    break  # A section, not one element.
+                    path.append(_ANY_STEP)  # A section: may reach any element.
+                    continue
                 sv = const_eval_basic_type(s, alias_map)
-                if sv is None or not types.is_numpy_int(sv):
-                    break
-                elements.append(int(sv))
-            else:
-                subscripts = tuple(elements)
-            path.extend((name.string.lower(), subscripts if subscripts is not None else _ANY_STEP))
+                path.append(_ANY_STEP if sv is None or not types.is_numpy_int(sv) else (int(sv),))
             return True
 
         if isinstance(ref, f03.Part_Ref):
@@ -2018,18 +2011,20 @@ def track_local_consts(
         tp, tm = track_local_consts(val, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, (f03.Function_Reference, f03.Call_Stmt, f03.Intrinsic_Function_Reference)):
-        # TODO: For now, we assume that all arguments are writable.
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
-            # A bare Name actual argument is left untouched (mirror the
-            # _inject_knowns call-argument handler): substituting a pointer
-            # variable with its target breaks a POINTER dummy -- the actual
-            # must itself be a pointer, not the pointer's target expression --
-            # and value-substituting an arg the callee writes (INTENT OUT/INOUT)
-            # would be wrong.
+            # TODO: For now, we assume that all arguments are writable -- they may
+            # be INTENT OUT/INOUT and the callee may store into them.
             if not isinstance(a, f03.Name):
-                _inject_knowns(a)
+                # ``value=False`` is what makes this safe for an actual the callee
+                # may write (INTENT OUT/INOUT): a Name actual is left entirely
+                # symbolic, and inside a Part_Ref/Data_Ref actual only the
+                # subscripts fold -- ``call f(v(1))`` must not become ``call
+                # f(1.0)``, which writes a literal instead of storage. Pointer
+                # substitution stays on: ``p(:,:,k)`` as an actual is resolved to
+                # its target, as the committed ICON TU expects.
+                _inject_knowns(a, value=False, pointer=True)
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
@@ -2037,6 +2032,23 @@ def track_local_consts(
             loc = search_real_local_alias_spec(a, alias_map) if isinstance(a, f03.Name) else None
             if loc and not isinstance(node, f03.Intrinsic_Function_Reference):
                 tm.add(ident_spec(alias_map[loc]))  # The callee may write its actual
+            elif isinstance(a, (f03.Part_Ref, f03.Data_Ref)) and not isinstance(
+                node, f03.Intrinsic_Function_Reference
+            ):
+                # A subscripted actual (``CALL f(in_stride(1))``) hands the callee
+                # that element, so the callee reaches it through the element
+                # key -- not the whole root. Dropping the root spec instead would
+                # leave a constant folded for ``in_stride(1)`` alive across the
+                # call, and an INTENT(OUT) dummy (``util_stride_1d``) overwrites
+                # it unconditionally.
+                # ``_write_path``, not ``_written_path``: the dummy may be declared
+                # without the actual's subscripts (``a(:)`` for ``marrs(2)``) and
+                # write any element of a dimension the actual left open, so the
+                # key needs a wildcard per such dimension to cover them all.
+                actual_scope = search_scope_spec(a)
+                write = _write_path(a, actual_scope, alias_map) if actual_scope else None
+                if write is not None:
+                    tm.add(IndexedKey(*write))
             _integrate_subresults({}, tm | tp.keys())
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")
