@@ -1397,20 +1397,20 @@ def _written_step_covers(written: ConstKey, tracked: IndexedKey) -> bool:
     """Whether the write ``written`` may reach the element ``tracked`` holds.
 
     An element write covers the tracked path when its own path is a prefix of
-    it. A whole-component write covers it when the component it names is the
-    first step of the tracked path, since the component spec ends in the
-    component's own name."""
+    it. A whole-component write covers it when the component it names appears
+    as a step of the tracked path, since the component spec ends in the
+    component's own name -- ``quux % baz = ...`` names ``baz``, which is the
+    first step of ``('baz', 'iarr', (2,))``, while ``quux % baz % iarr = ...``
+    names ``iarr``, a later one."""
     if isinstance(written, IndexedKey):
         if written.root != tracked.root or len(written.path) > len(tracked.path):
             return False
         return all(_step_covers(ws, ts) for ws, ts in zip(written.path, tracked.path, strict=False))
     if isinstance(written, RootComponent):
-        # ``quux % baz = ...`` writes the whole of ``baz``, whichever element
-        # was tracked under it.
         if written.root != tracked.root:
             return False
-        first = tracked.path[0] if tracked.path else None
-        return isinstance(first, str) and written.component[-1].lower() == first
+        name = written.component[-1].lower()
+        return any(isinstance(step, str) and step == name for step in tracked.path)
     return False
 
 
@@ -1730,9 +1730,12 @@ def track_local_consts(
         if lspec and ltyp:
             rval = const_eval_basic_type(rv, alias_map)
             value = types.numpy_type_to_literal(rval) if rval is not None else None
-            # An indexed key always names a single element, so it holds a scalar
-            # even when the array it was cut from does not.
-            if value is not None and (not ltyp.shape or isinstance(lspec, IndexedKey)):
+            # An indexed key whose path ends in a subscript names a single
+            # element, so it holds a scalar even when the array it was cut from
+            # does not. One that ends in a component name -- ``quux % baz(2) % iarr``
+            # -- names a whole array or struct and holds no single value.
+            if value is not None and (not ltyp.shape or isinstance(lspec, IndexedKey)
+                                      and _is_subscript_step(lspec.path[-1])):
                 _integrate_subresults({lspec: value}, set())
             else:
                 _integrate_subresults({}, {lspec})

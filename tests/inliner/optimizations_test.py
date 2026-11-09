@@ -1775,3 +1775,71 @@ subroutine main(x)
 end subroutine main
 """)
     assert line == "x = 7"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_deep_whole_component_write():
+    """The component a write names may sit below the first path step."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz
+  end type foo
+  type(foo) :: quux
+  quux % baz % iarr(2) = 7
+  quux % baz % iarr = 0
+  x = quux % baz % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % baz % iarr(2)"
+
+
+def test_exploit_locally_constant_element_of_a_struct_array_element_not_kept():
+    """``quux % bazs(2) % iarr = ...`` replaces that array, elements and all."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % iarr(4) = 9
+  quux % bazs(2) % iarr = 0
+  x = quux % bazs(2) % iarr(4)
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % iarr(4)"
+
+
+def test_exploit_locally_constant_whole_component_array_write_is_not_a_scalar():
+    """``quux % bazs(2) % iarr = 9`` names a whole array, not one element.
+
+    Before the fix it was tracked as a scalar constant under the same key, so
+    reading the array back folded to the scalar -- right for this body, wrong
+    as soon as any element is read, and it kept ``7`` alive below ``iarr``.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % iarr(1) = 7
+  quux % bazs(2) % iarr = 9
+  x = quux % bazs(2) % iarr(1)
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % iarr(1)"
