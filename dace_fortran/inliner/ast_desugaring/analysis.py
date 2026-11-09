@@ -1475,7 +1475,7 @@ def _write_path(
         if not loc:
             return None
         root_spec = ident_spec(alias_map[loc])
-        path: list[PathStep] = []
+        path = []
         for comp in comps:
             if isinstance(comp, f03.Part_Ref):
                 name, subs = comp.children
@@ -1581,16 +1581,17 @@ def track_local_consts(
             name, subs = pr.children
             if not isinstance(name, f03.Name) or subs is None:
                 return False
-            subscripts: tuple[int, ...] | None = ()
+            elements: list[int] = []
+            subscripts: tuple[int, ...] | None = None
             for s in subs.children:
                 if isinstance(s, f03.Subscript_Triplet):
-                    subscripts = None  # A section, not one element.
-                    break
+                    break  # A section, not one element.
                 sv = const_eval_basic_type(s, alias_map)
                 if sv is None or not types.is_numpy_int(sv):
-                    subscripts = None
                     break
-                subscripts += (int(sv),)
+                elements.append(int(sv))
+            else:
+                subscripts = tuple(elements)
             path.extend((name.string.lower(), subscripts if subscripts is not None else _ANY_STEP))
             return True
 
