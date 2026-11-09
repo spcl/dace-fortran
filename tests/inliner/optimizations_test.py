@@ -1843,3 +1843,162 @@ subroutine main(x)
 end subroutine main
 """)
     assert line == "x = quux % bazs(2) % iarr(1)"
+
+
+def test_exploit_locally_constant_does_not_alias_sibling_components_of_one_type():
+    """Two components declared together as ``type(bar) :: baz, qux`` are distinct
+    variables, though both resolve to the same member spec ``bar % scalar``.
+
+    Keying a tracked component by that resolved spec conflated them, so the
+    second write overwrote the first's constant -- a silent wrong answer.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  quux % baz % scalar = 7
+  quux % qux % scalar = 3
+  x = quux % baz % scalar
+end subroutine main
+""")
+    assert line == "x = 7"
+
+
+def test_exploit_locally_constant_sibling_component_write_keeps_the_other():
+    """The reverse order must fold too: ``qux`` must not disturb ``baz``."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  quux % qux % scalar = 3
+  quux % baz % scalar = 7
+  x = quux % qux % scalar
+end subroutine main
+""")
+    assert line == "x = 3"
+
+
+def test_exploit_locally_constant_not_kept_under_a_whole_sibling_component_write():
+    """A whole-component write to one sibling replaces only that sibling."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  type(bar) :: u
+  quux % baz % scalar = 7
+  quux % baz = u
+  x = quux % baz % scalar
+end subroutine main
+""")
+    assert line == "x = quux % baz % scalar"
+
+
+def test_exploit_locally_constant_struct_array_broadcast_is_not_a_scalar():
+    """``quux % bazs % scalar = 7`` broadcasts over the elements of ``bazs``.
+
+    It stores one value per element, so it cannot be a single tracked constant:
+    treating it as one left ``7`` alive after ``quux % bazs(2) % scalar = 3``
+    and folded ``x = quux % bazs % scalar`` -- a whole array -- to the scalar 7.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x(3)
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs % scalar = 7
+  quux % bazs(2) % scalar = 3
+  x = quux % bazs % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs % scalar"
+
+
+def test_exploit_locally_constant_scalar_component_of_a_struct_array_element_is_kept():
+    """The broadcast may stay unfolded, but each element's own scalar still folds."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % scalar = 3
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = 3"
+
+
+def test_exploit_locally_constant_broadcast_drops_the_element_written_before_it():
+    """``quux % bazs % scalar = 7`` overwrites every element, including one
+    whose own constant was tracked -- so that element's constant must go."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % scalar = 3
+  quux % bazs % scalar = 7
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % scalar"
+
+
+def test_exploit_locally_constant_whole_struct_array_write_drops_its_elements():
+    """``quux % bazs = u`` replaces every element, subscripts and all."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  type(bar) :: u
+  quux % bazs(2) % scalar = 3
+  quux % bazs = u
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % scalar"
