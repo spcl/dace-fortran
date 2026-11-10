@@ -60,7 +60,8 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
                 if sym in referenced:
                     continue
                 if pat.match(sym):
-                    sdfg.symbols.pop(sym, None)
+                    if sym in sdfg.symbols:
+                        sdfg.remove_symbol(sym)
                     removed.add(sym)
 
         if self.recursive:
