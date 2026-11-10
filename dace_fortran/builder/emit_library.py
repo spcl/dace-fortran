@@ -1228,15 +1228,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             return complex(float(re_part), float(im_part))
         if name in ctx.sdfg.symbols:
             return _ds.symbol(name)
-        if name in ctx.sdfg.arrays:
-            desc = ctx.sdfg.arrays[name]
-            sym = f"__blas_{name}_{builder.nid()}"
-            ctx.sdfg.add_symbol(sym, desc.dtype)
-            # A length-1 LOCAL array is scalar-ised by the descriptor path
-            # (plain ``double beta;`` in generated code) -- ``beta[0]`` is then
-            # invalid C++.  Read a Scalar descriptor bare; subscript only true
-            # arrays (dummies / module arrays).
-            promotions[sym] = name if isinstance(desc, dace.data.Scalar) else f"{name}[0]"
+        if (expr := _element(name)) is not None:
+            data = _split(name)[0]
+            sym = f"__blas_{data}_{builder.nid()}"
+            ctx.sdfg.add_symbol(sym, ctx.sdfg.arrays[data].dtype)
+            promotions[sym] = expr
             return _ds.symbol(sym)
         ctx.sdfg.add_symbol(name, dace.float64)
         return _ds.symbol(name)
@@ -1264,11 +1260,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             pass
         if name in ctx.sdfg.symbols:
             return _ds.symbol(name)
-        if name in ctx.sdfg.arrays:
-            desc = ctx.sdfg.arrays[name]
-            sym = f"__blas_{name}_{builder.nid()}"
-            ctx.sdfg.add_symbol(sym, desc.dtype)
-            promotions[sym] = name if isinstance(desc, dace.data.Scalar) else f"{name}[0]"
+        if (expr := _element(name)) is not None:
+            data = _split(name)[0]
+            sym = f"__blas_{data}_{builder.nid()}"
+            ctx.sdfg.add_symbol(sym, ctx.sdfg.arrays[data].dtype)
+            promotions[sym] = expr
             return _ds.symbol(sym)
         raise NotImplementedError(f"{routine}: size argument {name!r} names no symbol or scalar")
 
@@ -1279,12 +1275,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         name: str
         start: str | None
 
-    def _operand(arg: str) -> _Operand:
-        """Split the bridge's ``name`` / ``name[i1, i2]`` (1-based start element) form; a non-literal start index is
-        staged into a fresh symbol on the BLAS state's inbound edge."""
+    def _split(arg: str) -> tuple[str, list[str]]:
+        """The bridge's ``name`` / ``name[i1, i2]`` (1-based element) form as the name and its index expressions."""
         name, _, rest = arg.partition("[")
         if not rest:
-            return _Operand(name, None)
+            return name, []
         indices, depth, cur = [], 0, ""
         for ch in rest[:-1]:
             depth += ch in "(["
@@ -1295,6 +1290,24 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             else:
                 cur += ch
         indices.append(cur.strip())
+        return name, indices
+
+    def _element(arg: str) -> str | None:
+        """An interstate-edge read of a data scalar or array element argument, or None when ``arg`` names no data."""
+        name, indices = _split(arg)
+        if name not in ctx.sdfg.arrays:
+            return None
+        # A length-1 LOCAL array is scalar-ised by the descriptor path (plain ``double beta;``): read it bare.
+        if isinstance(ctx.sdfg.arrays[name], dace.data.Scalar):
+            return name
+        return f"{name}[{', '.join(f'({i}) - 1' for i in indices) or 0}]"
+
+    def _operand(arg: str) -> _Operand:
+        """Split the bridge's ``name`` / ``name[i1, i2]`` (1-based start element) form; a non-literal start index is
+        staged into a fresh symbol on the BLAS state's inbound edge."""
+        name, indices = _split(arg)
+        if not indices:
+            return _Operand(name, None)
         zero_based = []
         for idx in indices:
             try:
@@ -1306,7 +1319,8 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 zero_based.append(sym)
         return _Operand(name, ", ".join(zero_based))
 
-    def _runtime_complex(name: str) -> bool:
+    def _runtime_complex(arg: str) -> bool:
+        name = _split(arg)[0]
         return name in ctx.sdfg.arrays and ctx.sdfg.arrays[name].dtype in (dace.complex64, dace.complex128)
 
     def _prepared(op: _Operand, conjugate: bool, scale: str | None) -> _Operand:
@@ -1321,7 +1335,10 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         inputs = {"_in": Memlet(f"{op.name}[{index}]")}
         value = "std::conj(_in)" if conjugate else "_in"
         if scale is not None:
-            inputs["_alpha"] = Memlet(f"{scale}[0]")
+            # An element ``alpha``'s start symbols are read by this state, so bind them on its inbound edge
+            alpha = _operand(scale)
+            _apply_promotions()
+            inputs["_alpha"] = Memlet(f"{alpha.name}[{alpha.start or 0}]")
             value = f"_alpha * {value}"
         state.add_mapped_tasklet(
             "prepare",
