@@ -67,8 +67,6 @@ std::string scfSwitchValueName(mlir::Value v);
 using YieldSnapshots = std::map<mlir::Operation*, std::vector<std::pair<mlir::Value, mlir::Value>>>;
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshots& snapshots = {});
 
-std::string yieldedExpr(mlir::Value v);
-
 std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign, hlfir::ElementalOp elem);
 
 std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::ElementalOp elem);
