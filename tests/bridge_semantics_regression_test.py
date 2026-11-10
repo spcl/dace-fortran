@@ -549,6 +549,60 @@ end subroutine"""
         assert not any(data.startswith("_rhs_buffer") for data in sdfg.arrays)
 
 
+def test_array_actual_of_a_scalar_dummy_is_its_first_element(tmp_path: Path):
+    """QE ``gk_sort(..., ngk, ...)`` passes the array ``ngk`` to a scalar dummy it counts with and indexes by:
+    sequence association with ``ngk(1)``, the only element written."""
+    src = """subroutine sortk(n, ngk, igk)
+  integer, intent(in) :: n
+  integer, intent(inout) :: ngk
+  integer, intent(inout) :: igk(n)
+  integer :: i
+  ngk = 0
+  do i = 1, n
+    if (mod(i, 2) == 0) then
+      ngk = ngk + 1
+      igk(ngk) = i
+    end if
+  end do
+end subroutine
+subroutine top(cnt, idx)
+  integer, intent(inout) :: cnt(2), idx(6)
+  call sortk(6, cnt, idx)
+end subroutine"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    cnt, idx = np.array([7, 9], np.int32), np.zeros(6, np.int32)
+    sdfg(cnt=cnt, idx=idx)
+    assert cnt.tolist() == [3, 9] and idx.tolist() == [2, 4, 6, 0, 0, 0]
+
+
+@pytest.mark.parametrize("flag", [0, 1])
+def test_section_bound_read_from_an_element_written_before_the_call(tmp_path: Path, flag):
+    """QE ``tgwave_g2r(orbital(1 : ngk(1), ibnd : last), ...)`` after ``ngk`` is assigned: the section ends at the
+    element's value where the call happens, not at entry."""
+    src = """module m
+  integer :: ngk(2)
+contains
+  subroutine colsum(f_in, s)
+    real(8) :: f_in(:, :)
+    real(8), intent(out) :: s
+    s = sum(f_in)
+  end subroutine
+end module
+subroutine top(flag, a, j, s)
+  use m
+  logical, intent(in) :: flag
+  integer, intent(in) :: j
+  real(8), intent(inout) :: a(4, 3)
+  real(8), intent(out) :: s
+  if (flag) ngk = 3
+  call colsum(a(1:ngk(1), j:3), s)
+end subroutine"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    a, s = np.array(np.arange(1.0, 13.0).reshape(4, 3, order="F"), order="F"), np.zeros(1)
+    sdfg(flag=I4(flag), a=a, j=I4(2), s=s, ngk=np.array([2, 2], np.int32))
+    assert s[0] == a[: 3 if flag else 2, 1:3].sum()
+
+
 REFUSED = {
     "reduction_mask": (
         """subroutine @(a, s)

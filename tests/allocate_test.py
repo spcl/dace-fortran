@@ -48,5 +48,31 @@ end module
         build_sdfg(src, tmp_path, name="setup", entry="comm::setup").build()
 
 
+@pytest.mark.parametrize("flag", [0, 1])
+def test_allocate_extent_reads_an_element_written_before(tmp_path, flag):
+    """QE ``fwfft_orbital_gamma``'s ``ALLOCATE(psio(ngk(1), ...))``: the extent is the element's value AT the
+    ALLOCATE, not at entry."""
+    src = """
+module m
+  integer :: ngk(2)
+end module
+subroutine top(flag, s)
+  use m
+  logical, intent(in) :: flag
+  real(8), intent(out) :: s
+  real(8), allocatable :: w(:)
+  if (flag) ngk = 4
+  allocate (w(ngk(1)))
+  w = 1.0d0
+  s = sum(w)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    assert "__sym_ngk_1" not in sdfg.arrays["w"].free_symbols
+    s, ngk = np.zeros(1), np.array([2, 2], np.int32)
+    sdfg(flag=np.int32(flag), s=s, ngk=ngk)
+    assert s[0] == (4.0 if flag else 2.0)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

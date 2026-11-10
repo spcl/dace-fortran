@@ -422,25 +422,16 @@ static std::vector<hlfir::DeclareOp> aliasDeclaresOf(mlir::Value v) {
 static std::vector<std::string> shapeFromAllocSite(fir::AllocMemOp alloc) {
   std::vector<std::string> syms;
   for (auto sz : alloc.getShape()) {
-    // ``traceExtentExpr`` peels Flang's ``max(ext, 0)`` clamp and
-    // resolves the underlying extent uniformly: a constant-indexed array
-    // element (``dims(1)``) becomes its position symbol ``__sym_dims_1``
-    // rather than the whole array name -- promoting the array would
-    // collide it with its own data descriptor.  Falls back to the plain
-    // scalar / constant resolvers for shapes it doesn't recognise.
+    // An array-ELEMENT extent (``ALLOCATE(deeaux(nh(nt),...))``, also ``ngk(1)``, whose position symbol
+    // ``__sym_ngk_1`` is seeded at entry) defers to the caller's per-dim synthetic ``<name>_d<i>``, which the
+    // ALLOCATE handler binds to the element read IN-SCOPE: an allocatable binds its extent AT the ALLOCATE.
     auto e = traceExtentExpr(sz);
-    if (!e.empty()) {
-      syms.push_back(e);
+    if (arrayElementExtent(sz) || llvm::StringRef(e).starts_with("__sym_")) {
+      syms.emplace_back("?");
       continue;
     }
-    // A runtime array-ELEMENT extent (``ALLOCATE(deeaux(nh(nt),...))``) must NOT collapse to its bare
-    // array name via traceToDecl below -- ``nh`` would collide with nh's own data descriptor
-    // (add_symbol("nh") vs the nh Array).  Defer to the caller's per-dim synthetic ``<name>_d<i>``,
-    // which the ALLOCATE handler binds to the element read IN-SCOPE -- correct even when the index is
-    // loop-variant, unlike resolveShapeSyms's entry-seeded value-symbol (an allocatable binds its
-    // extent AT the ALLOCATE, not at program entry).
-    if (arrayElementExtent(sz)) {
-      syms.emplace_back("?");
+    if (!e.empty()) {
+      syms.push_back(e);
       continue;
     }
     auto n = traceToDecl(sz);

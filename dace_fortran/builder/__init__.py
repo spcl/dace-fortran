@@ -1665,12 +1665,15 @@ class SDFGBuilder:
         DATA-ACCESS position (a memlet subset), where Fortran re-reads the
         current element.  ``resolveShapeSyms`` only ever mints extents, and a
         mutable data-access index takes the per-site ``<arr>_at<gid>`` path
-        instead, so this never happens today -- but guard it: if a value-symbol
-        both indexes data and has a written backing array, the frozen snapshot
-        would be stale, so refuse rather than miscompile.
+        instead -- except a section bound such as ``orbital(1 : ngk(1), :)`` passed to an inlined assumed-shape dummy,
+        whose view is sized and linked by the symbol.  Fortran reads that element where the section is taken, so
+        each state indexing with the symbol re-reads the element on its incoming edge.  A symbol that also sizes
+        storage (an automatic or allocated array, frozen when created) would then disagree with it: refused.
 
-        :raises ValueError: a value-symbol indexes data AND its backing array is written.
+        :raises ValueError: a value-symbol indexes data, sizes storage, AND its backing array is written.
         """
+        import dace
+
         prov = self._value_symbol_provenance
         if not prov:
             return
@@ -1681,21 +1684,38 @@ class SDFGBuilder:
                     written.add(node.data)
         # Value-symbols that appear in a memlet subset -- a live data-access index,
         # not a frozen extent.  (Extents ride descriptor shapes, checked nowhere here.)
-        subset_syms = set()
+        subset_syms: dict[str, list] = {}
         for state in sdfg.states():
             for e in state.edges():
                 for sub in (e.data.subset, e.data.other_subset):
                     if isinstance(sub, Subset):
-                        subset_syms |= {str(s) for s in sub.free_symbols}
+                        for s in sub.free_symbols:
+                            subset_syms.setdefault(str(s), []).append(state)
+        storage_syms = {
+            str(s) for desc in sdfg.arrays.values() if not isinstance(desc, dace.data.View) for s in desc.free_symbols
+        }
         for sym, (arr, idx) in prov.items():
-            if arr in written and sym in subset_syms:
-                raise ValueError(
-                    f"array-element value '{arr}({idx})' (symbol '{sym}') is used as a "
-                    f"data-access index, but '{arr}' is written in the SDFG -- the "
-                    f"entry snapshot would capture a stale value.  A data-access index "
-                    f"into a mutable array must use the per-site '<arr>_at<n>' promotion, "
-                    f"not a shape value-symbol."
-                )
+            if arr not in written or sym not in subset_syms:
+                continue
+            if sym not in storage_syms:
+                lower = [
+                    f"offset_{arr}_d{d}" if f"offset_{arr}_d{d}" in sdfg.symbols else "1"
+                    for d in range(idx.count(",") + 1)
+                ]
+                dims = ", ".join(f"({p.strip()}) - {lb}" for p, lb in zip(idx.split(","), lower, strict=True))
+                for state in dict.fromkeys(subset_syms[sym]):
+                    region = state.parent_graph
+                    region.add_state_before(
+                        state, assignments={sym: f"{arr}[{dims}]"}, is_start_block=region.start_block is state
+                    )
+                continue
+            raise ValueError(
+                f"array-element value '{arr}({idx})' (symbol '{sym}') is used as a "
+                f"data-access index, but '{arr}' is written in the SDFG -- the "
+                f"entry snapshot would capture a stale value.  A data-access index "
+                f"into a mutable array must use the per-site '<arr>_at<n>' promotion, "
+                f"not a shape value-symbol."
+            )
 
     def _run_post_gen_passes(self, sdfg: SDFG) -> None:
         """Run the post-generation cleanup passes that take a freshly-
