@@ -1201,6 +1201,8 @@ std::string buildExpr(mlir::Value val, int d) {
   if (nm == "math.ipowi" && def->getNumOperands() == 2) {
     std::string const a = buildExpr(def->getOperand(0), d + 1);
     std::string const b = buildExpr(def->getOperand(1), d + 1);
+    // A literal exponent is non-negative, so the power is already the integer: index analyses read it bare.
+    if (b.find_first_not_of("0123456789") == std::string::npos) return "(" + a + " ** " + b + ")";
     if (!def->getResult(0).getType().isInteger(64)) return "int32(" + a + " ** " + b + ")";
     return "(ipow(" + a + ", " + b + ") if (" + b + " >= 0) else int64(" + a + " ** " + b + "))";
   }

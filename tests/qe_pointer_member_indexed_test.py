@@ -106,10 +106,8 @@ END MODULE
     # NINT(q) lands inside [1, n].
     q = np.asarray([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]], dtype=np.float64, order="F")
     fac = np.zeros(ng, dtype=np.float64, order="F")
-    # t_cutoff (flattened t%cutoff) is exposed as a (1,)-Array on the SDFG surface -- pass a
-    # 1-element array, not a bare float.
-    t_cutoff = np.array([100.0], dtype=np.float64)
-    sdfg(t_corrected=corrected, t_cutoff=t_cutoff, q=q, fac=fac, ng=np.int32(ng))
+    # t_cutoff (flattened t%cutoff) is a member of an intent(in) struct: a scalar by value.
+    sdfg(t_corrected=corrected, t_cutoff=100.0, q=q, fac=fac, ng=np.int32(ng))
     expected = np.array([corrected[0, 0, 0], corrected[1, 1, 1]])
     np.testing.assert_allclose(fac, expected)
 

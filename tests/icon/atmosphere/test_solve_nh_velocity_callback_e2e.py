@@ -132,7 +132,7 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
       ``extract_vars.cpp`` giving deferred-shape ALLOCATABLE/POINTER dummies uniformly-free
       bounds, while value-record AoR companions stay 1-based extent-only (no spurious lb).
     * TYPE -- a grid-dim scalar the shim takes ``type(c_ptr), value`` must marshal as a
-      materialised ``&_pv_<sym>`` pointer, not a raw by-value int -- else the inner
+      pointer, not a raw by-value int -- else the inner
       ``c_f_pointer`` dereferences the integer as an address.
     """
     clear_external_registry()
@@ -171,9 +171,8 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
         f"velocity callback ABI slot-count desync: inner shim {len(inner_slots)} vs outer marshal {len(outer_args)}"
     )
 
-    # TYPE: each grid-dim scalar member the shim takes as a pointer marshals as a
-    # materialised ``&_pv_<sym>`` -- the member slot, distinct from that same
-    # symbol's legitimate by-value ``(int)(<sym>)`` use as ANOTHER array's extent.
+    # TYPE: each grid-dim scalar member the shim takes as a pointer marshals as one in its own slot -- a connector or
+    # a materialised ``&_pv_<sym>`` -- distinct from that symbol's by-value ``(int)(<sym>)`` use as an array's extent.
     for member in (
         "p_patch_id",
         "p_patch_n_childdom",
@@ -184,8 +183,9 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
         "p_patch_nlevp1",
     ):
         assert member in ptr_members, f"{member} should be a callee pointer member"
-        assert f"&_pv_{member}" in outer_args, (
-            f"grid-dim member {member} must marshal as a materialised pointer (&_pv_{member}); the "
+        actual = outer_args[inner_slots.index(f"{member}_p")]
+        assert not actual.startswith("("), (
+            f"grid-dim member {member} must marshal as a pointer, not the value {actual}; the "
             f"inner shim declares it type(c_ptr), value and dereferences via c_f_pointer"
         )
 
