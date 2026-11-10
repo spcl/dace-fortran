@@ -133,8 +133,16 @@ def section_alias_slab(builder: SDFGBuilder, ctx: Ctx, name: str) -> tuple[str, 
     if v is None or v.role != "section_alias":
         return None
     src_desc = ctx.sdfg.arrays[v.view_source]
+    known = set(ctx.sdfg.symbols) | set(ctx.sdfg.arrays)
+
+    def extent(src_dim: int, dummy_dim: int) -> str:
+        """The dummy's extent: a trivial section starts at 1 but may end early (``a(1:m)`` passed to ``x(n)``)."""
+        ext = v.shape_symbols[dummy_dim] if dummy_dim < len(v.shape_symbols) else ""
+        free = {str(f) for f in dace.symbolic.pystr_to_symbolic(ext).free_symbols} if ext and ext != "?" else None
+        return ext if free is not None and free <= known else str(src_desc.shape[src_dim])
+
     parts = [
-        f"0:{src_desc.shape[src_dim]}" if dummy_dim is not None else f"({slot}) - offset_{v.view_source}_d{src_dim}"
+        f"0:{extent(src_dim, dummy_dim)}" if dummy_dim is not None else f"({slot}) - offset_{v.view_source}_d{src_dim}"
         for src_dim, slot, dummy_dim in iter_view_dim_map(v.view_dim_map)
     ]
     return v.view_source, ", ".join(parts)

@@ -128,6 +128,29 @@ def test_value_symbol_index_on_pointer_member_is_one_based(tmp_path):
     np.testing.assert_allclose(out, expected, rtol=1e-12, atol=1e-12)
 
 
+def test_whole_array_use_of_a_leading_section_alias_stops_at_its_extent(tmp_path):
+    """``a(1:m)`` passed to ``x(n)`` is a section alias starting at 1; ``SUM(x)`` must stop at ``m``, not at the end of
+    ``a`` (QE h_psi's ``tgwave_g2r(orbital(1 : ngk(1), ...), ...)``)."""
+    src = """
+subroutine inner(x, n, s)
+  integer, intent(in) :: n
+  real(8), intent(in) :: x(n)
+  real(8), intent(out) :: s
+  s = sum(x)
+end subroutine
+subroutine top(m, a, s)
+  integer, intent(in) :: m
+  real(8), intent(inout) :: a(8)
+  real(8), intent(out) :: s
+  call inner(a(1:m), m, s)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    s = np.zeros(1)
+    sdfg(m=np.int32(2), a=np.arange(1.0, 9.0), s=s)
+    assert s[0] == 3.0
+
+
 if __name__ == "__main__":
     import tempfile
     from pathlib import Path
@@ -136,3 +159,4 @@ if __name__ == "__main__":
         test_inlined_function_section_alias_reads_correct_column(Path(tmp) / "a")
         test_section_alias_after_a_build_that_reallocates_the_same_name(Path(tmp) / "b")
         test_value_symbol_index_on_pointer_member_is_one_based(Path(tmp) / "c")
+        test_whole_array_use_of_a_leading_section_alias_stops_at_its_extent(Path(tmp) / "d")
