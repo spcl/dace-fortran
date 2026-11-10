@@ -2379,7 +2379,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         unsigned const d = operand < dynamicDims.size() ? dynamicDims[operand] : operand;
         ++operand;
         std::string const ext = traceExtentExpr(sz);
-        if (!ext.empty()) {
+        // A constant-indexed element (``ngk(1)``) traces to its entry-seeded position symbol: read it here instead.
+        if (!ext.empty() && !llvm::StringRef(ext).starts_with("__sym_")) {
           ASTNode an;
           an.kind = "assign";
           an.target = bufName + "_d" + std::to_string(d);
