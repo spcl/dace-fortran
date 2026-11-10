@@ -682,6 +682,8 @@ def initial_values(v: VarLike) -> Any:
     """The initial data of ``v`` per element, as a flat array; the bridge sends a complex element as (re, im)."""
     import numpy as np
 
+    if v.const_ints:  # integer(8): a double cannot hold every value
+        return np.asarray(v.const_ints, dtype=np.int64)
     data = np.asarray(v.const_data, dtype=np.float64)
     return data[::2] + 1j * data[1::2] if v.dtype.startswith("complex") else data
 
@@ -1584,7 +1586,7 @@ class SDFGBuilder:
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
-                expr = str(round(float(val))) if is_int else initial_value_text(val)
+                expr = str(round(val)) if is_int else initial_value_text(val)
                 tname = "init_{}_{}".format(v.fortran_name, "_".join(str(i) for i in idx))
                 t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, f"_o = {expr}")
                 ctx.cur.add_edge(

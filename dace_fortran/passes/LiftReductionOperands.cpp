@@ -59,7 +59,11 @@
 //       same path covers the lifted top-level case here.
 // ============================================================================
 
+#include "flang/Optimizer/Builder/Complex.h"
+#include "flang/Optimizer/Builder/FIRBuilder.h"
+#include "flang/Optimizer/Builder/HLFIRTools.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
+#include "flang/Optimizer/Dialect/Support/FIRContext.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm_compat.h"
@@ -164,6 +168,53 @@ void collectNestedLiftable(mlir::Operation* rootOp, llvm::SmallVectorImpl<mlir::
   }
 }
 
+/// The value a masked-out element contributes: the reduction's identity, HUGE of the kind for MINVAL / MAXVAL.
+template <typename ReductionOp>
+mlir::Value maskedOutValue(fir::FirOpBuilder& b, mlir::Location loc, mlir::Type eleTy) {
+  bool constexpr isMin = std::is_same_v<ReductionOp, hlfir::MinvalOp>;
+  bool constexpr isMax = std::is_same_v<ReductionOp, hlfir::MaxvalOp>;
+  if (auto cplx = mlir::dyn_cast<mlir::ComplexType>(eleTy)) {
+    int64_t const real = std::is_same_v<ReductionOp, hlfir::ProductOp> ? 1 : 0;
+    mlir::Value const re = b.createRealConstant(loc, cplx.getElementType(), llvm::APFloat(double(real)));
+    mlir::Value const im = b.createRealZeroConstant(loc, cplx.getElementType());
+    return fir::factory::Complex{b, loc}.createComplex(cplx, re, im);
+  }
+  if (auto ft = mlir::dyn_cast<mlir::FloatType>(eleTy)) {
+    if (isMin || isMax) {
+      auto huge = llvm::APFloat::getLargest(ft.getFloatSemantics(), /*Negative=*/isMax);
+      return b.createRealConstant(loc, ft, huge);
+    }
+    return std::is_same_v<ReductionOp, hlfir::ProductOp> ? b.createRealOneConstant(loc, ft)
+                                                         : b.createRealZeroConstant(loc, ft);
+  }
+  unsigned const width = eleTy.getIntOrFloatBitWidth();
+  if (isMin) return b.createIntegerConstant(loc, eleTy, llvm::APInt::getSignedMaxValue(width).getSExtValue());
+  if (isMax) return b.createIntegerConstant(loc, eleTy, llvm::APInt::getSignedMinValue(width).getSExtValue());
+  return b.createIntegerConstant(loc, eleTy, std::is_same_v<ReductionOp, hlfir::ProductOp> ? 1 : 0);
+}
+
+/// ``sum(a, mask=m)`` -> ``sum(merge(a, identity, m))``: the masked elements drop out of the plain reduction every
+/// lowering path already handles.
+template <typename ReductionOp>
+void inlineMask(ReductionOp op, const fir::KindMapping& kinds) {
+  if (!op.getMask()) return;
+  fir::FirOpBuilder builder(op, kinds);
+  auto loc = op.getLoc();
+  hlfir::Entity const array{op.getArray()};
+  hlfir::Entity const mask{op.getMask()};
+  mlir::Type const eleTy = array.getFortranElementType();
+  mlir::Value const identity = maskedOutValue<ReductionOp>(builder, loc, eleTy);
+  auto kernel = [&](mlir::Location l, fir::FirOpBuilder& b, mlir::ValueRange indices) -> hlfir::Entity {
+    auto keep = hlfir::loadElementAt(l, b, mask, indices);
+    auto value = hlfir::loadElementAt(l, b, array, indices);
+    mlir::Value const cond = b.createConvert(l, b.getI1Type(), keep);
+    return hlfir::Entity{b.create<mlir::arith::SelectOp>(l, cond, value, identity).getResult()};
+  };
+  auto merged = hlfir::genElementalOp(loc, builder, eleTy, hlfir::genShape(loc, builder, array), {}, kernel, true);
+  op.getArrayMutable().assign(merged);
+  op.getMaskMutable().clear();
+}
+
 struct LiftReductionOperandsPass
     : public mlir::PassWrapper<LiftReductionOperandsPass, mlir::OperationPass<mlir::ModuleOp>> {
   // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
@@ -178,6 +229,14 @@ struct LiftReductionOperandsPass
   }
 
   void runOnOperation() override {
+    auto kinds = fir::getKindMapping(getOperation());
+    getOperation().walk([&](mlir::Operation* op) {
+      if (auto r = mlir::dyn_cast<hlfir::SumOp>(op)) inlineMask(r, kinds);
+      if (auto r = mlir::dyn_cast<hlfir::ProductOp>(op)) inlineMask(r, kinds);
+      if (auto r = mlir::dyn_cast<hlfir::MinvalOp>(op)) inlineMask(r, kinds);
+      if (auto r = mlir::dyn_cast<hlfir::MaxvalOp>(op)) inlineMask(r, kinds);
+    });
+
     // Counter for unique temp names per function.
     llvm::DenseMap<mlir::func::FuncOp, unsigned> liftCounter;
 
