@@ -140,6 +140,24 @@ end subroutine
     np.testing.assert_allclose(c, expected)
 
 
+def test_dgemv_sizes_and_alpha_are_array_elements(tmp_path: Path):
+    """h_psi's ``dgemm('N', 'N', nh(nt), m, nh(nt), ...)``: a size (and here ``alpha``) is one element of an array at a
+    run-time index, not its first element."""
+    src = """
+subroutine probe_elements(i, m, w, a, x, y)
+  integer, intent(in) :: i, m(3)
+  double precision, intent(in) :: w(3), a(4, 4), x(4)
+  double precision, intent(inout) :: y(4)
+  call dgemv('N', m(i), m(i), w(i), a, 4, x, 1, 0d0, y, 1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_elements").build()
+    a = np.arange(1.0, 17.0).reshape(4, 4, order="F").copy(order="F")
+    x, y = np.ones(4), np.full(4, -1.0)
+    sdfg(i=np.int32(2), m=np.array([4, 2, 3], np.int32), w=np.array([5.0, 3.0, 7.0]), a=a, x=x, y=y)
+    assert y.tolist() == [18.0, 24.0, -1.0, -1.0]
+
+
 @pytest.mark.parametrize(
     "call, node_type, expected",
     [
