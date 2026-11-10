@@ -119,6 +119,27 @@ end subroutine
     np.testing.assert_allclose(c, expected)
 
 
+@pytest.mark.parametrize("alpha", ["w(i, 2)", "-w(i, 2)"])
+def test_zgemm_scales_by_an_array_element_alpha(tmp_path: Path, alpha):
+    """h_psi's ``zgemm(..., fact_hepsi(ik, pdir), ...)``: ``alpha`` is one element of a COMPLEX array, at a run-time
+    index."""
+    src = f"""
+subroutine probe_element(i, w, a, b, c)
+  integer, intent(in) :: i
+  complex(8), intent(in) :: w(3, 2), a(3, 3), b(3, 3)
+  complex(8), intent(inout) :: c(3, 3)
+  call zgemm('N', 'N', 3, 3, 3, {alpha}, a, 3, b, 3, (1.0d0, 0.0d0), c, 3)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_element").build()
+    rng = np.random.default_rng(3)
+    w, a, b, c = (np.asfortranarray(rng.random(s) + 1j * rng.random(s)) for s in ((3, 2), (3, 3), (3, 3), (3, 3)))
+    sign = -1.0 if alpha.startswith("-") else 1.0
+    expected = sign * w[1, 1] * a @ b + c
+    sdfg(i=np.int32(2), w=w, a=a, b=b, c=c)
+    np.testing.assert_allclose(c, expected)
+
+
 @pytest.mark.parametrize(
     "call, node_type, expected",
     [

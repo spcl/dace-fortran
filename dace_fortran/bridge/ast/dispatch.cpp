@@ -805,6 +805,7 @@ static std::string resolveCallArg(mlir::Value v) {
 }
 
 static std::string decodeCharLiteralSymbol(llvm::StringRef sym);
+static std::string blasOperandArg(mlir::Value v);
 
 /// A BLAS character flag (``'T'``) as its literal text, followed through an inlined wrapper's CHARACTER dummy (QE
 /// ``mydgemv(trans, ...)`` forwarding its ``trans``) back to the literal; else empty, a flag known only at run time.
@@ -835,9 +836,11 @@ static std::string blasFlagArg(mlir::Value v) {
 }
 
 /// A BLAS scalar (``alpha``/``beta``) as its literal when it reaches the call through an inlined wrapper's dummy bound
-/// to a temporary holding one constant (QE ``mydgemm(..., 2.0_dp, ...)``); else the plain resolved argument.
+/// to a temporary holding one constant (QE ``mydgemm(..., 2.0_dp, ...)``), an array element as ``name[i1, i2]`` (QE
+/// ``zgemm(..., fact_hepsi(ik, pdir), ...)``); else the plain resolved argument.
 static std::string blasScalarArg(mlir::Value v) {
-  for (mlir::Value w = v; w;) {
+  mlir::Value w = v;
+  while (w) {
     auto* d = w.getDefiningOp();
     if (!d) break;
     if (auto c = mlir::dyn_cast<fir::ConvertOp>(d)) {
@@ -887,6 +890,7 @@ static std::string blasScalarArg(mlir::Value v) {
     }
     w = hd.getMemref();
   }
+  if (w && w.getDefiningOp<hlfir::DesignateOp>()) return blasOperandArg(w);
   return resolveCallArg(v);
 }
 
