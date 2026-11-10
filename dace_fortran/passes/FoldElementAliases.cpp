@@ -45,6 +45,7 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
@@ -93,7 +94,41 @@ struct FoldElementAliasesPass : public mlir::PassWrapper<FoldElementAliasesPass,
            "hlfir-inline-all on elemental / scalar-arg calls).";
   }
 
+  /// The declare whose explicit-shape array ``c`` reinterprets as one element of it: an array actual of a scalar
+  /// dummy (QE ``gk_sort(..., ngk, ...)``), which is sequence association with its first element.
+  static hlfir::DeclareOp matchArrayToScalar(fir::ConvertOp c) {
+    auto to = mlir::dyn_cast<fir::ReferenceType>(c.getType());
+    auto from = mlir::dyn_cast<fir::ReferenceType>(c.getValue().getType());
+    auto seq = from ? mlir::dyn_cast<fir::SequenceType>(from.getEleTy()) : nullptr;
+    if (!to || !seq || seq.getEleTy() != to.getEleTy()) return {};
+    auto decl = c.getValue().getDefiningOp<hlfir::DeclareOp>();
+    if (!decl || c.getValue() != decl.getResult(0) || !decl.getShape()) return {};
+    if (!mlir::isa<fir::ShapeOp, fir::ShapeShiftOp>(decl.getShape().getDefiningOp())) return {};
+    return decl;
+  }
+
+  static void rewriteToFirstElement(fir::ConvertOp c) {
+    auto decl = matchArrayToScalar(c);
+    mlir::OpBuilder b(c);
+    llvm::SmallVector<mlir::Value, 4> first;
+    if (auto ss = decl.getShape().getDefiningOp<fir::ShapeShiftOp>()) {
+      for (mlir::Value const lb : ss.getOrigins()) first.push_back(lb);
+    } else {
+      auto rank = decl.getShape().getDefiningOp<fir::ShapeOp>().getExtents().size();
+      first.assign(rank, b.create<mlir::arith::ConstantIndexOp>(c.getLoc(), 1));
+    }
+    auto element = b.create<hlfir::DesignateOp>(c.getLoc(), c.getType(), decl.getResult(0), mlir::ValueRange{first});
+    c.replaceAllUsesWith(element.getResult());
+    c.erase();
+  }
+
   void runOnOperation() override {
+    llvm::SmallVector<fir::ConvertOp, 8> toScalar;
+    getOperation().walk([&](fir::ConvertOp c) {
+      if (matchArrayToScalar(c)) toScalar.push_back(c);
+    });
+    for (auto c : toScalar) rewriteToFirstElement(c);
+
     llvm::SmallVector<hlfir::DeclareOp, 16> toErase;
 
     getOperation().walk([&](hlfir::DeclareOp decl) {
