@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import gc
+import re
 import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
@@ -1197,7 +1198,7 @@ class SDFGBuilder:
             if v is None:
                 continue
             if isinstance(v, str):
-                alias_offsets[k] = v
+                alias_offsets[k] = self.dace_name_map.get(v, v)
             else:
                 const_offsets[k] = v
         # Snapshot the inferred per-axis offsets onto the SDFG before the
@@ -1627,7 +1628,7 @@ class SDFGBuilder:
         # A constant-index element as an extent (``orbital(1 : ngk(1), :)`` -> ``__sym_ngk_1``) is named like the
         # position symbols an expression read seeds, but no expression may read it: seed every one an extent names.
         for v in self.arrays.values():
-            for sym in v.shape_symbols:
+            for sym in re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)):
                 element = _position_symbol_element(sym, sdfg)
                 if element is None or sym in seeds:
                     continue

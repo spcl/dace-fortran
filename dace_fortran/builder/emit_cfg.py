@@ -395,11 +395,16 @@ def _fortran_subs_to_dace(expr: str, builder: SDFGBuilder) -> str:
     cursor = 0
     for start, end, arr, parts in matches:
         out.append(expr[cursor:start])
-        new_inner = ", ".join(f"({_fortran_subs_to_dace(p, builder)}) - offset_{arr}_d{d}" for d, p in enumerate(parts))
+        # A section alias has no offset symbols: its dimensions start at 1, spliced against the source below.
+        alias = (var := builder.arrays.get(arr)) is not None and var.role == "section_alias"
+        new_inner = ", ".join(
+            f"({_fortran_subs_to_dace(p, builder)}) - {1 if alias else f'offset_{arr}_d{d}'}"
+            for d, p in enumerate(parts)
+        )
         out.append(f"{arr}[{new_inner}]")
         cursor = end
     out.append(expr[cursor:])
-    return "".join(out)
+    return _rewrite_section_aliases_in_expr(builder, "".join(out))
 
 
 def _is_trivial_bound(expr: str, builder: SDFGBuilder | None = None) -> bool:

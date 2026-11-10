@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import dace
 from dace import SDFG
 
-from dace_fortran.builder.access import resolve_object_member_expr
+from dace_fortran.builder.access import apply_reserved, resolve_object_member_expr
 from dace_fortran.builder.records import NodeLike, SyntheticVar, VarLike
 
 if TYPE_CHECKING:
@@ -702,7 +702,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         if s.lstrip("-").isdigit():
             return int(s)
         if _is_expr(s):
-            return dace.symbolic.pystr_to_symbolic(s)
+            return dace.symbolic.pystr_to_symbolic(apply_reserved(s))
         return dace.symbol(s)
 
     # Flang emits internal temporaries with dotted names (e.g.
