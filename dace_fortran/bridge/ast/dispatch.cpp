@@ -43,6 +43,19 @@ static bool isOptionalPresentSelect(IfOpT op) {
   return mlir::isa_and_nonnull<fir::AbsentOp>(term->getOperand(0).getDefiningOp());
 }
 
+// An IF whose condition folded to a constant (``IF (dim2 == 2)`` with ``dim2 = SIZE(f_in(1, :))`` of a one-column
+// section) contributes only its live branch: the dead one may index past the section, which DaCe rejects.
+template <typename IfOpT>
+static bool spliceConstantBranch(IfOpT op, std::vector<ASTNode>& nodes) {
+  auto cst = op.getCondition().template getDefiningOp<mlir::arith::ConstantOp>();
+  auto value = cst ? mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()) : nullptr;
+  if (!value || op.getNumResults() != 0) return false;
+  mlir::Region& live = value.getInt() != 0 ? op.getThenRegion() : op.getElseRegion();
+  if (!live.empty())
+    for (auto& n : buildAST(live.front())) nodes.push_back(std::move(n));
+  return true;
+}
+
 /// The op of ``block`` right after the last op ``v`` takes its value from: a load, or an op whose regions compute a
 /// result. Renderers read memory by name, so a snapshot placed here sees the writes before those loads and none after.
 /// The block's first op when ``v`` has no such input in ``block``.
@@ -3207,6 +3220,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     }
     if (auto ifOp = mlir::dyn_cast<fir::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
+      if (spliceConstantBranch(ifOp, nodes)) continue;
       // Allocatable deallocate-guard (fir.if(alloc_status != 0){freemem; reset box}): no observable side effect in the
       // SDFG model (allocatables are single-allocation transients) -- skip the whole construct.
       auto isAllocCleanup = [](mlir::Region& region) {
@@ -3255,6 +3269,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     }
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
+      if (spliceConstantBranch(ifOp, nodes)) continue;
       ASTNode n;
       n.kind = "conditional";
       // Materialises SUM/MINVAL/MAXVAL/PRODUCT sub-terms of the condition into scalar transients via Reduce lib-nodes

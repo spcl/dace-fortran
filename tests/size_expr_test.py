@@ -344,7 +344,8 @@ end module probe_mod
 
 
 def test_size_multidim_element_inline(tmp_path):
-    """allocate(buf(shp(1,2,1))) -- multi-dim element inline as the extent (no intermediate scalar); lifts to a multi-dim position symbol __sym_shp_1_2_1 (read once at entry), so the shape stays symbolic."""
+    """allocate(buf(shp(1,2,1))) -- multi-dim element inline as the extent (no intermediate scalar); the extent symbol
+    buf_d0 reads the element where the ALLOCATE runs, so the shape stays symbolic."""
     src = """
 module probe_mod
 contains
@@ -368,7 +369,7 @@ end module probe_mod
     out_s = np.zeros(n)
     out_r = np.zeros(n)
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
-    assert "__sym_shp_1_2_1" in sdfg.symbols
+    assert "buf_d0" in sdfg.symbols and "__sym_shp_1_2_1" not in sdfg.symbols
     sdfg(n=np.int32(n), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
