@@ -522,8 +522,8 @@ static std::string normaliseBlasName(const std::string& callee) {
   return llvm::StringRef(s).lower();
 }
 
-/// Returns the canonical BLAS routine name (e.g. "dgemm") for a recognised callee, else empty. D-prefix (real64) and
-/// S-prefix (real32) map onto the same dtype-dispatched lib node.
+/// Returns the canonical BLAS routine name (e.g. "dgemm") for a recognised callee, else empty. The D, S, Z and C
+/// prefixes map onto the same dtype-dispatched lib node.
 static std::string blasCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
@@ -547,6 +547,8 @@ static std::string blasCalleeTag(const std::string& callee) {
       // L2
       "dgemv",
       "sgemv",
+      "zgemv",
+      "cgemv",
       "dger",
       "sger",
       "dsymv",
@@ -554,6 +556,8 @@ static std::string blasCalleeTag(const std::string& callee) {
       // L3
       "dgemm",
       "sgemm",
+      "zgemm",
+      "cgemm",
       "dsymm",
       "ssymm",
       "dsyrk",
@@ -837,11 +841,26 @@ static std::string blasScalarArg(mlir::Value v) {
           if (auto st = mlir::dyn_cast<fir::StoreOp>(u); st && st.getMemref() == r) {
             stored = st.getValue();
             ++writes;
-          } else if (mlir::isa<hlfir::AssignOp>(u)) {
+          } else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(u)) {
+            if (as.getLhs() == r) stored = as.getRhs();
             ++writes;
           }
         }
       if (writes != 1 || !stored) break;
+      // A complex literal is two ``fir.insert_value`` ops: real part, then imaginary part.
+      if (auto im = stored.getDefiningOp<fir::InsertValueOp>())
+        if (auto re = im.getAdt().getDefiningOp<fir::InsertValueOp>()) {
+          auto part = [](mlir::Value x) -> std::optional<double> {
+            auto c = x.getDefiningOp<mlir::arith::ConstantOp>();
+            auto f = c ? mlir::dyn_cast<mlir::FloatAttr>(c.getValue()) : mlir::FloatAttr();
+            return f ? std::optional<double>(f.getValueAsDouble()) : std::nullopt;
+          };
+          if (auto a = part(re.getVal()), b = part(im.getVal()); a && b) {
+            std::ostringstream o;
+            o << std::setprecision(17) << "complex(" << *a << ", " << *b << ")";
+            return o.str();
+          }
+        }
       auto cst = stored.getDefiningOp<mlir::arith::ConstantOp>();
       if (!cst) break;
       std::ostringstream o;
@@ -936,7 +955,7 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     n.kind.clear();
     return n;
   }
-  if (routine == "dgemv" || routine == "sgemv") {
+  if (routine == "dgemv" || routine == "sgemv" || routine == "zgemv" || routine == "cgemv") {
     // gemv(trans, m, n, alpha, A, lda, x, incx, beta, y, incy)
     if (args.size() < 11) {
       n.kind.clear();
@@ -952,7 +971,7 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     for (unsigned const i : {1U, 2U, 5U, 7U, 10U}) pushSize(args[i]);  // m, n, lda, incx, incy
     return n;
   }
-  if (routine == "dgemm" || routine == "sgemm") {
+  if (routine == "dgemm" || routine == "sgemm" || routine == "zgemm" || routine == "cgemm") {
     // gemm(transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
     if (args.size() < 13) {
       n.kind.clear();

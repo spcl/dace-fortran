@@ -56,6 +56,69 @@ end subroutine
     assert y.tolist() == [6.0, 8.0, -1.0, -1.0]
 
 
+COMPLEX_OPS = {"N": lambda m: m, "T": lambda m: m.T, "C": lambda m: m.conj().T}
+
+
+@pytest.mark.parametrize("flag", COMPLEX_OPS)
+def test_zgemm_transposes_and_conjugates_its_window(tmp_path: Path, flag):
+    """QE's ``calbec`` shape: ``op(A)`` over the first ``n`` rows of a taller ``A``, with literal complex scalars."""
+    rows, cols = ("n", "k") if flag == "N" else ("k", "n")
+    src = f"""
+subroutine probe_zgemm(a, b, c, n, k)
+  integer, intent(in) :: n, k
+  complex(8), intent(in) :: a(5, 5), b(5, 5)
+  complex(8), intent(inout) :: c(5, 5)
+  call zgemm('{flag}', 'N', n, n, k, (2.0d0, 0.0d0), a, 5, b, 5, (0.0d0, 0.0d0), c, 5)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_zgemm").build()
+    rng = np.random.default_rng(0)
+    a, b = (np.asfortranarray(rng.random((5, 5)) + 1j * rng.random((5, 5))) for _ in range(2))
+    c = np.full((5, 5), -1.0 + 0j, order="F")
+    n, k = 2, 3
+    sdfg(a=a, b=b, c=c, n=np.int32(n), k=np.int32(k))
+    extent = {"n": n, "k": k}
+    expected = np.full((5, 5), -1.0 + 0j)
+    expected[:n, :n] = 2.0 * COMPLEX_OPS[flag](a[: extent[rows], : extent[cols]]) @ b[:k, :n]
+    np.testing.assert_allclose(c, expected)
+
+
+@pytest.mark.parametrize("flag", COMPLEX_OPS)
+def test_zgemv_transposes_and_conjugates(tmp_path: Path, flag):
+    src = f"""
+subroutine probe_zgemv(a, x, y)
+  complex(8), intent(in) :: a(3, 3), x(3)
+  complex(8), intent(inout) :: y(3)
+  call zgemv('{flag}', 3, 3, (1.0d0, 0.0d0), a, 3, x, 1, (0.0d0, 0.0d0), y, 1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_zgemv").build()
+    rng = np.random.default_rng(1)
+    a = np.asfortranarray(rng.random((3, 3)) + 1j * rng.random((3, 3)))
+    x, y = rng.random(3) + 1j * rng.random(3), np.zeros(3, complex)
+    sdfg(a=a, x=x, y=y)
+    np.testing.assert_allclose(y, COMPLEX_OPS[flag](a) @ x)
+
+
+@pytest.mark.parametrize("alpha", ["z", "conjg(z)", "-z"])
+def test_zgemm_scales_by_a_runtime_alpha(tmp_path: Path, alpha):
+    """h_psi's ``zgemm('C', 'N', ..., CONJG(phase), ...)``: ``alpha`` is a COMPLEX value known only at run time."""
+    src = f"""
+subroutine probe_alpha(z, a, b, c)
+  complex(8), intent(in) :: z, a(3, 3), b(3, 3)
+  complex(8), intent(inout) :: c(3, 3)
+  call zgemm('C', 'N', 3, 3, 3, {alpha}, a, 3, b, 3, (1.0d0, 0.0d0), c, 3)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_alpha").build()
+    rng = np.random.default_rng(2)
+    a, b, c = (np.asfortranarray(rng.random((3, 3)) + 1j * rng.random((3, 3))) for _ in range(3))
+    z = 0.5 - 2.0j
+    expected = {"z": z, "conjg(z)": np.conj(z), "-z": -z}[alpha] * a.conj().T @ b + c
+    sdfg(z=np.array([z]), a=a, b=b, c=c)
+    np.testing.assert_allclose(c, expected)
+
+
 @pytest.mark.parametrize(
     "call, node_type, expected",
     [
