@@ -2032,9 +2032,7 @@ def track_local_consts(
             loc = search_real_local_alias_spec(a, alias_map) if isinstance(a, f03.Name) else None
             if loc and not isinstance(node, f03.Intrinsic_Function_Reference):
                 tm.add(ident_spec(alias_map[loc]))  # The callee may write its actual
-            elif isinstance(a, (f03.Part_Ref, f03.Data_Ref)) and not isinstance(
-                node, f03.Intrinsic_Function_Reference
-            ):
+            elif isinstance(a, (f03.Part_Ref, f03.Data_Ref)) and not isinstance(node, f03.Intrinsic_Function_Reference):
                 # A subscripted actual (``CALL f(in_stride(1))``) hands the callee
                 # that element, so the callee reaches it through the element
                 # key -- not the whole root. Dropping the root spec instead would
