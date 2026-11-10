@@ -131,6 +131,22 @@ static void rejectElementPointerComponentRebind(fir::StoreOp st) {
 // Materialises SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into Reduce lib-nodes before the branch;
 // forward-declared for use above its definition.
 static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>& nodes);
+
+/// Appends the assign storing ``yielded`` into the synthetic scalar of ``result``, after the Reduce nodes for any
+/// reduction it reads. Renders through buildBoolExpr first: a multi-element AND convergence check must keep its
+/// subscripts, else `rsdnm < tolrsd` compares two double* POINTERS (see tests/lu_two_call_convergence_repro_test.py).
+/// The read accesses route an array element (h_psi's ``SUM(g(:, ng) ** 2) > q2x``) through tasklet connectors.
+static void appendSynthAssign(std::vector<ASTNode>& out, mlir::Value result, mlir::Value yielded) {
+  materialiseCondReductions(yielded, out);
+  ASTNode a;
+  a.kind = "assign";
+  a.target = scfSynthName(result);
+  a.expr = buildBoolExpr(yielded, 0);
+  if (a.expr == "?") a.expr = buildExpr(yielded, 0);
+  a.target_is_array = false;
+  collectReadAccesses(yielded, a.accesses, 0);
+  out.push_back(std::move(a));
+}
 // 0-based per-dim DaCe subset strings for a section designate (defined in extract_vars.cpp); feeds a
 // section-reduction's VIEW source.
 std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec);
@@ -171,9 +187,11 @@ static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
   bool const computed = peelsFloat(doLoop.getUpperBound());
   if (auto c = traceConstInt(doLoop.getUpperBound())) {
     n.loop_bound = std::to_string(*c);
+  } else if (isArrayElementLoad(doLoop.getUpperBound())) {
+    // Subscripted form below; ``buildExpr`` names an array bare, for the connector no bound has.
   } else if (computed) {
     n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
-  } else if (!isArrayElementLoad(doLoop.getUpperBound())) {
+  } else {
     n.loop_bound = traceToDecl(doLoop.getUpperBound());
   }
   if (n.loop_bound.empty()) n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
@@ -263,12 +281,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshot
   for (auto& op : block) {
     if (auto it = snapshots.find(&op); it != snapshots.end())
       for (auto const& [result, yielded] : it->second) {
-        ASTNode a;
-        a.kind = "assign";
-        a.target = scfSynthName(result);
-        a.expr = yieldedExpr(yielded);
-        a.target_is_array = false;
-        out.push_back(std::move(a));
+        appendSynthAssign(out, result, yielded);
       }
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
@@ -303,12 +316,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block, const YieldSnapshot
       if (auto whileOp = condOp->getParentOfType<mlir::scf::WhileOp>()) {
         auto args = condOp.getArgs();
         for (unsigned i = 0; i < args.size() && i < whileOp.getNumResults(); ++i) {
-          ASTNode a;
-          a.kind = "assign";
-          a.target = scfSynthName(whileOp.getResult(i));
-          a.expr = yieldedExpr(args[i]);
-          a.target_is_array = false;
-          out.push_back(std::move(a));
+          appendSynthAssign(out, whileOp.getResult(i), args[i]);
         }
       }
       // scf.condition(%c): break when %c is false. Uses the pre-body snapshot __brk_<N> (if created) so the check sees
@@ -2072,6 +2080,12 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
             auto built =
                 buildElementalAnyAllReduce(assign, elem_src, e.wcr.str(), identityForType(e, redElemTy), e.py_op.str());
             if (!built.empty()) {
+              if (sd->getNumOperands() > 1) {
+                auto dim = traceConstInt(sd->getOperand(1));
+                if (!dim || built.back().kind != "reduce")
+                  throw std::runtime_error("DIM= on this reduction of an array expression is not lowered");
+                built.back().reduce_axes.push_back(*dim - 1);
+              }
               for (auto& bn : built) nodes.push_back(std::move(bn));
               emitted = true;
             }
@@ -3361,7 +3375,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (auto r = mlir::dyn_cast<hlfir::MaxvalOp>(red)) return r.getMask();
       return {};
     };
-    if (reductionMask(&op)) throw std::runtime_error("MASK= on SUM/PRODUCT/MINVAL/MAXVAL is not lowered");
+    // hlfir-lift-reduction-operands folds MASK= away; a pipeline without it reaches here.
+    if (reductionMask(&op)) throw std::runtime_error("MASK= needs hlfir-lift-reduction-operands in the pipeline");
     if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
       std::string locStr;
       llvm::raw_string_ostream locOS(locStr);
@@ -3552,14 +3567,7 @@ static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
         break;
       }
     if (!yieldOp) return;
-    for (unsigned i = 0; i < sw.getNumResults(); ++i) {
-      ASTNode a;
-      a.kind = "assign";
-      a.target = scfSynthName(sw.getResult(i));
-      a.expr = yieldedExpr(yieldOp.getOperand(i));
-      a.target_is_array = false;
-      body.push_back(std::move(a));
-    }
+    for (unsigned i = 0; i < sw.getNumResults(); ++i) appendSynthAssign(body, sw.getResult(i), yieldOp.getOperand(i));
   };
 
   // Innermost else == the default region's body.

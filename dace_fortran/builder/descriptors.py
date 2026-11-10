@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import dace
 from dace import SDFG
 
-from dace_fortran.builder.access import resolve_object_member_expr
+from dace_fortran.builder.access import apply_reserved, resolve_object_member_expr
 from dace_fortran.builder.records import NodeLike, SyntheticVar, VarLike
 
 if TYPE_CHECKING:
@@ -702,7 +702,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
         if s.lstrip("-").isdigit():
             return int(s)
         if _is_expr(s):
-            return dace.symbolic.pystr_to_symbolic(s)
+            return dace.symbolic.pystr_to_symbolic(apply_reserved(s))
         return dace.symbol(s)
 
     # Flang emits internal temporaries with dotted names (e.g.
@@ -739,12 +739,13 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             return None
         if s.lstrip("-").isdigit():
             return int(s)
-        # Symbolic lb (e.g. caller-supplied ``arrsize``).  If the symbol
-        # is already declared on the SDFG (a known dummy / Fortran sym),
-        # pass the name through; sdfg.specialize will alias one symbol
-        # to the other.  Otherwise leave unknown so the offset stays
-        # free.
-        return s if s in sdfg.symbols else None
+        # Symbolic lb (e.g. caller-supplied ``arrsize``, or the expression
+        # ``lo + 1``).  If every name in it is declared on the SDFG (a known
+        # dummy / Fortran sym), pass it through; the offset symbol is
+        # replaced by it after emission.  Otherwise leave unknown so the
+        # offset stays free.
+        names = re.findall(r"[A-Za-z_]\w*", s)
+        return s if names and all(n in sdfg.symbols or n in ("max", "min") for n in names) else None
 
     for v in builder.arrays.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):

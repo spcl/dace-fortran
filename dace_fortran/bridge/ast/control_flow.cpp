@@ -934,16 +934,4 @@ std::string scfSynthName(mlir::Value v) {
   return s;
 }
 
-/// Convert a yielded value to a string for writing into a synthetic scalar; reuses buildExpr, which traces through
-/// arith ops and cast chains.
-std::string yieldedExpr(mlir::Value v) {
-  // The yielded value (e.g. arith.andi of i1 cmps for a multi-element AND convergence check) must render WITH
-  // subscripts via buildBoolExpr, not through NoSubscriptGuard's bare-name path -- else `rsdnm < tolrsd` renders as a
-  // POINTER comparison in C++ (both double* params), silently breaking early-return semantics (NPB LU ssor istep bug;
-  // see tests/lu_two_call_convergence_repro_test.py).
-  auto b = buildBoolExpr(v, 0);
-  if (b != "?") return b;
-  return buildExpr(v, 0);
-}
-
 }  // namespace hlfir_bridge

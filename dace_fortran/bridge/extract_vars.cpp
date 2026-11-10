@@ -206,7 +206,13 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vec
     // the dynamic gather-temp extent
     // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1), 0)``)
     // as a closed-form expression over already-promoted scalar symbols.
-    auto expr = traceExtentExpr(ext);
+    auto expr = traceExtentExpr(ext, [&](mlir::Value element) -> std::string {
+      auto ae = arrayElementExtent(element);
+      if (!ae) return "";
+      std::string const sym = valueSymbolName(ae->first, ae->second);
+      if (valueSyms) valueSyms->push_back({sym, ae->first, ae->second});
+      return sym;
+    });
     if (!expr.empty()) {
       syms.push_back(expr);
       return;
@@ -606,6 +612,7 @@ static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl) {
       lbs.push_back(std::to_string(*c));
     } else {
       auto n = traceToDecl(lb);
+      if (n.empty()) n = traceExtentExpr(lb);
       lbs.push_back(n.empty() ? "?" : n);
     }
   }
@@ -1132,6 +1139,21 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
         if (auto a = scalarConstantValue(re.getVal()), b = scalarConstantValue(im.getVal()); a && b)
           out.insert(out.end(), {*a, *b});
   }
+  return out;
+}
+
+// The exact initial values of an integer(8) global: a double cannot carry them past 2**53.
+static std::vector<int64_t> extractInt64InitData(fir::GlobalOp gop) {
+  std::vector<int64_t> out;
+  if (!gop) return out;
+  if (auto initOpt = gop.getInitVal())
+    if (auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(*initOpt); dense && dense.getElementType().isInteger(64)) {
+      auto values = dense.getValues<int64_t>();
+      out.assign(values.begin(), values.end());
+      return out;
+    }
+  if (auto val = globalInitValue(gop); val && val.getType().isInteger(64))
+    if (auto c = traceConstInt(val)) out.push_back(*c);
   return out;
 }
 
@@ -2060,7 +2082,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // leaf referenced in a closed-form extent expression
     // (``traceExtentExpr`` resolves these for the descriptor; the
     // leaves must be SDFG symbols for the expression to compile).
-    for (auto ext : classifyShapeOperand(op.getShape()).extents) collectExtentExprScalars(ext, symbolNames);
+    auto si = classifyShapeOperand(op.getShape());
+    for (auto ext : si.extents) collectExtentExprScalars(ext, symbolNames);
+    for (auto lb : si.lbs) collectExtentExprScalars(lb, symbolNames);
   }
   module.walk([&](fir::DoLoopOp lp) {
     auto ub = traceToDecl(lp.getUpperBound());
@@ -3154,6 +3178,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
               for (auto it = levels.rbegin(); it != levels.rend(); ++it)
                 for (auto& s : *it) aosElemIdx.push_back(s);
             }
+            // Lower bound of source dim ``d`` as the offset symbol a memlet subtracts, empty for the default 1.
+            auto const sourceLbs = sec.getMemref().getDefiningOp<hlfir::DeclareOp>()
+                                       ? declareLowerBounds(sec.getMemref().getDefiningOp<hlfir::DeclareOp>())
+                                       : std::vector<std::optional<int64_t>>{};
+            auto sourceOffset = [&](size_t d) -> std::string {
+              if (d >= sourceLbs.size() || sourceLbs[d] == 1) return {};
+              return "offset_" + srcName + "_d" + std::to_string(d);
+            };
             for (bool const triplet : triplets) {
               if (triplet && cursor + 2 < secIdx.size()) {
                 if (isWholeBoxDim(secIdx[cursor], secIdx[cursor + 2])) {
@@ -3180,11 +3212,12 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                   // inclusive upper).  Literal ``-1`` for
                   // constant lo; ``(lo)-1`` for symbolic.
                   std::string s;
-                  if (loC)
-                    s = std::to_string(*loC - 1);
+                  if (auto off = sourceOffset(subset.size()); !off.empty())
+                    s = "(" + lo + ")-" + off + ":(" + hi + ")-" + off + "+1";
+                  else if (loC)
+                    s = std::to_string(*loC - 1) + ":" + hi;
                   else
-                    s = "(" + lo + ")-1";
-                  s += ":" + hi;
+                    s = "(" + lo + ")-1:" + hi;
                   if (!st.empty() && st != "1") s += ":" + st;
                   subset.push_back(std::move(s));
                 } else {
@@ -3200,7 +3233,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                   // form for the view_alias path
                   // ("(k)-1" / literal-minus-one).
                   std::string zero_based;
-                  if (auto c = traceConstInt(secIdx[cursor]))
+                  if (auto off = sourceOffset(subset.size()); !off.empty())
+                    zero_based = "(" + k + ")-" + off;
+                  else if (auto c = traceConstInt(secIdx[cursor]))
                     zero_based = std::to_string(*c - 1);
                   else
                     zero_based = "(" + k + ")-1";
@@ -3521,6 +3556,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
+      v.const_ints = extractInt64InitData(gop);
       // Only a kind without a transport (``complex(16)``) comes back empty; the builder would zero the global.
       if (v.const_data.empty() && gop && (gop.getInitVal() || !gop.getRegion().empty()) &&
           mlir::isa<mlir::ComplexType>(fir::unwrapSequenceType(gop.getType())))

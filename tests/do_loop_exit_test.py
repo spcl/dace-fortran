@@ -38,6 +38,29 @@ def test_do_loop_exit_numerical(tmp_path):
     np.testing.assert_allclose(b_sdfg, b_ref, rtol=1e-12, atol=1e-12)
 
 
+def test_exit_condition_reads_array_elements(tmp_path: Path):
+    """QE gk_sort's ``IF (SUM(g(:, ng) ** 2) > q2x) EXIT``: the condition reads array elements, so the scalar holding
+    it must read them through connectors, not name the array in its tasklet."""
+    src = """
+subroutine exit_on_norm(n, g, x, r)
+  integer, intent(in) :: n
+  double precision, intent(in) :: g(3, n), x
+  integer, intent(out) :: r
+  integer :: ng
+  r = 0
+  do ng = 1, n
+    if (sum(g(:, ng) ** 2) > (x + 1d-8)) exit
+    r = r + 1
+  end do
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="exit_on_norm").build()
+    g = np.array([[0.1] * 3, [0.2] * 3, [3.0] * 3, [0.1] * 3]).T.copy(order="F")
+    r = np.zeros(1, np.int32)
+    sdfg(n=np.int32(4), g=g, x=1.0, r=r)
+    assert r[0] == 2
+
+
 if __name__ == "__main__":
     import pytest
 
