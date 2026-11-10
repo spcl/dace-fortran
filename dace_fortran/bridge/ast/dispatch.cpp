@@ -158,9 +158,11 @@ static void setDoLoopBounds(ASTNode& n, fir::DoLoopOp doLoop) {
   bool const computed = peelsFloat(doLoop.getUpperBound());
   if (auto c = traceConstInt(doLoop.getUpperBound())) {
     n.loop_bound = std::to_string(*c);
+  } else if (isArrayElementLoad(doLoop.getUpperBound())) {
+    // Subscripted form below; ``buildExpr`` names an array bare, for the connector no bound has.
   } else if (computed) {
     n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
-  } else if (!isArrayElementLoad(doLoop.getUpperBound())) {
+  } else {
     n.loop_bound = traceToDecl(doLoop.getUpperBound());
   }
   if (n.loop_bound.empty()) n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);

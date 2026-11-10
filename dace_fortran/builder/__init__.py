@@ -674,6 +674,19 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
     sdfg.symbols.update(target_dtypes)
 
 
+def initial_values(v: VarLike) -> Any:
+    """The initial data of ``v`` per element, as a flat array; the bridge sends a complex element as (re, im)."""
+    import numpy as np
+
+    data = np.asarray(v.const_data, dtype=np.float64)
+    return data[::2] + 1j * data[1::2] if v.dtype.startswith("complex") else data
+
+
+def initial_value_text(value: Any) -> str:
+    """``value`` of :func:`initial_values` as tasklet source."""
+    return repr(complex(value)) if value.dtype.kind == "c" else repr(float(value))
+
+
 def refuse_extent_writes(builder: SDFGBuilder) -> None:
     """Refuse a body that assigns a symbol an explicit extent names.
 
@@ -1210,7 +1223,7 @@ class SDFGBuilder:
             if v is None:
                 continue
             if isinstance(v, str):
-                alias_offsets[k] = v
+                alias_offsets[k] = self.dace_name_map.get(v, v)
             else:
                 const_offsets[k] = v
         # Snapshot the inferred per-axis offsets onto the SDFG before the
@@ -1503,7 +1516,7 @@ class SDFGBuilder:
                 continue
             desc = sdfg.arrays[v.fortran_name]
             np_dtype = desc.dtype.as_numpy_dtype()
-            arr = np.asarray(v.const_data, dtype=np.float64).astype(np_dtype)
+            arr = initial_values(v).astype(np_dtype)
             # Scalar (rank 0) globals  --  e.g. ``real :: bob = 1`` at
             # module scope  --  pass through as a Python scalar so DaCe's
             # ``framecode.generate_constants`` writes a
@@ -1520,7 +1533,8 @@ class SDFGBuilder:
                 # booleans pass through as Python scalars (round-trip- and
                 # ``isinstance(..., int)``-friendly).
                 val = arr.reshape(())[()]
-                sdfg.add_constant(v.fortran_name, val if np.issubdtype(arr.dtype, np.floating) else val.item(), desc)
+                is_real = np.issubdtype(arr.dtype, np.inexact)
+                sdfg.add_constant(v.fortran_name, val if is_real else val.item(), desc)
                 continue
             # Array globals: reshape from row-major doubles transport
             # to the descriptor's declared shape.
@@ -1558,9 +1572,9 @@ class SDFGBuilder:
                 continue
             seeded.add(v.fortran_name)
             if v.rank == 0:
-                val = v.const_data[0]
+                val = initial_values(v)[0]
                 is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
-                expr = str(round(val)) if is_int else repr(float(val))
+                expr = str(round(val)) if is_int else initial_value_text(val)
                 if v.fortran_name in self.symbols:
                     symbol_inits.append((v.fortran_name, expr))
                 elif v.fortran_name in self.scalars:
@@ -1575,7 +1589,7 @@ class SDFGBuilder:
         for v in array_inits:
             desc = sdfg.arrays[v.fortran_name]
             shape = tuple(int(d) for d in desc.shape)
-            arr = np.asarray(v.const_data, dtype=np.float64)
+            arr = initial_values(v)
             if arr.size != int(np.prod(shape)):
                 continue
             # Make it a writable transient (a kwarg would force the caller to
@@ -1593,7 +1607,7 @@ class SDFGBuilder:
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
-                expr = str(round(float(val))) if is_int else repr(float(val))
+                expr = str(round(float(val))) if is_int else initial_value_text(val)
                 tname = "init_{}_{}".format(v.fortran_name, "_".join(str(i) for i in idx))
                 t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, f"_o = {expr}")
                 ctx.cur.add_edge(
@@ -1637,7 +1651,7 @@ class SDFGBuilder:
         # A constant-index element as an extent (``orbital(1 : ngk(1), :)`` -> ``__sym_ngk_1``) is named like the
         # position symbols an expression read seeds, but no expression may read it: seed every one an extent names.
         for v in self.arrays.values():
-            for sym in v.shape_symbols:
+            for sym in re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols)):
                 element = _position_symbol_element(sym, sdfg)
                 if element is None or sym in seeds:
                     continue

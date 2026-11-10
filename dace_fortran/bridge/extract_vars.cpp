@@ -4,6 +4,7 @@
 
 #include "bridge/extract_vars.h"
 
+#include <complex>
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -205,7 +206,13 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vec
     // the dynamic gather-temp extent
     // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1), 0)``)
     // as a closed-form expression over already-promoted scalar symbols.
-    auto expr = traceExtentExpr(ext);
+    auto expr = traceExtentExpr(ext, [&](mlir::Value element) -> std::string {
+      auto ae = arrayElementExtent(element);
+      if (!ae) return "";
+      std::string const sym = valueSymbolName(ae->first, ae->second);
+      if (valueSyms) valueSyms->push_back({sym, ae->first, ae->second});
+      return sym;
+    });
     if (!expr.empty()) {
       syms.push_back(expr);
       return;
@@ -1114,6 +1121,16 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
         for (auto v : dense.getValues<int64_t>()) out.push_back(static_cast<double>(v));
       } else if (eleTy.isInteger(1)) {
         for (auto v : dense.getValues<bool>()) out.push_back(v ? 1.0 : 0.0);
+      } else if (auto cplx = mlir::dyn_cast<mlir::ComplexType>(eleTy)) {
+        // A complex element travels as its (re, im) pair; the builder folds the pairs back.
+        auto pushPairs = [&](auto values) {
+          for (auto z : values) {
+            out.push_back(static_cast<double>(z.real()));
+            out.push_back(static_cast<double>(z.imag()));
+          }
+        };
+        if (cplx.getElementType().isF64()) pushPairs(dense.getValues<std::complex<double>>());
+        if (cplx.getElementType().isF32()) pushPairs(dense.getValues<std::complex<float>>());
       }
       if (!out.empty()) return out;
     }
@@ -1122,8 +1139,14 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
   // at module scope without ``parameter``).  The initialiser lives
   // in the body as an ``arith.constant`` feeding a ``fir.has_value``
   // terminator.
-  if (auto val = globalInitValue(gop))
+  if (auto val = globalInitValue(gop)) {
     if (auto cst = scalarConstantValue(val)) out.push_back(*cst);
+    // A complex scalar is built by two ``fir.insert_value`` ops: real part, then imaginary part.
+    if (auto im = val.getDefiningOp<fir::InsertValueOp>())
+      if (auto re = im.getAdt().getDefiningOp<fir::InsertValueOp>())
+        if (auto a = scalarConstantValue(re.getVal()), b = scalarConstantValue(im.getVal()); a && b)
+          out.insert(out.end(), {*a, *b});
+  }
   return out;
 }
 
@@ -3513,7 +3536,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
-      // The builder cannot bake a complex initializer yet and would zero the global instead.
+      // Only a kind without a transport (``complex(16)``) comes back empty; the builder would zero the global.
       if (v.const_data.empty() && gop && (gop.getInitVal() || !gop.getRegion().empty()) &&
           mlir::isa<mlir::ComplexType>(fir::unwrapSequenceType(gop.getType())))
         throw std::runtime_error("COMPLEX initial data of " + v.fortran_name + " is not lowered");
