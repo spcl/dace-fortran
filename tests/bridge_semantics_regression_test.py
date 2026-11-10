@@ -603,6 +603,33 @@ end subroutine"""
     assert s[0] == a[: 3 if flag else 2, 1:3].sum()
 
 
+def test_branch_on_the_size_of_a_one_column_section_keeps_only_the_live_side(tmp_path: Path):
+    """QE ``wave_g2r(orbital(:, ibnd : ibnd), ...)``: ``dim2 = SIZE(f_in(1, :))`` is 1, so the ``dim2 == 2`` branch
+    reading ``f_in(:, 2)`` is dead and must not reach the SDFG, whose view has one column."""
+    src = """module m
+contains
+  subroutine g2r(f_in, s)
+    real(8), intent(in) :: f_in(:, :)
+    real(8), intent(out) :: s
+    integer :: dim2
+    dim2 = size(f_in(1, :))
+    if (dim2 /= 2) s = sum(f_in(:, 1))
+    if (dim2 == 2) s = sum(f_in(:, 1)) + 10 * sum(f_in(:, 2))
+  end subroutine
+end module
+subroutine top(a, i, s)
+  use m
+  integer, intent(in) :: i
+  real(8), intent(inout) :: a(4, 3)
+  real(8), intent(out) :: s
+  call g2r(a(:, i:i), s)
+end subroutine"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    a, s = np.array(np.arange(1.0, 13.0).reshape(4, 3, order="F"), order="F"), np.zeros(1)
+    sdfg(a=a, i=I4(2), s=s)
+    assert s[0] == a[:, 1].sum()
+
+
 REFUSED = {
     "reduction_mask": (
         """subroutine @(a, s)

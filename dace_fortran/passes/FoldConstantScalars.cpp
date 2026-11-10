@@ -53,6 +53,59 @@ mlir::arith::ConstantOp getConstantOp(mlir::Value v) {
   return nullptr;
 }
 
+/// The value of an integer expression of constants (``SIZE`` of a fixed-extent section, folded to its extent, reaches
+/// the stored value through Flang's index/i64 converts, ``max(ext, 0)`` and ``+ 1 - 1``), or ``nullopt``.
+std::optional<int64_t> evalInt(mlir::Value v, int depth = 0) {
+  if (!v || depth > 16 || !v.getType().isIntOrIndex()) return std::nullopt;
+  auto* d = v.getDefiningOp();
+  if (!d) return std::nullopt;
+  if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return ia.getInt();
+    return std::nullopt;
+  }
+  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) return evalInt(cv.getValue(), depth + 1);
+  if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
+    auto cmp = sel.getCondition().getDefiningOp<mlir::arith::CmpIOp>();
+    if (!cmp) return std::nullopt;
+    auto a = evalInt(cmp.getLhs(), depth + 1), b = evalInt(cmp.getRhs(), depth + 1);
+    if (!a || !b) return std::nullopt;
+    using P = mlir::arith::CmpIPredicate;
+    std::optional<bool> taken;
+    switch (cmp.getPredicate()) {
+      case P::sgt:
+        taken = *a > *b;
+        break;
+      case P::sge:
+        taken = *a >= *b;
+        break;
+      case P::slt:
+        taken = *a < *b;
+        break;
+      case P::sle:
+        taken = *a <= *b;
+        break;
+      case P::eq:
+        taken = *a == *b;
+        break;
+      case P::ne:
+        taken = *a != *b;
+        break;
+      default:
+        return std::nullopt;
+    }
+    return evalInt(*taken ? sel.getTrueValue() : sel.getFalseValue(), depth + 1);
+  }
+  if (!mlir::isa<mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::MulIOp, mlir::arith::DivSIOp>(d))
+    return std::nullopt;
+  auto a = evalInt(d->getOperand(0), depth + 1), b = evalInt(d->getOperand(1), depth + 1);
+  if (!a || !b) return std::nullopt;
+  if (mlir::isa<mlir::arith::AddIOp>(d)) return *a + *b;
+  if (mlir::isa<mlir::arith::SubIOp>(d)) return *a - *b;
+  if (mlir::isa<mlir::arith::MulIOp>(d)) return *a * *b;
+  if (*b == 0) return std::nullopt;
+  return *a / *b;
+}
+
 /// Recursively check that all users of ``v`` (through transparent
 /// declare/convert wrappers) are either loads, ``fir.store``s, or scalar
 /// ``hlfir.assign``s of the same scalar alloca, or other transparent wrappers.
@@ -142,7 +195,13 @@ struct FoldConstantScalarsPass
           stored = assigns.front().getRhs();
           writeOp = assigns.front();
         }
-        if (!getConstantOp(stored)) continue;
+        if (!getConstantOp(stored)) {
+          auto value = evalInt(stored);
+          if (!value || !mlir::isa<mlir::IntegerType>(stored.getType())) continue;
+          mlir::OpBuilder b(writeOp);
+          stored = b.create<mlir::arith::ConstantOp>(writeOp->getLoc(), stored.getType(),
+                                                     b.getIntegerAttr(stored.getType(), *value));
+        }
 
         // The write must dominate every load.
         bool dominated = true;

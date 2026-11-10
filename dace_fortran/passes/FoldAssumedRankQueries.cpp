@@ -75,6 +75,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
 
@@ -218,6 +219,21 @@ struct FoldAssumedRankQueriesPass
       if (mlir::isa_and_nonnull<fir::ShiftOp>(shape.getDefiningOp())) return std::nullopt;
       return std::optional<int64_t>();
     };
+    // One value, or two loads of one variable with nothing in between that writes memory (``a(:, i:i)``).
+    auto sameValue = [](mlir::Value a, mlir::Value b) {
+      auto peel = [](mlir::Value v) {
+        while (auto cv = v.getDefiningOp<fir::ConvertOp>()) v = cv.getValue();
+        return v;
+      };
+      a = peel(a), b = peel(b);
+      if (a == b) return true;
+      auto la = a.getDefiningOp<fir::LoadOp>(), lb = b.getDefiningOp<fir::LoadOp>();
+      if (!la || !lb || la.getMemref() != lb.getMemref() || la->getBlock() != lb->getBlock()) return false;
+      if (lb->isBeforeInBlock(la)) std::swap(la, lb);
+      for (auto* op = la->getNextNode(); op && op != lb.getOperation(); op = op->getNextNode())
+        if (!mlir::isa<fir::LoadOp>(op) && !mlir::isMemoryEffectFree(op)) return false;
+      return true;
+    };
     auto extentAt = [&](mlir::Value v, int64_t dim) -> std::optional<int64_t> {
       // Walk back through the convert / rebox / declare / embox chain
       // looking for the first ``fir.array`` whose ``dim``-th extent is
@@ -259,6 +275,27 @@ struct FoldAssumedRankQueriesPass
           if (auto declared = declaredExtent(eb.getShape(), dim)) return *declared;
           v = eb.getMemref();
           continue;
+        }
+        // A section's ``dim``-th surviving triplet ``lo:hi:1``: constant bounds, or one value twice (``a(:, i:i)``).
+        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def)) {
+          auto ops = dg.getIndices();
+          int64_t kept = 0;
+          for (unsigned d = 0, k = 0; d < dg.getIsTriplet().size(); ++d) {
+            if (!dg.getIsTriplet()[d]) {
+              ++k;
+              continue;
+            }
+            if (kept++ == dim) {
+              auto step = traceConstInt(ops[k + 2]);
+              if (!step || *step != 1) return std::nullopt;
+              if (sameValue(ops[k], ops[k + 1])) return 1;
+              auto lo = traceConstInt(ops[k]), hi = traceConstInt(ops[k + 1]);
+              if (lo && hi) return std::max<int64_t>(*hi - *lo + 1, 0);
+              return std::nullopt;
+            }
+            k += 3;
+          }
+          return std::nullopt;
         }
         break;
       }
