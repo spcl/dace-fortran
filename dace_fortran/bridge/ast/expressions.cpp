@@ -269,7 +269,62 @@ static bool isMinMaxSelect(mlir::arith::SelectOp sel) {
   return false;
 }
 
+/// C expression over ``@`` (the tested value) for an ``llvm.is.fpclass`` mask on ``ty``: NaN 3; -inf 4, -normal 8,
+/// -subnormal 16, -zero 32, +zero 64, +subnormal 128, +normal 256, +inf 512. ``#`` in the table is TINY of the kind.
+static std::string fpclassPattern(int64_t mask, mlir::Type ty) {
+  static constexpr int64_t kFinite = 504;
+  static constexpr int64_t kNegative = 60;
+  static constexpr int64_t kNan = 3;
+  struct Kind {
+    int64_t negative, positive;
+    const char* test;
+  };
+  static const Kind kKinds[] = {
+      {4, 512, "isinf(@)"},
+      {8, 256, "(isfinite(@) and (abs(@) >= #))"},
+      {16, 128, "((@ != 0) and (abs(@) < #))"},
+      {32, 64, "(@ == 0)"},
+  };
+  if (!ty.isF32() && !ty.isF64()) throw std::runtime_error("IEEE class tests are lowered for real(4) and real(8) only");
+  std::string const tiny = ty.isF32() ? "1.1754943508222875e-38" : "2.2250738585072014e-308";
+  if ((mask & kNan) != 0 && (mask & kNan) != kNan)
+    throw std::runtime_error("is_fpclass telling signaling from quiet NaN is not lowered");
+  std::vector<std::string> terms;
+  if ((mask & kNan) == kNan) terms.emplace_back("isnan(@)");
+  if ((mask & kFinite) == kFinite) {
+    terms.emplace_back("isfinite(@)");
+    mask &= ~kFinite;
+  } else if ((mask & ~kNan) == kNegative) {
+    terms.emplace_back("(signbit(@) and (not isnan(@)))");
+    mask = 0;
+  }
+  for (auto const& k : kKinds) {
+    bool const negative = (mask & k.negative) != 0;
+    bool const positive = (mask & k.positive) != 0;
+    if (negative && positive) terms.emplace_back(k.test);
+    else if (negative) terms.push_back(std::string("(") + k.test + " and signbit(@))");
+    else if (positive) terms.push_back(std::string("(") + k.test + " and (not signbit(@)))");
+  }
+  if (terms.empty()) return "False";
+  std::string out = "(" + llvm::join(terms, " or ") + ")";
+  for (size_t at = out.find('#'); at != std::string::npos; at = out.find('#')) out.replace(at, 1, tiny);
+  return out;
+}
+
+/// The ``llvm.is.fpclass`` mask of ``op``, or nullopt for any other op.
+static std::optional<int64_t> fpclassMask(mlir::Operation* op) {
+  if (op->getName().getStringRef() != "llvm.intr.is.fpclass") return std::nullopt;
+  auto bit = op->getInherentAttr("bit");
+  auto attr = bit ? mlir::dyn_cast_or_null<mlir::IntegerAttr>(*bit) : mlir::IntegerAttr{};
+  if (!attr) return std::nullopt;
+  return attr.getInt();
+}
+
 llvm::SmallVector<mlir::Value, 5> printedOperands(mlir::Operation* op) {
+  if (auto mask = fpclassMask(op)) {
+    auto const pattern = fpclassPattern(*mask, op->getOperand(0).getType());
+    return llvm::SmallVector<mlir::Value, 5>(llvm::count(pattern, '@'), op->getOperand(0));
+  }
   if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(op)) {
     if (isMinMaxSelect(sel)) return {sel.getTrueValue(), sel.getFalseValue()};
     return {sel.getTrueValue(), sel.getCondition(), sel.getFalseValue()};
@@ -1196,6 +1251,12 @@ std::string buildExpr(mlir::Value val, int d) {
       "math.powf",
       "math.powi",
   };
+  if (auto mask = fpclassMask(def)) {
+    std::string out;
+    std::string const x = buildExpr(def->getOperand(0), d + 1);
+    for (char const c : fpclassPattern(*mask, def->getOperand(0).getType())) c == '@' ? out += x : out += c;
+    return out;
+  }
   // ``**`` runs in double for an integer base: keep the integer quotient of a negative exponent with the cast, and go
   // through the exact ``ipow`` where a double cannot hold the kind. printedOperands lists this shape.
   if (nm == "math.ipowi" && def->getNumOperands() == 2) {

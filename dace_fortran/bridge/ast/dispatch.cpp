@@ -2036,6 +2036,12 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
             auto built =
                 buildElementalAnyAllReduce(assign, elem_src, e.wcr.str(), identityForType(e, redElemTy), e.py_op.str());
             if (!built.empty()) {
+              if (sd->getNumOperands() > 1) {
+                auto dim = traceConstInt(sd->getOperand(1));
+                if (!dim || built.back().kind != "reduce")
+                  throw std::runtime_error("DIM= on this reduction of an array expression is not lowered");
+                built.back().reduce_axes.push_back(*dim - 1);
+              }
               for (auto& bn : built) nodes.push_back(std::move(bn));
               emitted = true;
             }
@@ -3322,7 +3328,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (auto r = mlir::dyn_cast<hlfir::MaxvalOp>(red)) return r.getMask();
       return {};
     };
-    if (reductionMask(&op)) throw std::runtime_error("MASK= on SUM/PRODUCT/MINVAL/MAXVAL is not lowered");
+    // hlfir-lift-reduction-operands folds MASK= away; a pipeline without it reaches here.
+    if (reductionMask(&op)) throw std::runtime_error("MASK= needs hlfir-lift-reduction-operands in the pipeline");
     if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
       std::string locStr;
       llvm::raw_string_ostream locOS(locStr);

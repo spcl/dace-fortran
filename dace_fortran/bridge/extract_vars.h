@@ -30,6 +30,8 @@ struct VarInfo {
   /// triggers an SDFG init state. Row-major doubles, one per element; Python narrows to actual dtype, booleans as
   /// 0.0/1.0.
   std::vector<double> const_data;
+  /// The same values for an integer(8) global, which a double cannot hold exactly.
+  std::vector<int64_t> const_ints;
   /// For role == "view_alias" only: view_source is the underlying array's Fortran name, view_subset is one 0-based
   /// DaCe-form entry per source dim ("0:4" full range, "2" fixed). Set when Flang emits hlfir.declare on a
   /// fir.convert-reshaped section (storage-association reshape); descriptors stages copy-in/copy-out through the alias.

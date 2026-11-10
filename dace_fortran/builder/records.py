@@ -31,6 +31,7 @@ class SyntheticVar:
     lower_bounds: list[str] = field(default_factory=list)
     role: str = ""
     const_data: bool = False
+    const_ints: list[int] = field(default_factory=list)
     view_source: str = ""
     view_subset: list[str] = field(default_factory=list)
     view_dim_map: list[str] = field(default_factory=list)

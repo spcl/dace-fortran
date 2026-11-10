@@ -739,12 +739,13 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             return None
         if s.lstrip("-").isdigit():
             return int(s)
-        # Symbolic lb (e.g. caller-supplied ``arrsize``).  If the symbol
-        # is already declared on the SDFG (a known dummy / Fortran sym),
-        # pass the name through; sdfg.specialize will alias one symbol
-        # to the other.  Otherwise leave unknown so the offset stays
-        # free.
-        return s if s in sdfg.symbols else None
+        # Symbolic lb (e.g. caller-supplied ``arrsize``, or the expression
+        # ``lo + 1``).  If every name in it is declared on the SDFG (a known
+        # dummy / Fortran sym), pass it through; the offset symbol is
+        # replaced by it after emission.  Otherwise leave unknown so the
+        # offset stays free.
+        names = re.findall(r"[A-Za-z_]\w*", s)
+        return s if names and all(n in sdfg.symbols or n in ("max", "min") for n in names) else None
 
     for v in builder.arrays.values():
         if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):

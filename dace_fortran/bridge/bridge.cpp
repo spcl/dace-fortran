@@ -478,6 +478,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("lower_bounds", &VarInfo::lower_bounds)
       .def_ro("role", &VarInfo::role)
       .def_ro("const_data", &VarInfo::const_data)
+      .def_ro("const_ints", &VarInfo::const_ints)
       .def_ro("view_source", &VarInfo::view_source)
       .def_ro("view_subset", &VarInfo::view_subset)
       .def_ro("view_dim_map", &VarInfo::view_dim_map)

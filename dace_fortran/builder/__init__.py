@@ -650,6 +650,13 @@ def _resolve_alias(target: str, aliases: dict[str, str]) -> str:
     return target
 
 
+def const_array(v: VarLike) -> Any:
+    """``v``'s initial data as an array: exact for integer(8), doubles otherwise."""
+    import numpy as np
+
+    return np.asarray(v.const_ints, dtype=np.int64) if v.const_ints else np.asarray(v.const_data, dtype=np.float64)
+
+
 def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_dtype: bool) -> None:
     """Rename every alias onto its target and drop the alias from ``sdfg.symbols``.
 
@@ -1503,7 +1510,7 @@ class SDFGBuilder:
                 continue
             desc = sdfg.arrays[v.fortran_name]
             np_dtype = desc.dtype.as_numpy_dtype()
-            arr = np.asarray(v.const_data, dtype=np.float64).astype(np_dtype)
+            arr = const_array(v).astype(np_dtype)
             # Scalar (rank 0) globals  --  e.g. ``real :: bob = 1`` at
             # module scope  --  pass through as a Python scalar so DaCe's
             # ``framecode.generate_constants`` writes a
@@ -1558,7 +1565,7 @@ class SDFGBuilder:
                 continue
             seeded.add(v.fortran_name)
             if v.rank == 0:
-                val = v.const_data[0]
+                val = const_array(v)[0]
                 is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
                 expr = str(round(val)) if is_int else repr(float(val))
                 if v.fortran_name in self.symbols:
@@ -1575,7 +1582,7 @@ class SDFGBuilder:
         for v in array_inits:
             desc = sdfg.arrays[v.fortran_name]
             shape = tuple(int(d) for d in desc.shape)
-            arr = np.asarray(v.const_data, dtype=np.float64)
+            arr = const_array(v)
             if arr.size != int(np.prod(shape)):
                 continue
             # Make it a writable transient (a kwarg would force the caller to
@@ -1593,7 +1600,7 @@ class SDFGBuilder:
             acc = ctx.cur.add_write(v.fortran_name)
             for idx in np.ndindex(*shape):
                 val = arr[idx]
-                expr = str(round(float(val))) if is_int else repr(float(val))
+                expr = str(round(val)) if is_int else repr(float(val))
                 tname = "init_{}_{}".format(v.fortran_name, "_".join(str(i) for i in idx))
                 t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, f"_o = {expr}")
                 ctx.cur.add_edge(
