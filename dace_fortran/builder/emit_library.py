@@ -1207,7 +1207,7 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # BLAS state so the symbol is bound BEFORE the lib node executes.
     promotions: dict[str, str] = {}  # sym -> "array_name[0]"
 
-    def _scalar(name: str) -> float | dace.symbolic.symbol:
+    def _scalar(name: str) -> float | complex | dace.symbolic.symbol:
         """Resolve a scalar literal / dummy to a value usable as a
         :class:`SymbolicProperty` on the BLAS lib node.
         """
@@ -1215,6 +1215,9 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             return float(name)
         except (TypeError, ValueError):
             pass
+        if name.startswith("complex("):
+            re_part, im_part = name[len("complex(") : -1].split(",")
+            return complex(float(re_part), float(im_part))
         if name in ctx.sdfg.symbols:
             return _ds.symbol(name)
         if name in ctx.sdfg.arrays:
@@ -1242,7 +1245,7 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 in_edge.data.assignments[sym] = expr
             break
 
-    real_type = dace.float64 if routine.startswith("d") else dace.float32
+    real_type = {"d": dace.float64, "z": dace.complex128, "c": dace.complex64}.get(routine[0], dace.float32)
 
     def _size(name: str) -> int | dace.symbolic.symbol:
         """A BLAS size, leading dimension or increment argument as an integer or a symbol (a data scalar is staged
@@ -1294,6 +1297,35 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
                 promotions[sym] = f"({idx}) - 1"
                 zero_based.append(sym)
         return _Operand(name, ", ".join(zero_based))
+
+    def _runtime_complex(name: str) -> bool:
+        return name in ctx.sdfg.arrays and ctx.sdfg.arrays[name].dtype in (dace.complex64, dace.complex128)
+
+    def _prepared(op: _Operand, conjugate: bool, scale: str | None) -> _Operand:
+        """``op`` copied into a transient read by a state that follows: conjugated for a conjugate transpose
+        (``'C'``, the library nodes only transpose) and scaled by a run-time COMPLEX ``alpha`` (the nodes take a
+        complex ``alpha`` only as a constant)."""
+        nonlocal state
+        desc = ctx.sdfg.arrays[op.name]
+        name = ctx.sdfg.add_datadesc(f"_op_{op.name}_{builder.nid()}", desc.clone(), find_new_name=True)
+        ctx.sdfg.arrays[name].transient = True
+        index = ", ".join(f"__c{d}" for d in range(len(desc.shape)))
+        inputs = {"_in": Memlet(f"{op.name}[{index}]")}
+        value = "std::conj(_in)" if conjugate else "_in"
+        if scale is not None:
+            inputs["_alpha"] = Memlet(f"{scale}[0]")
+            value = f"_alpha * {value}"
+        state.add_mapped_tasklet(
+            "prepare",
+            {f"__c{d}": f"0:{extent}" for d, extent in enumerate(desc.shape)},
+            inputs,
+            f"_out = {value};",
+            {"_out": Memlet(f"{name}[{index}]")},
+            language=dtypes.Language.CPP,
+            external_edges=True,
+        )
+        state = ctx.new_state(builder, region)
+        return _Operand(name, op.start)
 
     def _by_sequence_association(operands: Sequence[tuple[_Operand, int]]) -> bool:
         """True when an actual is an element, or its type or rank differs from the dummy's (``COMPLEX psi(:, :)``
@@ -1386,12 +1418,15 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
         return
 
-    if routine in ("dgemv", "sgemv"):
+    if routine in ("dgemv", "sgemv", "zgemv", "cgemv"):
         trans = blas_flag(n.expr)
         alpha, beta = n.call_args[0], n.call_args[3]
         op_a, op_x, op_y = (_operand(n.call_args[i]) for i in (1, 2, 4))
         # For real data a conjugate transpose (``'C'``) is the transpose.
         transposed = trans in ("T", "C")
+        scale = alpha if _runtime_complex(alpha) else None
+        if scale or (trans == "C" and routine[0] in "zc"):
+            op_a, alpha = _prepared(op_a, trans == "C", scale), "1" if scale else alpha
         node = blas_nodes.Gemv(f"gemv_{builder.nid()}", transA=transposed, alpha=_scalar(alpha), beta=_scalar(beta))
         m_arg, n_arg, lda_arg = n.call_args[5:8]
         x_arg, y_arg = (m_arg, n_arg) if transposed else (n_arg, m_arg)
@@ -1423,10 +1458,16 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         state.add_edge(node, "_y", state.add_write(op_y.name), None, _link(op_y))
         return
 
-    if routine in ("dgemm", "sgemm"):
+    if routine in ("dgemm", "sgemm", "zgemm", "cgemm"):
         tA, tB = (blas_flag(s) in ("T", "C") for s in n.expr.split(","))
         alpha, beta = n.call_args[0], n.call_args[3]
         op_a, op_b, op_c = (_operand(n.call_args[i]) for i in (1, 2, 4))
+        if routine[0] in "zc":
+            flag_a, flag_b = (blas_flag(s) for s in n.expr.split(","))
+            scale = alpha if _runtime_complex(alpha) else None
+            if scale or flag_a == "C":
+                op_a, alpha = _prepared(op_a, flag_a == "C", scale), "1" if scale else alpha
+            op_b = _prepared(op_b, True, None) if flag_b == "C" else op_b
         node = blas_nodes.Gemm(f"gemm_{builder.nid()}", transA=tA, transB=tB, alpha=_scalar(alpha), beta=_scalar(beta))
         m_arg, n_arg, k_arg, lda_arg, ldb_arg, ldc_arg = n.call_args[5:11]
         a_cols_arg = m_arg if tA else k_arg

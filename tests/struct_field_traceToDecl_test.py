@@ -42,7 +42,7 @@ end module
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
     q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
     res = np.zeros(3, dtype=np.float64, order="F")
-    sdfg(vcut_a=A, vcut_cutoff=np.zeros((1,), dtype=np.float64, order="F"), q=q, res=res)
+    sdfg(vcut_a=A, vcut_cutoff=0.0, q=q, res=res)
     np.testing.assert_allclose(res, A.T @ q)
 
 

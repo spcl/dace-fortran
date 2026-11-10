@@ -770,6 +770,15 @@ subroutine main()
   ! TODO: `i` should be known at this point, since do loop is deterministic.
   i = i + 1
 
+  ! A locally constant set in the body of a loop carries to the later statements
+  ! of the same body (but not past the loop).
+  do i=1, 5
+    out = 14.4
+    if (cond) then
+      out = out * i
+    end if
+  end do
+
   ! A simple do-while loop with `i` as loop variable, `i` becomes unknown.
   i = 0
   do while (i < 10)
@@ -844,6 +853,12 @@ SUBROUTINE main
     out = out + 1.
   END DO
   i = i + 1
+  DO i = 1, 5
+    out = 14.4
+    IF (.TRUE.) THEN
+      out = 14.4 * i
+    END IF
+  END DO
   i = 0
   DO WHILE (i < 10)
     out = out + 1
@@ -1375,6 +1390,141 @@ end subroutine main
     assert line == "x = s % a"
 
 
+def test_exploit_locally_constant_not_kept_across_a_call_with_a_subscripted_actual():
+    """A subscripted actual hands the callee that element, so only that element's
+    constant dies -- dropping the whole root would be both unsound (the root key
+    does not cover the element key) and needlessly pessimistic."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v(2)
+  v(1) = 1.
+  v(2) = 2.
+  call f(v(1))
+  x = v(1)
+end subroutine main
+""")
+    assert line == "x = v(1)"
+
+
+def test_exploit_locally_constant_sectioned_actual_invalidates_the_elements_beneath_it():
+    """A sectioned actual (``call f(v(2, :))``) hands the callee a view of a whole
+    dimension, so the callee may write any element of it.
+
+    The write key must therefore carry a wildcard for every dimension the actual
+    leaves open; keying it by the subscripts literally written would leave the
+    constant folded for ``v(2, 3)`` alive across the call."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  integer :: v(2, 3)
+  v(2, 3) = 5
+  call f(v(2, :))
+  x = v(2, 3)
+end subroutine main
+""")
+    assert line == "x = v(2, 3)"
+
+
+def test_exploit_locally_constant_pointer_target_substituted_in_a_sectioned_actual():
+    """An element or section of a locally-constant pointer keeps being resolved to
+    its target when passed as an actual.
+
+    Suppressing *value* folding for writable actuals must not suppress *pointer*
+    resolution: ``vp(:, :, k)`` is an actual of the pointer ``vp``, and its target
+    ``w(:, :, k)`` is what the committed ICON-O TU carries. Only a bare Name
+    actual (whose dummy may itself be a POINTER) is left untouched."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+module m
+  implicit none
+  real, target :: w(3, 3, 2) = 0.
+contains
+  subroutine main(x)
+    real, intent(out) :: x
+    real, pointer :: vp(:, :, :)
+    integer :: k = 1
+    vp => w
+    call sink(vp(:, 2, k))
+  end subroutine main
+  subroutine sink(a)
+    real, intent(in) :: a(:)
+    print *, a(1)
+  end subroutine sink
+end module m
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    assert "CALL sink(w(:, 2, k))" in got
+    assert "CALL sink(vp" not in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_sibling_element_survives_a_subscripted_actual():
+    """The call writes ``v(1)`` only; ``v(2)`` is untouched and may still fold."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  real, intent(out) :: x
+  real :: v(2)
+  v(1) = 1.
+  v(2) = 2.
+  call f(v(1))
+  x = v(2)
+end subroutine main
+""")
+    assert line == "x = 2.0"
+
+
+def test_exploit_locally_constant_broadcast_does_not_alias_a_multidim_element():
+    """Keying an element by one step per dimension must match the broadcast's
+    key: ``quux % marrs % scalar = 7`` overwrites all nine elements of the 2-D
+    array, so the constant folded for ``marrs(2, 3)`` must go."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: marrs(3, 3)
+  end type foo
+  type(foo) :: quux
+  quux % marrs(2, 3) % scalar = 5
+  quux % marrs % scalar = 7
+  x = quux % marrs(2, 3) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % marrs(2, 3) % scalar"
+
+
+def test_exploit_locally_constant_row_section_does_not_alias_a_multidim_element():
+    """A sectioned broadcast (``marrs(2, :)``) reaches ``marrs(2, 3)`` too."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: marrs(3, 3)
+  end type foo
+  type(foo) :: quux
+  quux % marrs(2, 3) % scalar = 5
+  quux % marrs(2, :) % scalar = 7
+  x = quux % marrs(2, 3) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % marrs(2, 3) % scalar"
+
+
 def test_real4_parameter_element_keeps_its_value_when_widened():
     """A real(8) array built from single-precision literals holds their exact value, not their shortest decimal."""
     line = folded_result(
@@ -1533,3 +1683,472 @@ end module m
     test_exploit_locally_constant_component_not_kept_after_whole_struct_write()
     test_real4_parameter_element_keeps_its_value_when_widened()
     test_real_value_in_an_integer_parameter_array_stays_a_read()
+
+
+def test_exploit_locally_constant_array_elements():
+    """A scalar element written a constant is substituted where it is read."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main
+  implicit none
+  integer :: iarr(4) = 0
+  real :: rarr(4, 4) = 0.0
+
+  iarr(2) = 7
+  iarr(3) = iarr(2)
+
+  rarr(1, 1) = 3.2
+  rarr(2:3, 1) = rarr(1, 1)
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  INTEGER :: iarr(4) = 0
+  REAL :: rarr(4, 4) = 0.0
+  iarr(2) = 7
+  iarr(3) = 7
+  rarr(1, 1) = 3.2
+  rarr(2 : 3, 1) = 3.2
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_struct_element_components():
+    """Elements and nested indexed components of a local struct are substituted."""
+    sources, _ = (
+        SourceCodeBuilder()
+        .add_file("""
+subroutine main
+  implicit none
+  type bar
+    integer :: iarr(4) = 0
+    real :: rarr(4, 4) = 0.0
+    real :: scalar
+  end type bar
+  type foo
+    integer :: iarr(6) = 0
+    type(bar) :: baz(3)
+  end type foo
+  type(foo) :: quux
+
+  quux % iarr(2) = 7
+  quux % iarr(1) = quux % iarr(2)
+
+  quux % baz(3) % scalar = 6.8
+  quux % baz(2) % iarr(4) = 9
+  quux % baz(2) % rarr(3, 2) = 3.2
+  quux % baz(1) % rarr(1, 1) = quux % baz(3) % scalar
+  quux % iarr(3) = quux % baz(2) % iarr(4)
+  quux % baz(1) % rarr(2, 1) = quux % baz(2) % rarr(3, 2)
+end subroutine main
+""")
+        .check_with_gfortran()
+        .get()
+    )
+    got = optimizations.exploit_locally_constant_variables(parse_and_improve(sources)).tofortran()
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  TYPE :: bar
+    INTEGER :: iarr(4) = 0
+    REAL :: rarr(4, 4) = 0.0
+    REAL :: scalar
+  END TYPE bar
+  TYPE :: foo
+    INTEGER :: iarr(6) = 0
+    TYPE(bar) :: baz(3)
+  END TYPE foo
+  TYPE(foo) :: quux
+  quux % iarr(2) = 7
+  quux % iarr(1) = 7
+  quux % baz(3) % scalar = 6.8
+  quux % baz(2) % iarr(4) = 9
+  quux % baz(2) % rarr(3, 2) = 3.2
+  quux % baz(1) % rarr(1, 1) = 6.8
+  quux % iarr(3) = 9
+  quux % baz(1) % rarr(2, 1) = 3.2
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_exploit_locally_constant_element_kept_across_a_sibling_write():
+    """Writing one element leaves the constants of the others standing."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(3) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = 7.0"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_variable_subscript_write():
+    """``arr(i) = ...`` may overwrite any element, so no element keeps its value."""
+    line = folded_result("""
+subroutine main(n, v, x)
+  implicit none
+  integer, intent(in) :: n
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(n) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_section_write():
+    """A section write reaches every element it spans."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr(1:3) = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_whole_array_write():
+    """Assigning the whole array replaces its elements."""
+    line = folded_result("""
+subroutine main(v, x)
+  implicit none
+  real, intent(in) :: v
+  real, intent(out) :: x
+  real :: arr(4)
+  arr(2) = 7.
+  arr = v
+  x = arr(2)
+end subroutine main
+""")
+    assert line == "x = arr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_containing_component_write():
+    """Writing a struct array component replaces the elements inside it."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz(3)
+  end type foo
+  type(foo), intent(in) :: u
+  integer, intent(out) :: x
+  type(foo) :: s
+  s % baz(2) % iarr(4) = 9
+  s % baz(2) = u % baz(1)
+  x = s % baz(2) % iarr(4)
+end subroutine main
+""")
+    assert line == "x = s % baz(2) % iarr(4)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_whole_component_array_write():
+    """``quux % iarr = ...`` replaces every element of that component."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type foo
+    integer :: iarr(4)
+  end type foo
+  type(foo) :: quux
+  quux % iarr(2) = 7
+  quux % iarr = 0
+  x = quux % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % iarr(2)"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_containing_component_overwrite():
+    """``quux % baz = ...`` replaces the whole component, elements and all."""
+    line = folded_result("""
+subroutine main(u, x)
+  implicit none
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz
+  end type foo
+  type(foo), intent(in) :: u
+  integer, intent(out) :: x
+  type(foo) :: quux
+  quux % baz % iarr(2) = 7
+  quux % baz = u % baz
+  x = quux % baz % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % baz % iarr(2)"
+
+
+def test_exploit_locally_constant_element_survives_a_whole_component_write_to_another():
+    """A whole-component write covers only the component it names."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type foo
+    integer :: iarr(4)
+    integer :: jarr(4)
+  end type foo
+  type(foo) :: quux
+  quux % iarr(2) = 7
+  quux % jarr = 0
+  x = quux % iarr(2)
+end subroutine main
+""")
+    assert line == "x = 7"
+
+
+def test_exploit_locally_constant_element_not_kept_after_a_deep_whole_component_write():
+    """The component a write names may sit below the first path step."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: baz
+  end type foo
+  type(foo) :: quux
+  quux % baz % iarr(2) = 7
+  quux % baz % iarr = 0
+  x = quux % baz % iarr(2)
+end subroutine main
+""")
+    assert line == "x = quux % baz % iarr(2)"
+
+
+def test_exploit_locally_constant_element_of_a_struct_array_element_not_kept():
+    """``quux % bazs(2) % iarr = ...`` replaces that array, elements and all."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % iarr(4) = 9
+  quux % bazs(2) % iarr = 0
+  x = quux % bazs(2) % iarr(4)
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % iarr(4)"
+
+
+def test_exploit_locally_constant_whole_component_array_write_is_not_a_scalar():
+    """``quux % bazs(2) % iarr = 9`` names a whole array, not one element.
+
+    Before the fix it was tracked as a scalar constant under the same key, so
+    reading the array back folded to the scalar -- right for this body, wrong
+    as soon as any element is read, and it kept ``7`` alive below ``iarr``.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: iarr(4)
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % iarr(1) = 7
+  quux % bazs(2) % iarr = 9
+  x = quux % bazs(2) % iarr(1)
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % iarr(1)"
+
+
+def test_exploit_locally_constant_does_not_alias_sibling_components_of_one_type():
+    """Two components declared together as ``type(bar) :: baz, qux`` are distinct
+    variables, though both resolve to the same member spec ``bar % scalar``.
+
+    Keying a tracked component by that resolved spec conflated them, so the
+    second write overwrote the first's constant -- a silent wrong answer.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  quux % baz % scalar = 7
+  quux % qux % scalar = 3
+  x = quux % baz % scalar
+end subroutine main
+""")
+    assert line == "x = 7"
+
+
+def test_exploit_locally_constant_sibling_component_write_keeps_the_other():
+    """The reverse order must fold too: ``qux`` must not disturb ``baz``."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  quux % qux % scalar = 3
+  quux % baz % scalar = 7
+  x = quux % qux % scalar
+end subroutine main
+""")
+    assert line == "x = 3"
+
+
+def test_exploit_locally_constant_not_kept_under_a_whole_sibling_component_write():
+    """A whole-component write to one sibling replaces only that sibling."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: baz, qux
+  end type foo
+  type(foo) :: quux
+  type(bar) :: u
+  quux % baz % scalar = 7
+  quux % baz = u
+  x = quux % baz % scalar
+end subroutine main
+""")
+    assert line == "x = quux % baz % scalar"
+
+
+def test_exploit_locally_constant_struct_array_broadcast_is_not_a_scalar():
+    """``quux % bazs % scalar = 7`` broadcasts over the elements of ``bazs``.
+
+    It stores one value per element, so it cannot be a single tracked constant:
+    treating it as one left ``7`` alive after ``quux % bazs(2) % scalar = 3``
+    and folded ``x = quux % bazs % scalar`` -- a whole array -- to the scalar 7.
+    """
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x(3)
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs % scalar = 7
+  quux % bazs(2) % scalar = 3
+  x = quux % bazs % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs % scalar"
+
+
+def test_exploit_locally_constant_scalar_component_of_a_struct_array_element_is_kept():
+    """The broadcast may stay unfolded, but each element's own scalar still folds."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % scalar = 3
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = 3"
+
+
+def test_exploit_locally_constant_broadcast_drops_the_element_written_before_it():
+    """``quux % bazs % scalar = 7`` overwrites every element, including one
+    whose own constant was tracked -- so that element's constant must go."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  quux % bazs(2) % scalar = 3
+  quux % bazs % scalar = 7
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % scalar"
+
+
+def test_exploit_locally_constant_whole_struct_array_write_drops_its_elements():
+    """``quux % bazs = u`` replaces every element, subscripts and all."""
+    line = folded_result("""
+subroutine main(x)
+  implicit none
+  integer, intent(out) :: x
+  type bar
+    integer :: scalar
+  end type bar
+  type foo
+    type(bar) :: bazs(3)
+  end type foo
+  type(foo) :: quux
+  type(bar) :: u
+  quux % bazs(2) % scalar = 3
+  quux % bazs = u
+  x = quux % bazs(2) % scalar
+end subroutine main
+""")
+    assert line == "x = quux % bazs(2) % scalar"

@@ -408,10 +408,20 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
     }
     return current;
   };
-  // Fortran evaluates the RHS first: a read of the target at another element goes through a buffer.
+  // Fortran evaluates the RHS first: a read of the target at another element goes through a buffer. Subscripts that
+  // differ only where no iterator appears name the written element or a slice the assignment leaves alone.
   AccessInfo const write = inner.accesses[0];
+  auto iterated = [&](const std::string& index) {
+    return std::any_of(iter_names.begin(), iter_names.end(),
+                       [&](const std::string& it) { return index.find(it) != std::string::npos; });
+  };
   bool const overlaps = std::any_of(inner.accesses.begin() + 1, inner.accesses.end(), [&](const AccessInfo& a) {
-    return a.array_name == inner.target && a.index_exprs != write.index_exprs;
+    if (a.array_name != inner.target) return false;
+    if (a.index_exprs.size() != write.index_exprs.size()) return true;
+    for (size_t i = 0; i < a.index_exprs.size(); ++i)
+      if (a.index_exprs[i] != write.index_exprs[i] && (iterated(a.index_exprs[i]) || iterated(write.index_exprs[i])))
+        return true;
+    return false;
   });
   ASTNode current = inner;
   if (overlaps) {

@@ -883,7 +883,7 @@ MODULE mo_fortran_tools
         out_stride(2) = 1
         out_shape(2) = 1
         out_shape = (out_shape - 1) * out_stride + 1
-        ptr_out => ptr_out(: out_shape(1) : out_stride(1), : out_shape(2) : out_stride(2), : out_shape(3) : out_stride(3))
+        ptr_out => ptr_out(: out_shape(1) : out_stride(1), : out_shape(2) : 1, : out_shape(3) : out_stride(3))
       END IF
     ELSE
       out_shape(1 : 2) = SHAPE(ptr_in)

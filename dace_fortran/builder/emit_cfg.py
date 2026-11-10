@@ -360,7 +360,9 @@ def emit_symbol_init(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: Contro
     if arr in ctx.sdfg.symbols or isinstance(src_desc, Scalar):
         read_expr = arr
     else:
-        read_expr = f"{arr}[{', '.join(f'{i} - offset_{arr}_d{d}' for d, i in enumerate(idxs))}]"
+        # A one-element member has no offset symbol: its lower bound is 1.
+        lower = [f"offset_{arr}_d{d}" if f"offset_{arr}_d{d}" in ctx.sdfg.symbols else "1" for d in range(len(idxs))]
+        read_expr = f"{arr}[{', '.join(f'{i} - {lb}' for i, lb in zip(idxs, lower, strict=True))}]"
     region.add_edge(ctx.cur, dst, InterstateEdge(assignments={sym: read_expr}))
     ctx.cur = dst
 

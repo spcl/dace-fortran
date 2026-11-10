@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import ast
 import gc
-import re
 import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
@@ -688,42 +687,6 @@ def initial_value_text(value: Any) -> str:
     return repr(complex(value)) if value.dtype.kind == "c" else repr(float(value))
 
 
-def refuse_extent_writes(builder: SDFGBuilder) -> None:
-    """Refuse a body that assigns a symbol an explicit extent names while that array is live.
-
-    Fortran fixes those bounds at entry, while a descriptor names the live symbol, so its strides would follow the
-    assignment. A dummy is live from entry; a local from its first access, as one declared in a ``BLOCK`` or an inlined
-    callee takes its extent after the assignment. An allocatable is exempt: its extents are fixed by the ``ALLOCATE``,
-    tracked apart from the name.
-
-    :raises NotImplementedError: naming the symbol and the array.
-    """
-    accessed: set[str] = set()
-
-    def refuse_written(symbol: str) -> None:
-        for v in builder.arrays.values():
-            # A reallocation's buffer ``<x>_alloc<N>`` shares the companion of ``<x>``.
-            base = re.sub(r"_alloc\d+$", "", v.fortran_name)
-            allocatable = v.module_origin_allocatable or f"{base}_allocated" in builder.symbols
-            live = v.intent != "" or v.fortran_name in accessed
-            names = re.findall(r"[A-Za-z_]\w*", " ".join(v.shape_symbols))
-            if live and symbol in names and v.role == "array" and not allocatable:
-                raise NotImplementedError(
-                    f"assignment to ['{symbol}'] in the body: extent of explicit-shape array {v.fortran_name!r}, "
-                    "whose bounds Fortran fixes at entry. Assign a copy of the extent instead."
-                )
-
-    def visit(nodes: Sequence[NodeLike]) -> None:
-        for c in nodes:
-            accessed.update(a.array_name for a in c.accesses or [])
-            if c.kind == "assign" and c.target in builder.symbols:
-                refuse_written(c.target)
-            visit(c.children)
-            visit(c.else_children)
-
-    visit(builder.ast)
-
-
 def _rename_reserved_collisions(sdfg: SDFG) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
@@ -1174,7 +1137,6 @@ class SDFGBuilder:
         # don't-care default.
         sdfg = AutoDimSDFG(sdfg_name(self))
         add_descriptors(self, sdfg)
-        refuse_extent_writes(self)
         # Constant-pool (Flang's ``_QQro.<...>`` globals): for every
         # ``parameter``-attributed declare whose backing global carries
         # a dense init, register the data via ``sdfg.add_constant``.
@@ -1545,6 +1507,8 @@ class SDFGBuilder:
                 is_real = np.issubdtype(arr.dtype, np.inexact)
                 sdfg.add_constant(v.fortran_name, val if is_real else val.item(), desc)
                 continue
+            if arr.dtype.kind == "c":  # DaCe writes a constant array's elements as Python literals
+                raise NotImplementedError(f"COMPLEX initial data of array {v.fortran_name} is not lowered")
             # Array globals: reshape from row-major doubles transport
             # to the descriptor's declared shape.
             shape = tuple(int(d) for d in desc.shape)

@@ -112,16 +112,18 @@ namespace {
 // environment variable: a comma-separated list of additional lowercase
 // names appended to this default set.
 const char* const kDefaultErrorHelpers[] = {
-    "errore",           // Quantum ESPRESSO
-    "error",            // generic; many codes
-    "finish",           // ICON
-    "abort_mpi",        // ICON -- wraps MPI_Abort; noreturn error-abort path
-    "mpi_abort",        // bare MPI_Abort (if the abort_mpi wrapper was inlined first)
-    "abor1",            // ECMWF IFS
-    "abor1_sfx",        // ECMWF IFS SURFEX
-    "upf_error",        // Quantum ESPRESSO UPF
-    "radiation_abort",  // ECRAD
-    "dwarning",         // ECRAD
+    "errore",                // Quantum ESPRESSO
+    "error",                 // generic; many codes
+    "finish",                // ICON
+    "abort_mpi",             // ICON -- wraps MPI_Abort; noreturn error-abort path
+    "mpi_abort",             // bare MPI_Abort (if the abort_mpi wrapper was inlined first)
+    "abor1",                 // ECMWF IFS
+    "abor1_sfx",             // ECMWF IFS SURFEX
+    "upf_error",             // Quantum ESPRESSO UPF
+    "fftx_error__",          // Quantum ESPRESSO FFTXlib
+    "fftx_error_uniform__",  // Quantum ESPRESSO FFTXlib
+    "radiation_abort",       // ECRAD
+    "dwarning",              // ECRAD
     // ---- Diagnostic timing / annotation subroutines.  These are not
     // error abort paths but they're equally orthogonal to the bridge's
     // numerical-equivalence contract: they wrap timing instrumentation

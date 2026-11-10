@@ -10,6 +10,7 @@ import operator
 import sys
 from collections.abc import Callable, Iterable, Iterator
 from copy import copy
+from dataclasses import dataclass
 from typing import Any, NamedTuple, Union
 
 import fparser.two.Fortran2003 as f03
@@ -1320,13 +1321,179 @@ def _const_eval_int(expr: Base, alias_map: types.SPEC_TABLE) -> int | None:
     return None
 
 
-#: Key of a tracked local constant: a variable's spec, or a (root spec, component spec) pair for ``root % comp``.
-ConstKey = Union[types.SPEC, tuple[types.SPEC, types.SPEC]]
-
-
 class RootComponent(NamedTuple):
+    """A whole component of a local structure, named by the access path that reaches it.
+
+    ``quux % baz % scalar`` is ``RootComponent(quux_spec, ('baz', 'scalar'))``.
+
+    ``path`` holds component *names*, not the specs they resolve to. Two
+    components of the same declared type -- ``type(bar) :: baz, qux`` -- have
+    distinct paths (``('baz', 'scalar')`` vs ``('qux', 'scalar')``) but a single
+    shared member spec, so keying on the spec would make them one variable and
+    fold a write to one into a read of the other. The name path is also what
+    makes a prefix test possible: writing ``quux % baz`` covers every path
+    starting with ``'baz'``.
+    """
+
     root: types.SPEC
-    component: types.SPEC
+    path: tuple[str, ...]
+
+
+class _AnyStep:
+    """A subscript that is not a constant, so it may name any element.
+
+    Only an LHS write produces one: ``arr(i) = 0`` and ``arr(2:3) = 0`` may
+    overwrite any tracked ``arr(...)`` element. It matches every other step in
+    the same position, so it also covers everything below it."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _AnyStep)
+
+    def __hash__(self) -> int:
+        return hash(_AnyStep)
+
+
+#: The single wildcard subscript step.
+_ANY_STEP = _AnyStep()
+
+#: One step of an :class:`IndexedKey`'s path: a component name (``'baz'``), or
+#: the subscripts of an array element (``(2, 3)``), or a non-constant subscript.
+PathStep = Union[str, tuple[int, ...], _AnyStep]
+
+
+@dataclass(frozen=True)
+class IndexedKey:
+    """An element of a local array, or of an array component of a local struct.
+
+    ``arr(2)`` is ``IndexedKey(arr_spec, ('arr', (2,)))`` and
+    ``quux % baz(2) % iarr(4)`` is ``IndexedKey(quux_spec, ('baz', (2,), 'iarr', (4,)))``.
+    A bare ``Part_Ref`` repeats its own name in the path, a ``Data_Ref`` starts
+    at its first component; only the former ever meets a whole-root write,
+    which the invalidation in ``_integrate_subresults`` handles by root rather
+    than by path.
+
+    ``path`` is kept flat rather than nested per component, so that one key's
+    path being a prefix of another's means exactly "writes to the first reach
+    the second": writing ``quux % baz(2)`` invalidates ``quux % baz(2) % iarr(4)``.
+
+    ``root`` plays the role it does in :class:`RootComponent`, so a write to the
+    whole root invalidates every element key rooted in it.
+
+    This is a dataclass rather than a ``NamedTuple`` on purpose: a tuple would
+    compare equal to a :class:`RootComponent` (and to any other 2-tuple) with
+    matching fields, but the two keys mean different things.
+
+    A tracked key always has constant subscripts; only the write-side keys built
+    for invalidation carry :data:`_ANY_STEP`."""
+
+    root: types.SPEC
+    path: tuple[PathStep, ...]
+
+
+#: Key of a tracked local constant: a variable's spec, a :class:`RootComponent`
+#: for ``root % comp``, or an :class:`IndexedKey` for an element or subscripted
+#: component.
+ConstKey = Union[types.SPEC, RootComponent, IndexedKey]
+
+
+def _is_subscript_step(step: PathStep) -> bool:
+    """Whether ``step`` is a subscript (constant or wildcard) rather than a name."""
+    return not isinstance(step, str)
+
+
+def _step_covers(written: PathStep, tracked: PathStep) -> bool:
+    """Whether a written step may reach a tracked step in the same position."""
+    return isinstance(written, _AnyStep) or isinstance(tracked, _AnyStep) or written == tracked
+
+
+def _written_step_covers(written: ConstKey, tracked: ConstKey) -> bool:
+    """Whether the write ``written`` may reach what ``tracked`` holds.
+
+    Both key kinds carry a rooted path, and writing a path replaces everything
+    below it, so the write covers the tracked key exactly when its path is a
+    prefix of the tracked path -- ``quux % baz`` covers ``quux % baz % scalar``
+    and ``quux % baz % iarr(2)``, but ``quux % qux`` covers neither. A
+    subscript step covers only the same element, except for :data:`_ANY_STEP`,
+    which stands for a section or a non-constant subscript and may name any."""
+    if not isinstance(written, (RootComponent, IndexedKey)) or not isinstance(tracked, (RootComponent, IndexedKey)):
+        return False
+    if written.root != tracked.root or len(written.path) > len(tracked.path):
+        return False
+    return all(_step_covers(ws, ts) for ws, ts in zip(written.path, tracked.path, strict=False))
+
+
+def _write_path(
+    dref: Union[f03.Part_Ref, f03.Data_Ref], scope_spec: types.SPEC, alias_map: types.SPEC_TABLE
+) -> tuple[types.SPEC, tuple[PathStep, ...]] | None:
+    """The rooted path the LHS ``dref`` names, as a write key, with a wildcard
+    subscript for every array component it does not subscript.
+
+    The wildcard is what makes a broadcast reachable: ``quux % bazs % scalar``
+    writes the ``scalar`` of every element of ``bazs``, so it must cover the
+    element key ``quux % bazs(2) % scalar`` -- and, being a whole-array write,
+    ``quux % bazs(2) % iarr = 0`` must cover ``quux % bazs(2) % iarr(4)``.
+    ``None`` when the root is not a local or a component type cannot be
+    resolved -- the caller then invalidates nothing, as before."""
+    try:
+        if isinstance(dref, f03.Part_Ref):
+            # ``arr(2)``: the root is a bare name carrying its own subscripts.
+            root, subs = dref.children
+            loc = search_real_local_alias_spec(root, alias_map) if isinstance(root, f03.Name) else None
+            if not loc:
+                return None
+            root_spec = ident_spec(alias_map[loc])
+            cur_type = find_type_of_entity(alias_map[root_spec], alias_map)
+            if cur_type is None:
+                return None
+            # ``a(2)`` names element 2 of the root array itself; the root's own
+            # name is the first path step, as in ``IndexedKey``.
+            path: list[PathStep] = [root.string.lower()]
+            subscripts = list(subs.children) if subs is not None else []
+            path.extend(
+                _ANY_STEP
+                if isinstance(sub, f03.Subscript_Triplet)
+                or (val := const_eval_basic_type(sub, alias_map)) is None
+                or not types.is_numpy_int(val)
+                else (int(val),)
+                for sub in subscripts
+            )
+            path.extend([_ANY_STEP] * (len(cur_type.shape) - len(subscripts)))
+            return root_spec, tuple(path)
+
+        root, cur_type, comps = dataref_root(dref, scope_spec, alias_map)
+        loc = search_real_local_alias_spec(root, alias_map)
+        if not loc:
+            return None
+        root_spec = ident_spec(alias_map[loc])
+        path = []
+        for comp in comps:
+            if isinstance(comp, f03.Part_Ref):
+                name, subs = comp.children
+                subscripts = list(subs.children) if subs is not None else []
+            elif isinstance(comp, f03.Name):
+                name, subscripts = comp, []
+            else:
+                return None
+            if not isinstance(name, f03.Name) or cur_type.spec == MATCH_ALL.spec:
+                return None
+            comp_spec = find_real_ident_spec(name.string, cur_type.spec, alias_map)
+            comp_type = find_type_of_entity(alias_map[comp_spec], alias_map)
+            if comp_type is None:
+                return None
+            path.append(name.string.lower())
+            for sub in subscripts:
+                if isinstance(sub, f03.Subscript_Triplet):
+                    path.append(_ANY_STEP)
+                else:
+                    val = const_eval_basic_type(sub, alias_map)
+                    path.append(_ANY_STEP if val is None or not types.is_numpy_int(val) else (int(val),))
+            # Any dimension this component leaves unsubscripted names arrays of
+            # values, so the write reaches every element of them.
+            path.extend([_ANY_STEP] * (len(comp_type.shape) - len(subscripts)))
+            cur_type = comp_type
+    except (AssertionError, KeyError):
+        return None
+    return root_spec, tuple(path)
 
 
 class LocalConsts(NamedTuple):
@@ -1351,7 +1518,7 @@ def track_local_consts(
             # pessimistic path.
             # TODO: Handle the `cfg % a(1:5) % b(1:5) % c` type cases better.
             return None
-        root, _, _ = dataref_root(dref, scope_spec, alias_map)
+        root, _, rest = dataref_root(dref, scope_spec, alias_map)
         loc = search_real_local_alias_spec(root, alias_map)
         if not loc:
             # A data-ref rooted in a module global or an externalized/stubbed
@@ -1360,9 +1527,86 @@ def track_local_consts(
             # array-subscript case above. Every caller treats a None return as
             # "not a tracked local constant".
             return None
-        root_spec = ident_spec(alias_map[loc])
-        comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
-        return RootComponent(root_spec, comp_spec)
+        # The component *names*, not the specs they resolve to: sibling components
+        # of one declared type share a spec, so a spec-keyed component would make
+        # them indistinguishable (see ``RootComponent``).
+        names = []
+        for c in rest:
+            name = c.children[0] if isinstance(c, f03.Part_Ref) else c
+            if not isinstance(name, f03.Name):
+                return None
+            names.append(name.string.lower())
+        if not names:
+            return None
+        return RootComponent(ident_spec(alias_map[loc]), tuple(names))
+
+    def _indexed_key(ref: Union[f03.Part_Ref, f03.Data_Ref]) -> IndexedKey | None:
+        """Key for an element or subscripted component of the local ``ref`` names.
+
+        ``None`` unless every subscript is a constant: an element chosen by a
+        variable holds whatever that variable selects, so it has no single
+        value. ``None`` too when no subscript appears at all -- a plain
+        ``root % comp`` is a :class:`RootComponent`, which carries the component
+        spec that this key trades for the element path."""
+        key = _written_path(ref)
+        if key is None or not any(_is_subscript_step(step) for step in key.path):
+            return None
+        if any(isinstance(step, _AnyStep) for step in key.path):
+            return None
+        return key
+
+    def _written_path(ref: Union[f03.Part_Ref, f03.Data_Ref]) -> IndexedKey | None:
+        """The rooted path an LHS reference writes, with a wildcard subscript for
+        any that is a section or not a constant.
+
+        Returns ``None`` only when the root is not a tracked local."""
+        scope_spec = search_scope_spec(ref)
+        if not scope_spec:
+            return None
+
+        path: list[PathStep] = []
+
+        def _part_step(pr: f03.Part_Ref) -> bool:
+            """Append ``name(subscripts)`` to ``path``: its name, then one step
+            per subscript dimension.
+
+            One step per dimension -- ``('marr', (3,), (4,))`` for
+            ``marr(3, 4)`` -- not one tuple holding them all: this path is
+            matched step-wise against the one ``_write_path`` builds for a
+            broadcast, which fans the dimensions out the same way. Keeping the
+            two in one form is what lets a whole-array write cover the element
+            keys below it in any rank."""
+            name, subs = pr.children
+            if not isinstance(name, f03.Name) or subs is None:
+                return False
+            path.append(name.string.lower())
+            for s in subs.children:
+                if isinstance(s, f03.Subscript_Triplet):
+                    path.append(_ANY_STEP)  # A section: may reach any element.
+                    continue
+                sv = const_eval_basic_type(s, alias_map)
+                path.append(_ANY_STEP if sv is None or not types.is_numpy_int(sv) else (int(sv),))
+            return True
+
+        if isinstance(ref, f03.Part_Ref):
+            # ``arr(2)``: the root is a bare name carrying its own subscripts.
+            root, rest = ref.children[0], [ref]
+        else:
+            root, _, rest = dataref_root(ref, scope_spec, alias_map)
+        if not isinstance(root, f03.Name):
+            return None
+        loc = search_real_local_alias_spec(root, alias_map)
+        if not loc:
+            return None
+        for comp in rest:
+            if isinstance(comp, f03.Part_Ref):
+                if not _part_step(comp):
+                    return None
+            elif isinstance(comp, f03.Name):
+                path.append(comp.string.lower())
+            else:
+                return None
+        return IndexedKey(ident_spec(alias_map[loc]), tuple(path)) if path else None
 
     def _subscript_locals(value: Union[Base, types.LITERAL_TYPES]) -> set[types.SPEC]:
         if not isinstance(value, Base):
@@ -1374,9 +1618,20 @@ def track_local_consts(
 
     def _integrate_subresults(tp: dict[ConstKey, types.LITERAL_TYPES], tm: set[ConstKey]) -> None:
         assert not (tm & tp.keys())
-        # A write to a whole root covers its components; a pointer bound its subscripts at ``=>``, so a write to one
-        # ends the pointer's alias
-        covered = {k for k in plus if isinstance(k, RootComponent) and k.root in tm}
+
+        def _covers(written: ConstKey, tracked: ConstKey) -> bool:
+            """Whether writing ``written`` may change the constant held under ``tracked``.
+
+            A write to a whole root covers every component and element rooted
+            there. A write to one element or component also covers the keys
+            below it -- writing ``quux % baz(2)`` replaces the whole component,
+            and with it ``quux % baz(2) % iarr(4)``."""
+            if isinstance(tracked, (RootComponent, IndexedKey)) and tracked.root in tm:
+                return True
+            return _written_step_covers(written, tracked)
+
+        covered = {k for k in plus if any(_covers(w, k) for w in tm)}
+        # A pointer bound its subscripts at ``=>``, so a write to one ends the pointer's alias
         rebound = {k for k, v in plus.items() if (tm | tp.keys()) & _subscript_locals(v)}
         for k in tm | covered | rebound:
             if k in plus:
@@ -1440,6 +1695,14 @@ def track_local_consts(
             if (pointer and xtyp and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[spec])
         elif isinstance(x, f03.Data_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                scope_spec = find_scope_spec(x)
+                xtyp = find_type_dataref(x, scope_spec, alias_map)
+                if (pointer and xtyp.pointer) or value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             comp_key = _root_comp(x)
             if comp_key is None or comp_key not in plus:
                 for pr in x.children[1:]:
@@ -1456,6 +1719,12 @@ def track_local_consts(
             if (pointer and xtyp.pointer) or value:
                 _subst_and_renorm(x, plus[comp_key])
         elif isinstance(x, f03.Part_Ref):
+            idx_key = _indexed_key(x)
+            if idx_key is not None and idx_key in plus:
+                assert idx_key not in minus
+                if value:
+                    _subst_and_renorm(x, plus[idx_key])
+                return
             par, subsc = x.children
             _inject_knowns(par, value=False, pointer=True)
             assert isinstance(subsc, f03.Section_Subscript_List)
@@ -1533,16 +1802,49 @@ def track_local_consts(
                 lspec = ident_spec(alias_map[loc])
                 if isinstance(alias_map[lspec], f03.Entity_Decl):
                     ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+        elif isinstance(lv, f03.Part_Ref):
+            # ``arr(2) = 7``: the element's type is the array's type, so a scalar
+            # element is tracked like a scalar variable.
+            lspec = _indexed_key(lv)
+            if lspec is not None:
+                name, _ = lv.children
+                loc = search_real_local_alias_spec(name, alias_map)
+                assert loc
+                ltyp = find_type_of_entity(alias_map[loc], alias_map)
         elif isinstance(lv, f03.Data_Ref):
-            lspec = _root_comp(lv)
+            lspec = _indexed_key(lv) or _root_comp(lv)
             scope_spec = find_scope_spec(lv)
             ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
             rval = const_eval_basic_type(rv, alias_map)
-            if rval is None:
-                _integrate_subresults({}, {lspec})
-            elif not ltyp.shape:
-                _integrate_subresults({lspec: types.numpy_type_to_literal(rval)}, set())
+            value = types.numpy_type_to_literal(rval) if rval is not None else None
+            # A tracked key must name one scalar: ``quux % baz % scalar`` does
+            # and so does ``quux % baz(2) % iarr(4)``, but ``quux % bazs % scalar``
+            # broadcasts over every element of ``bazs`` and ``quux % baz % iarr``
+            # names a whole array. Those write several values, so they are
+            # recorded as a write (with a wildcard for each unsubscripted array
+            # dimension, which reaches element keys) and never folded.
+            write = (
+                _write_path(lv, find_scope_spec(lv), alias_map)
+                if isinstance(lv, (f03.Part_Ref, f03.Data_Ref))
+                else None
+            )
+            names_one_value = not ltyp.shape if write is None else not any(isinstance(st, _AnyStep) for st in write[1])
+            if value is not None and names_one_value:
+                _integrate_subresults({lspec: value}, set())
+            else:
+                # The wildcard path is the write key that reaches the elements
+                # a broadcast overwrites; ``lspec`` alone would stop at the
+                # component names.
+                write_key = IndexedKey(write[0], write[1]) if write is not None else None
+                _integrate_subresults({}, {write_key or lspec})
+        elif isinstance(lv, (f03.Part_Ref, f03.Data_Ref)):
+            # Not a trackable element (a section, a variable subscript, a
+            # non-local root) -- it still overwrites whatever it may touch, so
+            # drop the constants under the rooted path it names.
+            written = _written_path(lv)
+            if written is not None:
+                _integrate_subresults({}, {written})
         tp, tm = track_local_consts(rv, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, f03.Pointer_Assignment_Stmt):
@@ -1621,11 +1923,11 @@ def track_local_consts(
         do_ops = node.children[1:-1]
         has_pointer_asgns = bool(walk(node, f03.Pointer_Assignment_Stmt))
 
+        # Everything updated anywhere in the body is not constant outside the loop.
         net_tpm: set[ConstKey] = set()
-        for op in do_ops:
-            tp, tm = track_local_consts(op, alias_map, {}, set())
-            net_tpm.update(tp.keys())
-            net_tpm.update(tm)
+        tp, tm = track_local_consts(do_ops, alias_map, {}, set())
+        net_tpm.update(tp.keys())
+        net_tpm.update(tm)
         loop_control = ast_utils.singular(ast_utils.children_of_type(do_stmt, f03.Loop_Control))
         _, cntexpr, _, _ = loop_control.children
         if cntexpr:
@@ -1709,18 +2011,20 @@ def track_local_consts(
         tp, tm = track_local_consts(val, alias_map)
         _integrate_subresults(tp, tm)
     elif isinstance(node, (f03.Function_Reference, f03.Call_Stmt, f03.Intrinsic_Function_Reference)):
-        # TODO: For now, we assume that all arguments are writable.
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
-            # A bare Name actual argument is left untouched (mirror the
-            # _inject_knowns call-argument handler): substituting a pointer
-            # variable with its target breaks a POINTER dummy -- the actual
-            # must itself be a pointer, not the pointer's target expression --
-            # and value-substituting an arg the callee writes (INTENT OUT/INOUT)
-            # would be wrong.
+            # TODO: For now, we assume that all arguments are writable -- they may
+            # be INTENT OUT/INOUT and the callee may store into them.
             if not isinstance(a, f03.Name):
-                _inject_knowns(a)
+                # ``value=False`` is what makes this safe for an actual the callee
+                # may write (INTENT OUT/INOUT): a Name actual is left entirely
+                # symbolic, and inside a Part_Ref/Data_Ref actual only the
+                # subscripts fold -- ``call f(v(1))`` must not become ``call
+                # f(1.0)``, which writes a literal instead of storage. Pointer
+                # substitution stays on: ``p(:,:,k)`` as an actual is resolved to
+                # its target, as the committed ICON TU expects.
+                _inject_knowns(a, value=False, pointer=True)
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
@@ -1728,6 +2032,21 @@ def track_local_consts(
             loc = search_real_local_alias_spec(a, alias_map) if isinstance(a, f03.Name) else None
             if loc and not isinstance(node, f03.Intrinsic_Function_Reference):
                 tm.add(ident_spec(alias_map[loc]))  # The callee may write its actual
+            elif isinstance(a, (f03.Part_Ref, f03.Data_Ref)) and not isinstance(node, f03.Intrinsic_Function_Reference):
+                # A subscripted actual (``CALL f(in_stride(1))``) hands the callee
+                # that element, so the callee reaches it through the element
+                # key -- not the whole root. Dropping the root spec instead would
+                # leave a constant folded for ``in_stride(1)`` alive across the
+                # call, and an INTENT(OUT) dummy (``util_stride_1d``) overwrites
+                # it unconditionally.
+                # ``_write_path``, not ``_written_path``: the dummy may be declared
+                # without the actual's subscripts (``a(:)`` for ``marrs(2)``) and
+                # write any element of a dimension the actual left open, so the
+                # key needs a wildcard per such dimension to cover them all.
+                actual_scope = search_scope_spec(a)
+                write = _write_path(a, actual_scope, alias_map) if actual_scope else None
+                if write is not None:
+                    tm.add(IndexedKey(*write))
             _integrate_subresults({}, tm | tp.keys())
     else:
         raise NotImplementedError(f"cannot handle {node} | {type(node)}")

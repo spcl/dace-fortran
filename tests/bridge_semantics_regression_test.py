@@ -532,6 +532,23 @@ def test_matches_gfortran(name: str, tmp_path: Path):
         assert any(data.startswith(buffer_family) for data in sdfg.arrays)
 
 
+def test_slice_scaled_by_another_slice_stays_in_place(tmp_path: Path):
+    """Subscripts differing only outside the section name the written element or a slice left alone: no buffer."""
+    src = """subroutine scale_row(a, n, j, k)
+  integer, intent(in) :: n, j, k
+  real(8), intent(inout) :: a(n, 3, 3)
+  a(1:n, j, k) = a(1:n, j, k) / a(1:n, k, k)
+end subroutine"""
+    a = np.arange(2.0, 38.0).reshape(4, 3, 3, order="F")
+    for j in (1, 3):  # another slice, then the written one
+        args = {"a": a, "n": I4(4), "j": I4(j), "k": I4(3)}
+        (tmp_path / f"ref{j}").mkdir()
+        reference = run_reference(src, "scale_row", args, tmp_path / f"ref{j}")
+        sdfg, buffers = run_sdfg(src, "scale_row", args, tmp_path / f"sdfg{j}")
+        assert np.array_equal(reference["a"], buffers["a"])
+        assert not any(data.startswith("_rhs_buffer") for data in sdfg.arrays)
+
+
 REFUSED = {
     "reduction_mask": (
         """subroutine @(a, s)

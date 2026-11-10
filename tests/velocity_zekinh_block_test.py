@@ -90,7 +90,7 @@ def test_velocity_zekinh_block_builds_and_calls(tmp_path: Path):
         z_kin_hor_e=z_kin_hor_e,
         z_ekinh=z_ekinh,
         nproma=np.int32(nproma),
-        p_patch_nblks_c=np.asfortranarray([nblks_c], dtype=np.int32),
+        p_patch_nblks_c=np.int32(nblks_c),
         p_patch_nlev=np.int32(nlev),
         # Extent + offset symbols.
         p_int_e_bln_c_s_d0=np.int64(nproma),

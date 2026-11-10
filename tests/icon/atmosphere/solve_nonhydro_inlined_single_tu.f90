@@ -1406,7 +1406,7 @@ MODULE mo_solve_nonhydro
       ELSE
         rl_end = (- 4)
       END IF
-      i_startblk = p_patch % cells % start_block(rl_start)
+      i_startblk = p_patch % cells % start_block(3)
       i_endblk = p_patch % cells % end_block(rl_end)
       IF (istep == 1 .AND. (jg > 1 .OR. l_limited_area)) THEN
         CALL init_zero_contiguous_dp(z_rth_pr(1, 1, 1, 1), 2 * nproma * nlev * i_startblk, opt_acc_async = .TRUE., lacc = .TRUE.)
@@ -1571,8 +1571,8 @@ MODULE mo_solve_nonhydro
       END IF
       rl_start = 10
       rl_end = (- 8)
-      i_startblk = p_patch % edges % start_block(rl_start)
-      i_endblk = p_patch % edges % end_block(rl_end)
+      i_startblk = p_patch % edges % start_block(10)
+      i_endblk = p_patch % edges % end_block((- 8))
       IF (istep == 1) THEN
         DO jb = i_startblk, i_endblk
           CALL get_indices_e(p_patch, jb, i_startblk, i_endblk, i_startidx, i_endidx, rl_start, rl_end)
