@@ -125,6 +125,29 @@ end module m
         np.testing.assert_allclose(y[0], exp, rtol=1e-6, err_msg=f"a({ii},{jj})")
 
 
+def test_readonly_multidim_parameter_array_is_fortran_major(tmp_path):
+    """Read-only 2-D ``parameter`` array: the constexpr must hold Fortran (column-major)
+    element order, not its transpose (spcl/dace-fortran#11)."""
+    src = """
+module m
+  implicit none
+  double precision, parameter :: p(2,3) = reshape([1.0d0,2.0d0,3.0d0,4.0d0,5.0d0,6.0d0],[2,3])
+contains
+  subroutine k(ii, jj, y)
+    integer, intent(in) :: ii, jj
+    double precision, intent(out) :: y
+    y = p(ii, jj)
+  end subroutine k
+end module m
+"""
+    sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    assert "p" not in sdfg.arglist() and "Cp" in getattr(sdfg, "constants", {})
+    for ii, jj, exp in [(1, 1, 1.0), (2, 1, 2.0), (1, 2, 3.0), (2, 2, 4.0), (1, 3, 5.0), (2, 3, 6.0)]:
+        y = np.zeros(1, dtype=np.float64)
+        sdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
+        assert y[0] == exp, f"p({ii},{jj}) = {y[0]}, want {exp}"
+
+
 if __name__ == "__main__":
     import pytest
 
