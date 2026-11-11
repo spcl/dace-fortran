@@ -1339,6 +1339,7 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         ctx.sdfg.arrays[name].transient = True
         index = ", ".join(f"__c{d}" for d in range(len(desc.shape)))
         inputs = {"_in": Memlet(f"{op.name}[{index}]")}
+        outer = {array: Memlet.from_array(array, ctx.sdfg.arrays[array]) for array in (op.name, name)}
         value = "std::conj(_in)" if conjugate else "_in"
         if scale is not None and scale.startswith("complex("):
             value = f"decltype(_in){scale[len('complex') :]} * {value}"
@@ -1347,8 +1348,11 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             alpha = _operand(scale)
             _apply_promotions()
             inputs["_alpha"] = Memlet(f"{alpha.name}[{alpha.start or 0}]")
+            outer[alpha.name] = Memlet(f"{alpha.name}[{alpha.start or 0}]")
             value = f"_alpha * {value}"
-        state.add_mapped_tasklet(
+        # The map covers both arrays whole and ``alpha`` is one element: the outer memlets are known, so they are set
+        # rather than propagated (propagation solves symbolic facts per memlet, the bulk of h_psi's build time).
+        _, entry, exit_node = state.add_mapped_tasklet(
             "prepare",
             {f"__c{d}": f"0:{extent}" for d, extent in enumerate(desc.shape)},
             inputs,
@@ -1356,7 +1360,10 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
             {"_out": Memlet(f"{name}[{index}]")},
             language=dtypes.Language.CPP,
             external_edges=True,
+            propagate=False,
         )
+        for edge in [*state.in_edges(entry), *state.out_edges(exit_node)]:
+            edge.data = outer[str(edge.data.data)]
         state = ctx.new_state(builder, region)
         return _Operand(name, op.start)
 
