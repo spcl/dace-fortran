@@ -50,9 +50,32 @@ def test_array_constructor_fills_a_strided_section(tmp_path: Path):
     np.testing.assert_array_equal(got, [0, 7, 0, 8, 0, 9, 0])
 
 
+RESHAPE_SRC = """
+subroutine fill_reshaped(m, c, a, b, d)
+  implicit none
+  real, intent(in)    :: a, b, d
+  real, intent(inout) :: m(2, 2), c(2, 2, 2)
+  m = reshape([a, b, a + b, d], [2, 2])
+  c = reshape([a, b, d, a + 1, b + 1, d + 1, a + 2, b + 2], [2, 2, 2])
+end subroutine fill_reshaped
+"""
+
+
+def test_array_constructor_reshaped_to_rank_n(tmp_path: Path):
+    """A runtime constructor under RESHAPE fills the rank-N destination in column-major order
+    (spcl/dace-fortran#12)."""
+    sdfg = dace_fortran.build_sdfg(RESHAPE_SRC, out_dir=str(tmp_path), entry="fill_reshaped", name="fill_reshaped")
+    m = np.zeros((2, 2), order="F", dtype=np.float32)
+    c = np.zeros((2, 2, 2), order="F", dtype=np.float32)
+    sdfg(m=m, c=c, a=np.float32(1), b=np.float32(2), d=np.float32(4))
+    np.testing.assert_array_equal(m, np.reshape([1, 2, 3, 4], (2, 2), order="F"))
+    np.testing.assert_array_equal(c, np.reshape([1, 2, 4, 2, 3, 5, 3, 4], (2, 2, 2), order="F"))
+
+
 if __name__ == "__main__":
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
         test_array_constructor_fills_one_column(Path(d) / "column")
         test_array_constructor_fills_a_strided_section(Path(d) / "strided")
+        test_array_constructor_reshaped_to_rank_n(Path(d) / "reshaped")

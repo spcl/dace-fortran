@@ -2981,7 +2981,18 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // .tmp.arrayctor, but doesn't need to -- each per-element value is already known (SHAPE's extents are tracked
       // VarInfo shape symbols); walk the parent block for each per-element assign into %tmpD and emit it directly into
       // %dst.
-      if (auto asExpr = mlir::dyn_cast_or_null<hlfir::AsExprOp>(srcPeeled.getDefiningOp())) {
+      // RESHAPE(<constructor>, <static shape>) unrolls the same way: element ``k`` lands at the column-major position
+      // ``k - 1`` of the reshaped whole-array destination.
+      mlir::Value ctorSrc = srcPeeled;
+      llvm::SmallVector<int64_t> reshape_extents;
+      if (auto rs = mlir::dyn_cast_or_null<hlfir::ReshapeOp>(srcPeeled.getDefiningOp())) {
+        auto const shape = mlir::cast<hlfir::ExprType>(rs.getType()).getShape();
+        if (rs->getNumOperands() == 2 && !llvm::is_contained(shape, hlfir::ExprType::getUnknownExtent())) {
+          ctorSrc = rs.getArray();
+          reshape_extents.assign(shape.begin(), shape.end());
+        }
+      }
+      if (auto asExpr = mlir::dyn_cast_or_null<hlfir::AsExprOp>(ctorSrc.getDefiningOp())) {
         hlfir::DeclareOp tmpDecl;
         if (auto* vd = asExpr.getVar().getDefiningOp()) tmpDecl = mlir::dyn_cast<hlfir::DeclareOp>(vd);
         bool is_arrayctor = false;
@@ -3003,7 +3014,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               bool const one_triplet =
                   !dst_dg.getComponentAttr() && parseDesignateDims(dst_dg, dst_dims) &&
                   llvm::count_if(dst_dims, [](const DesignateDim& dim) { return dim.isTriplet; }) == 1;
-              if (!one_triplet) dst_name.clear();
+              if (!one_triplet || !reshape_extents.empty()) dst_name.clear();
             }
           auto dst_index = [&](int64_t k) {
             std::vector<std::string> idx;
@@ -3016,7 +3027,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   dim.strideExpr.empty() ? std::to_string(dim.strideConst) : "(" + dim.strideExpr + ")";
               idx.push_back(k == 1 ? dim.lo : "(" + dim.lo + " + " + std::to_string(k - 1) + " * " + stride + ")");
             }
-            if (dst_dims.empty()) idx.push_back(std::to_string(k));
+            if (dst_dims.empty() && reshape_extents.empty()) idx.push_back(std::to_string(k));
+            int64_t flat = k - 1;
+            for (int64_t const extent : reshape_extents) {
+              idx.push_back(std::to_string(flat % extent + 1));
+              flat /= extent;
+            }
             return idx;
           };
           if (!dst_name.empty()) {
