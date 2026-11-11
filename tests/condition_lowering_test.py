@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """IF conditions: an unrendered one is refused, and an else-if the earlier branches guard is not staged ahead of them."""
 
+import numpy as np
 import pytest
 from dace.sdfg.state import ConditionalBlock
 
@@ -12,8 +13,9 @@ def _conditionals(sdfg):
     return [b for b in sdfg.all_control_flow_blocks(recursive=True) if isinstance(b, ConditionalBlock)]
 
 
-def test_unrendered_condition_is_refused(tmp_path):
-    """``is.fpclass`` has no bridge lowering; the branch must not silently become always-taken."""
+@pytest.mark.parametrize(("x", "expected"), [(float("nan"), 0.0), (1.0, 7.0)])
+def test_an_ieee_class_test_guards_its_branch(tmp_path, x, expected):
+    """``is.fpclass`` lowers to a test of ``x``; the branch is taken only for a NaN, never unconditionally."""
     src = """
 subroutine guard(x, y)
   use ieee_arithmetic
@@ -22,8 +24,10 @@ subroutine guard(x, y)
   if (ieee_is_nan(x)) y(1) = 0.0d0
 end subroutine
 """
-    with pytest.raises(NotImplementedError, match="unresolved condition placeholder"):
-        build_sdfg(src, tmp_path, name="guard", entry="guard").build()
+    sdfg = build_sdfg(src, tmp_path, name="guard", entry="guard").build()
+    y = np.array([7.0])
+    sdfg(x=x, y=y)
+    assert y[0] == expected
 
 
 @pytest.mark.parametrize(
