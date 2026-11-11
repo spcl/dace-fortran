@@ -182,6 +182,13 @@ def emit_assign(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
     # ``add_descriptors`` never saw them.  Register on first assign.
     auto_declare_synth(builder, n.target, ctx)
     if n.target in builder.symbols:
+        # A symbol passes by value: a store into an output dummy read as a symbol (a DO bound the body then assigns)
+        # would never reach the caller.
+        if any(v.fortran_name == n.target and v.intent in ("out", "inout") for v in builder.variables):
+            raise NotImplementedError(
+                f"intent(out/inout) dummy {n.target!r} is read as a symbol and assigned: its new value cannot reach "
+                "the caller. Assign a local copy instead."
+            )
         # Symbol-target reads of an array (``ci0 = icidx(je, jb, 1)``  --
         # the scalar-staged indirection load) need the bridge's bare-name
         # ``n.expr`` (just ``"icidx"``) reconstructed into a full DaCe
