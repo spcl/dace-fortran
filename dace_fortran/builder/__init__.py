@@ -1511,11 +1511,11 @@ class SDFGBuilder:
                 continue
             if arr.dtype.kind == "c":  # DaCe writes a constant array's elements as Python literals
                 raise NotImplementedError(f"COMPLEX initial data of array {v.fortran_name} is not lowered")
-            # Array globals: reshape from row-major doubles transport
-            # to the descriptor's declared shape.
+            # The flat init is the array's Fortran storage order; DaCe re-lays the
+            # logical value out by the descriptor's strides, so unflatten column-major.
             shape = tuple(int(d) for d in desc.shape)
             if arr.size == int(np.prod(shape)):
-                arr = arr.reshape(shape, order="C")
+                arr = arr.reshape(shape, order="F")
             sdfg.add_constant(v.fortran_name, arr, desc)
 
     def _seed_written_inits(self, ctx: Ctx, sdfg: SDFG) -> None:
@@ -1569,13 +1569,9 @@ class SDFGBuilder:
                 continue
             # Make it a writable transient (a kwarg would force the caller to
             # supply it) and unfold the dense init into one tasklet per
-            # element.  Reshape column-major (``order='F'``) so each logical
-            # ``a[i, j]`` write picks the Fortran-storage value the kernel
-            # later reads through the array's column-major strides -- the
-            # read-only ``_register_constants`` path instead stores the flat
-            # ``const_data`` verbatim and relies on the strides, so it uses
-            # ``order='C'``; a per-element write must map logical -> value
-            # itself.  (Identical for rank 1.)
+            # element.  Reshape column-major (``order='F'``), as
+            # ``_register_constants`` does, so each logical ``a[i, j]`` write
+            # picks its Fortran-storage value.
             desc.transient = True
             arr = arr.reshape(shape, order="F")
             is_int = v.dtype.startswith(("int", "uint")) or v.dtype == "bool"
