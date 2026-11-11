@@ -174,8 +174,8 @@ mlir::Value maskedOutValue(fir::FirOpBuilder& b, mlir::Location loc, mlir::Type 
   bool constexpr isMin = std::is_same_v<ReductionOp, hlfir::MinvalOp>;
   bool constexpr isMax = std::is_same_v<ReductionOp, hlfir::MaxvalOp>;
   if (auto cplx = mlir::dyn_cast<mlir::ComplexType>(eleTy)) {
-    int64_t const real = std::is_same_v<ReductionOp, hlfir::ProductOp> ? 1 : 0;
-    mlir::Value const re = b.createRealConstant(loc, cplx.getElementType(), llvm::APFloat(double(real)));
+    llvm::APFloat::integerPart const real = std::is_same_v<ReductionOp, hlfir::ProductOp> ? 1 : 0;
+    mlir::Value const re = b.createRealConstant(loc, cplx.getElementType(), real);
     mlir::Value const im = b.createRealZeroConstant(loc, cplx.getElementType());
     return fir::factory::Complex{b, loc}.createComplex(cplx, re, im);
   }
@@ -184,8 +184,8 @@ mlir::Value maskedOutValue(fir::FirOpBuilder& b, mlir::Location loc, mlir::Type 
       auto huge = llvm::APFloat::getLargest(ft.getFloatSemantics(), /*Negative=*/isMax);
       return b.createRealConstant(loc, ft, huge);
     }
-    return std::is_same_v<ReductionOp, hlfir::ProductOp> ? b.createRealOneConstant(loc, ft)
-                                                         : b.createRealZeroConstant(loc, ft);
+    // The integer overload: LLVM 21 has no createRealOneConstant.
+    return b.createRealConstant(loc, ft, llvm::APFloat::integerPart{std::is_same_v<ReductionOp, hlfir::ProductOp>});
   }
   unsigned const width = eleTy.getIntOrFloatBitWidth();
   if (isMin) return b.createIntegerConstant(loc, eleTy, llvm::APInt::getSignedMaxValue(width).getSExtValue());
