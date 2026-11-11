@@ -234,5 +234,58 @@ end subroutine
         build_sdfg(src, tmp_path, name="probe_stride").build()
 
 
+ZETA = 0.5 + 2.0j
+UNMAPPED_COMPLEX = {
+    "zaxpy": ("call zaxpy(3, (0.5d0, 2.0d0), x, 1, y, 1)", (3,), (3,), lambda x, y: ZETA * x + y),
+    "zscal": ("call zscal(3, (0.5d0, 2.0d0), y, 1)", (3,), (3,), lambda x, y: ZETA * y),
+    "zgeru": (
+        "call zgeru(3, 3, (0.5d0, 2.0d0), x, 1, x, 1, y, 3)",
+        (3,),
+        (3, 3),
+        lambda x, y: y + ZETA * np.outer(x, x),
+    ),
+    "zsymv": (
+        "call zsymv('U', 3, (0.5d0, 2.0d0), a, 3, x, 1, (1.0d0, 0.0d0), y, 1)",
+        (3,),
+        (3,),
+        lambda x, y: ZETA * SYM @ x + y,
+    ),
+    "zsymm": (
+        "call zsymm('L', 'U', 3, 3, (0.5d0, 2.0d0), a, 3, x, 3, (1.0d0, 0.0d0), y, 3)",
+        (3, 3),
+        (3, 3),
+        lambda x, y: ZETA * SYM @ x + y,
+    ),
+    "zsyrk": (
+        "call zsyrk('U', 'N', 3, 3, (0.5d0, 2.0d0), x, 3, (1.0d0, 0.0d0), y, 3)",
+        (3, 3),
+        (3, 3),
+        lambda x, y: np.triu(ZETA * x @ x.T + y) + np.tril(y, -1),
+    ),
+}
+SYM = np.asfortranarray(np.array([[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]]) * (1 + 1j))
+
+
+@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="complex BLAS other than gemv/gemm is not mapped")
+@pytest.mark.parametrize("routine", list(UNMAPPED_COMPLEX))
+def test_unmapped_complex_blas_is_refused_loudly(tmp_path: Path, routine):
+    """Each call refuses with ``NotImplementedError``; a mapping that gets the numbers right XPASSes and must drop the mark."""
+    call, x_shape, y_shape, reference = UNMAPPED_COMPLEX[routine]
+    src = f"""
+subroutine probe_{routine}(a, x, y)
+  complex(8), intent(in) :: a(3, 3), x({", ".join(map(str, x_shape))})
+  complex(8), intent(inout) :: y({", ".join(map(str, y_shape))})
+  {call}
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name=f"probe_{routine}").build()
+    rng = np.random.default_rng(5)
+    x = np.asfortranarray(rng.random(x_shape) + 1j * rng.random(x_shape))
+    y = np.asfortranarray(rng.random(y_shape) + 1j * rng.random(y_shape))
+    expected = reference(x, y)
+    sdfg(a=SYM.copy(order="F"), x=x, y=y)
+    np.testing.assert_allclose(y, expected)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
