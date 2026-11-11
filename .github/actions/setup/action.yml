@@ -23,12 +23,19 @@ runs:
       # libflang-N-dev carries both the FIR/HLFIR static libraries the bridge links and the flang headers it includes.
       wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
       sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$V main"
-      sudo apt-get update
-      sudo apt-get install -y \
-        llvm-$V-dev libmlir-$V-dev mlir-$V-tools libflang-$V-dev flang-$V clang-$V clang-tidy-$V \
-        build-essential cmake ninja-build libtool gfortran libgomp1 libopenmpi-dev openmpi-bin \
-        libnetcdff-dev libnetcdf-dev libhdf5-dev libfftw3-dev libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
+      pkgs=(
+        llvm-$V-dev libmlir-$V-dev mlir-$V-tools libflang-$V-dev flang-$V clang-$V clang-tidy-$V
+        build-essential cmake ninja-build libtool gfortran libgomp1 libopenmpi-dev openmpi-bin
+        libnetcdff-dev libnetcdf-dev libhdf5-dev libfftw3-dev libfyaml-dev libxml2-dev liblapack-dev libblas-dev
         pkg-config perl bear autoconf automake m4 rsync zlib1g-dev cppcheck valgrind
+      )
+      # The runner's Ubuntu mirror drops DNS for minutes at a time; apt backs off per file, the loop rides out the rest.
+      echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+      for attempt in 1 2 3; do
+        sudo apt-get update && sudo apt-get install -y "${pkgs[@]}" && break
+        [ "$attempt" = 3 ] && exit 1
+        sleep 120
+      done
       echo "/usr/lib/llvm-$V/bin" >> "$GITHUB_PATH"
       # The static-analysis checker and the MPI tests probe these names; packaging has dropped aliases before.
       command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$V/bin/clang-tidy /usr/local/bin/clang-tidy
