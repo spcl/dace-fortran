@@ -142,14 +142,11 @@ std::optional<double> scalarConstantValue(mlir::Value v);
 /// With ``negated`` given, also matches the ``cmpi eq`` form (``.NOT. ALLOCATED(x)``) and sets ``*negated``.
 mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp, bool* negated = nullptr);
 
-/// Renders a load traceExtentExpr has no form for (a runtime-indexed element), empty to give up.
-using ExtentLeaf = std::function<std::string(mlir::Value)>;
-
 /// Render an integer SSA value as a Python expression of Fortran scalar names/literals/operators (e.g. Flang's clamped
 /// ub-lb+1 -> "max((endcol - startcol) + 1, 0)") for a symbolic shape dim; leaf scalars must be separately promoted to
 /// SDFG symbols (extract_vars::symbolNames). Empty string if unrecognised -- callers fall back to the "?"
 /// synthetic-symbol path.
-std::string traceExtentExpr(mlir::Value v, const ExtentLeaf& leaf = {});
+std::string traceExtentExpr(mlir::Value v);
 
 /// Walk the same SSA chain traceExtentExpr recognises, appending every leaf scalar-declare name to out; used by
 /// extract_vars Pass 2 to promote those scalars so traceExtentExpr's expression string doesn't reference undeclared
