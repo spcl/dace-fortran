@@ -45,6 +45,19 @@ namespace hlfir_bridge {
 
 namespace {
 
+/// True when the value ``load`` reads only sizes declarations (an extent or lower bound of ``a(n)``), through integer
+/// arithmetic and converts. Such reads keep the dummy; any other read is executable and sees the local.
+bool sizesOnly(fir::LoadOp load) {
+  llvm::SmallVector<mlir::Operation*, 8> work{load};
+  while (!work.empty())
+    for (auto* user : work.pop_back_val()->getUsers()) {
+      if (mlir::isa<fir::ShapeOp, fir::ShapeShiftOp, hlfir::DeclareOp, fir::AllocaOp, fir::AllocMemOp>(user)) continue;
+      if (!mlir::isa<fir::ConvertOp>(user) && user->getDialect()->getNamespace() != "arith") return false;
+      work.push_back(user);
+    }
+  return true;
+}
+
 /// Runs ``func`` on a local copy of integer scalar dummy ``decl`` when the body writes the dummy and reads the result.
 void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
   using Flags = fir::FortranVariableFlagsEnum;
@@ -54,11 +67,13 @@ void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
       bitEnumContainsAny(flags, Flags::optional | Flags::value))
     return;
 
-  // Entry-block position of each write: the local takes over at the first one, or at the end of the entry block when
-  // the writes all sit in later blocks. Reads before it see the unchanged dummy, which keeps specification expressions
-  // such as the extent of ``a(n)`` on the dummy.
+  // Entry-block position of the first write or executable read: the local takes over there, or at the end of the entry
+  // block when the writes all sit in later blocks. A read before the first write that only sizes a declaration (the
+  // extent of ``a(n)``) keeps the dummy; an executable one (a DO bound the body then assigns) reads the local, or the
+  // dummy would stay a by-value symbol the final store could not reach the caller through.
   auto& entry = func.front();
   mlir::Operation* takeover = nullptr;
+  mlir::Operation* firstRead = nullptr;
   bool reads = false;
   bool writes = false;
   llvm::SmallVector<mlir::OpOperand*, 8> uses;
@@ -70,13 +85,18 @@ void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
       bool const assign = mlir::isa<hlfir::AssignOp>(user) && use.getOperandNumber() == 1;
       bool const call = mlir::isa<fir::CallOp>(user);
       reads |= store || !(assign || call);  // a DO variable stores through fir.store and is a symbol even when unread
-      if (!store && !assign && !call) continue;
-      writes = true;
       auto* top = entry.findAncestorOpInBlock(*user);
+      if (!store && !assign && !call) {
+        auto load = mlir::dyn_cast<fir::LoadOp>(user);
+        if (load && load == top && !sizesOnly(load) && (!firstRead || top->isBeforeInBlock(firstRead))) firstRead = top;
+        continue;
+      }
+      writes = true;
       if (top && (!takeover || top->isBeforeInBlock(takeover))) takeover = top;
     }
   if (!reads || !writes) return;
   if (!takeover) takeover = entry.getTerminator();
+  if (firstRead && firstRead->isBeforeInBlock(takeover)) takeover = firstRead;
 
   mlir::OpBuilder b(takeover);
   auto loc = decl.getLoc();

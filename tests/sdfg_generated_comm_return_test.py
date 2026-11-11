@@ -8,8 +8,7 @@ calls reuse it rather than re-creating it.
 
 These tests pin that the bindings support it: an ``intent(inout)`` handle the
 SDFG writes is reflected back to the caller (so the "init once, reuse" guard
-holds across calls), for both a 1-element array carrier (the documented
-SDFG-external-return shape) and a bare scalar.
+holds across calls), for both a 1-element array carrier and a bare scalar.
 """
 
 from pathlib import Path
@@ -61,13 +60,9 @@ end subroutine halo_step
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0 + 42.0))
 
 
-def test_sdfg_generated_comm_not_returned_via_inout_scalar(tmp_path: Path):
-    """Contract: a BARE ``intent(inout)`` scalar does NOT round-trip a value
-    generated inside the SDFG.  The bridge lowers it to a by-value SDFG scalar the
-    bindings pass input-only, so a value produced inside is used internally (``buf``
-    reflects it) but the caller's scalar is left unchanged.  The supported shape for
-    a returned handle is the 1-element array carrier
-    (:func:`test_sdfg_generated_comm_returned_via_array_carrier`)."""
+def test_sdfg_generated_comm_returned_via_inout_scalar(tmp_path: Path):
+    """A bare ``intent(inout)`` scalar round-trips the handle too: the guard reads it as a symbol, so the body works
+    on a local copy that is stored back to the caller's scalar."""
     src = """
 subroutine halo_step_scalar(comm, buf, n)
   implicit none
@@ -86,13 +81,14 @@ end subroutine halo_step_scalar
     sdfg = build_sdfg(src, tmp_path, name="halo_step_scalar", entry="halo_step_scalar").build()
 
     n = 4
-    comm = np.int32(0)
+    comm = np.zeros(1, dtype=np.int32)
     buf = np.ones(n, dtype=np.float64)
     sdfg(comm=comm, buf=buf, n=n)
-    # By-value: the caller's bare scalar is NOT written back -- comm stays 0 ...
-    assert int(comm) == 0
-    # ... but the internally-generated ``comm = 42`` WAS used, so buf += 42.
+    assert comm[0] == 42
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0))
+    sdfg(comm=comm, buf=buf, n=n)
+    assert comm[0] == 42
+    np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0 + 42.0))
 
 
 if __name__ == "__main__":

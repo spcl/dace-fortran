@@ -27,5 +27,25 @@ end subroutine
     assert n[0] == 0 and a.tolist() == [1.0] * 3 + [0.0] * 7
 
 
+def test_a_do_bound_dummy_assigned_in_the_body_reaches_the_caller(tmp_path: Path):
+    """Fortran fixes the trip count at entry: ``n`` bounds the loop, the body assigns it, and the caller sees 2."""
+    src = """
+subroutine bnd(n, r)
+  integer, intent(inout) :: n
+  integer, intent(out) :: r
+  integer :: i
+  r = 0
+  do i = 1, n
+    n = 2
+    r = r + 1
+  end do
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="bnd").build()
+    n, r = np.array([5], np.int32), np.zeros(1, np.int32)
+    sdfg(n=n, r=r)
+    assert (n[0], r[0]) == (2, 5)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
