@@ -76,6 +76,7 @@ void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
   mlir::Operation* firstRead = nullptr;
   bool reads = false;
   bool writes = false;
+  bool stored = false;
   llvm::SmallVector<mlir::OpOperand*, 8> uses;
   for (mlir::Value base : decl->getResults())
     for (auto& use : base.getUses()) {
@@ -92,11 +93,13 @@ void localizeWrittenDummy(mlir::func::FuncOp func, hlfir::DeclareOp decl) {
         continue;
       }
       writes = true;
+      stored |= store || assign;
       if (top && (!takeover || top->isBeforeInBlock(takeover))) takeover = top;
     }
   if (!reads || !writes) return;
   if (!takeover) takeover = entry.getTerminator();
-  if (firstRead && firstRead->isBeforeInBlock(takeover)) takeover = firstRead;
+  // A call only may write the dummy (by reference), and the callee reads it through the caller's storage.
+  if (stored && firstRead && firstRead->isBeforeInBlock(takeover)) takeover = firstRead;
 
   mlir::OpBuilder b(takeover);
   auto loc = decl.getLoc();
