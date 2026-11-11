@@ -1215,18 +1215,23 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
     # BLAS state so the symbol is bound BEFORE the lib node executes.
     promotions: dict[str, str] = {}  # sym -> "array_name[0]"
 
-    def _scalar(name: str) -> float | complex | dace.symbolic.symbol:
-        """Resolve a scalar literal / dummy to a value usable as a
-        :class:`SymbolicProperty` on the BLAS lib node.
-        """
+    def _literal_scale(name: str) -> float | complex | None:
+        """A literal scale as a number, real when its imaginary part is zero; None for any other argument."""
         try:
             return float(name)
         except (TypeError, ValueError):
             pass
-        if name.startswith("complex("):
-            re_part, im_part = (float(part) for part in name[len("complex(") : -1].split(","))
-            # A real scale stays real: a symbolic scale property refuses a complex value.
-            return complex(re_part, im_part) if im_part else re_part
+        if not name.startswith("complex("):
+            return None
+        re_part, im_part = (float(part) for part in name[len("complex(") : -1].split(","))
+        return complex(re_part, im_part) if im_part else re_part
+
+    def _scalar(name: str) -> float | complex | dace.symbolic.symbol:
+        """Resolve a scalar literal / dummy to a value usable as a
+        :class:`SymbolicProperty` on the BLAS lib node.
+        """
+        if (literal := _literal_scale(name)) is not None:
+            return literal
         if name in ctx.sdfg.symbols:
             return _ds.symbol(name)
         if (expr := _element(name)) is not None:
@@ -1335,7 +1340,9 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         index = ", ".join(f"__c{d}" for d in range(len(desc.shape)))
         inputs = {"_in": Memlet(f"{op.name}[{index}]")}
         value = "std::conj(_in)" if conjugate else "_in"
-        if scale is not None:
+        if scale is not None and scale.startswith("complex("):
+            value = f"decltype(_in){scale[len('complex') :]} * {value}"
+        elif scale is not None:
             # An element ``alpha``'s start symbols are read by this state, so bind them on its inbound edge
             alpha = _operand(scale)
             _apply_promotions()
@@ -1450,7 +1457,8 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         op_a, op_x, op_y = (_operand(n.call_args[i]) for i in (1, 2, 4))
         # For real data a conjugate transpose (``'C'``) is the transpose.
         transposed = trans in ("T", "C")
-        scale = alpha if _runtime_complex(alpha) else None
+        # Gemv's alpha is a symbolic property, which holds no complex value: scale the matrix copy instead.
+        scale = alpha if _runtime_complex(alpha) or isinstance(_literal_scale(alpha), complex) else None
         if scale or (trans == "C" and routine[0] in "zc"):
             op_a, alpha = _prepared(op_a, trans == "C", scale), "1" if scale else alpha
         node = blas_nodes.Gemv(f"gemv_{builder.nid()}", transA=transposed, alpha=_scalar(alpha), beta=_scalar(beta))

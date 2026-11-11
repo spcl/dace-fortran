@@ -100,6 +100,25 @@ end subroutine
     np.testing.assert_allclose(y, COMPLEX_OPS[flag](a) @ x)
 
 
+@pytest.mark.parametrize("flag", ["N", "C"])
+def test_zgemv_scales_by_a_complex_literal(tmp_path: Path, flag):
+    """A literal ``alpha`` with an imaginary part: Gemv's symbolic ``alpha`` property cannot hold it."""
+    src = f"""
+subroutine probe_literal(a, x, y)
+  complex(8), intent(in) :: a(3, 3), x(3)
+  complex(8), intent(inout) :: y(3)
+  call zgemv('{flag}', 3, 3, (0.5d0, 2.0d0), a, 3, x, 1, (1.0d0, 0.0d0), y, 1)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="probe_literal").build()
+    rng = np.random.default_rng(4)
+    a = np.asfortranarray(rng.random((3, 3)) + 1j * rng.random((3, 3)))
+    x, y = rng.random(3) + 1j * rng.random(3), rng.random(3) + 1j * rng.random(3)
+    expected = (0.5 + 2.0j) * COMPLEX_OPS[flag](a) @ x + y
+    sdfg(a=a, x=x, y=y)
+    np.testing.assert_allclose(y, expected)
+
+
 @pytest.mark.parametrize("alpha", ["z", "conjg(z)", "-z"])
 def test_zgemm_scales_by_a_runtime_alpha(tmp_path: Path, alpha):
     """h_psi's ``zgemm('C', 'N', ..., CONJG(phase), ...)``: ``alpha`` is a COMPLEX value known only at run time."""
