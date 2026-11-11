@@ -1224,8 +1224,9 @@ def emit_blas(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowRe
         except (TypeError, ValueError):
             pass
         if name.startswith("complex("):
-            re_part, im_part = name[len("complex(") : -1].split(",")
-            return complex(float(re_part), float(im_part))
+            re_part, im_part = (float(part) for part in name[len("complex(") : -1].split(","))
+            # A real scale stays real: a symbolic scale property refuses a complex value.
+            return complex(re_part, im_part) if im_part else re_part
         if name in ctx.sdfg.symbols:
             return _ds.symbol(name)
         if (expr := _element(name)) is not None:
