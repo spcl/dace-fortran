@@ -215,13 +215,12 @@ toml = [
 [[package]]
 name = "dace"
 version = "2.0.0b1"
-source = { git = "https://github.com/spcl/dace.git?rev=dc1c0eda98caa7967155f651d748b439664e4766#dc1c0eda98caa7967155f651d748b439664e4766" }
+source = { git = "https://github.com/spcl/dace.git?rev=1228428c93054d37a87d095dbc9ad3b1cca6fad0#1228428c93054d37a87d095dbc9ad3b1cca6fad0" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
     { name = "cmake" },
     { name = "dill" },
-    { name = "fparser" },
     { name = "ml-dtypes" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -293,7 +292,7 @@ testing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=dc1c0eda98caa7967155f651d748b439664e4766" },
+    { name = "dace", git = "https://github.com/spcl/dace.git?rev=1228428c93054d37a87d095dbc9ad3b1cca6fad0" },
     { name = "fparser", specifier = ">0.2" },
     { name = "nanobind" },
     { name = "networkx" },
