@@ -631,14 +631,6 @@ end subroutine"""
 
 
 REFUSED = {
-    "reduction_mask": (
-        """subroutine @(a, s)
-  real(8), intent(in) :: a(3)
-  real(8), intent(out) :: s
-  s = sum(a, mask=a > 0.0d0)
-end subroutine""",
-        "MASK=",
-    ),
     "runtime_back": (
         """subroutine @(a, i, flag)
   real(8), intent(in) :: a(3)
