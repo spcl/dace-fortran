@@ -206,13 +206,7 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vec
     // the dynamic gather-temp extent
     // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1), 0)``)
     // as a closed-form expression over already-promoted scalar symbols.
-    auto expr = traceExtentExpr(ext, [&](mlir::Value element) -> std::string {
-      auto ae = arrayElementExtent(element);
-      if (!ae) return "";
-      std::string const sym = valueSymbolName(ae->first, ae->second);
-      if (valueSyms) valueSyms->push_back({sym, ae->first, ae->second});
-      return sym;
-    });
+    auto expr = traceExtentExpr(ext);
     if (!expr.empty()) {
       syms.push_back(expr);
       return;
