@@ -44,6 +44,7 @@ void registerAllBridgePasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldElementAliasesPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldCopyInOutPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createDropStubCallsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createLowerAllocateSourcePass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createExpandVectorSubscriptGatherPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createExpandVectorSubscriptScatterPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createRejectPolymorphismPass(); });

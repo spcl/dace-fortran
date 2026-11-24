@@ -74,5 +74,30 @@ end subroutine
     assert s[0] == (4.0 if flag else 2.0)
 
 
+def test_allocate_with_source_copies_the_source(tmp_path):
+    """QE vexx ``ALLOCATE(psi_d, SOURCE = psi)``: the allocatable takes the source's shape and values (it stayed
+    unsized and empty before)."""
+    src = """
+subroutine top(n, m, a, b)
+  integer, intent(in) :: n, m
+  complex(8), intent(in) :: a(n, m)
+  complex(8), intent(out) :: b(n, m)
+  complex(8), allocatable :: t(:, :)
+  allocate(t, source=a)
+  t(1, 1) = t(1, 1) + 1
+  b = 2 * t
+  deallocate(t)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    rng = np.random.default_rng(0)
+    a = np.asfortranarray(rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2)))
+    b = np.zeros_like(a, order="F")
+    sdfg(n=3, m=2, a=a, b=b)
+    want = 2 * a
+    want[0, 0] += 2
+    np.testing.assert_allclose(b, want, rtol=1e-14)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
