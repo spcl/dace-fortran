@@ -5,15 +5,15 @@
 !                                      nqs=0, nibands=[0]): setup and vexxmain
 !                                      loops skip, result_sum no-ops, hpsi =
 !                                      hpsi_d identity copy (hpsi_out==hpsi_in).
-!   init_vexx_bp_k_gpu_perf_state_c -- REAL-WORK state for samples/vexx (below).
+!   init_vexx_bp_k_gpu_perf_state_c -- REAL exchange-path state (below).
 !   run_vexx_bp_k_gpu_c             -- forwards psi/hpsi to vexx_bp_k_gpu with
 !                                      the OPTIONAL becpsi omitted.
 !
-! fwfft_y/invfft_y are LINKER-ONLY stubs: the pruner emits an empty MODULE
-! fft_interfaces; the parse-test restore re-adds the interface specifics but
-! not their bodies.  Never entered on the no-op path; on the perf path the
-! DaCe side replaces the call sites with FFT library nodes, so the stubs only
-! ever run in gfortran reference lanes.
+! fwfft_y/invfft_y: the pruner emits an empty MODULE fft_interfaces; the
+! parse-test restore re-adds the interface specifics but not their bodies.
+! Never entered on the no-op path.  On the real path the DaCe side replaces
+! the call sites with FFT library nodes, so these bodies run only in the
+! gfortran reference and compute the same flat DFT (flat_dft_stub).
 !
 ! The pruner's stub MODULE iso_c_binding shadows the intrinsic and lacks
 ! c_int; default INTEGER is ABI-compatible with C int on QE's platforms.
@@ -76,8 +76,8 @@ SUBROUTINE init_vexx_bp_k_gpu_state_c(lda, n, m, npol_in, max_ibands_in) &
 END SUBROUTINE init_vexx_bp_k_gpu_state_c
 
 
-! REAL-WORK init for samples/vexx (the no-op init above makes the kernel an
-! identity copy: nqs=0 kills vexxmain, nibands=0 kills the band loops).
+! REAL exchange-path init (the no-op init above makes the kernel an identity
+! copy: nqs=0 kills vexxmain, nibands=0 kills the band loops).
 ! Colinear non-USPP path: noncolin/okvan/okpaw/tqr/negrp/many_fft keep their
 ! module defaults.  One-shot per process, no ALLOCATED guards (same
 ! convention as the no-op init); never mix the two inits.
@@ -161,15 +161,27 @@ SUBROUTINE init_vexx_bp_k_gpu_perf_state_c(lda, n, m, npol_in, max_ibands_in, &
 
   nqs = nqs_in
   ALLOCATE (exxbuff(nnr, m, nqs), exxbuff_d(nnr, m, nqs))
-  ! Deterministic nonzero fill: zeros/denormals could take different FP paths.
-  DO ir = 1, nnr
-    exxbuff(ir, :, :) = CMPLX(0.5D0 + 0.45D0 * DBLE(MOD(ir, 31)) / 31.0D0, &
-                              0.25D0 - 0.5D0 * DBLE(MOD(ir, 17)) / 17.0D0, KIND(0.0D0))
+  ! Deterministic nonzero fill that differs per grid point, band and q, so a wrong band or q index changes
+  ! the result; zeros/denormals could take different FP paths.
+  DO iq = 1, nqs
+    DO jb = 1, m
+      DO ir = 1, nnr
+        exxbuff(ir, jb, iq) = CMPLX(0.5D0 + 0.45D0 * DBLE(MOD(ir + 3 * jb + 7 * iq, 31)) / 31.0D0, &
+                                    0.25D0 - 0.5D0 * DBLE(MOD(2 * ir + 5 * jb + iq, 17)) / 17.0D0, KIND(0.0D0))
+      END DO
+    END DO
   END DO
   exxbuff_d = exxbuff
-  ALLOCATE (x_occupation(m, nqs));      x_occupation = 1.0D0
-  ALLOCATE (x_occupation_d(m, nqs));    x_occupation_d = 1.0D0
+  ALLOCATE (x_occupation(m, nqs), x_occupation_d(m, nqs))
+  DO jb = 1, m
+    x_occupation(jb, :) = 1.0D0 / DBLE(jb)
+  END DO
+  x_occupation_d = x_occupation
+  ! A distinct k+q per q gives each q its own Coulomb factors; 0.03*iq never cancels gt(1,ig) = 0.1*ig.
   ALLOCATE (xkq_collect(3, nqs));       xkq_collect = 0.0D0
+  DO iq = 1, nqs
+    xkq_collect(1, iq) = 0.03D0 * DBLE(iq)
+  END DO
   ALLOCATE (index_xk(nqs));             index_xk = 1
   ALLOCATE (index_xkq(1, nqs))
   DO iq = 1, nqs
@@ -237,6 +249,7 @@ SUBROUTINE fwfft_y(fft_kind, f, dfft, howmany)
   TYPE(fft_type_descriptor), INTENT(IN) :: dfft
   INTEGER, OPTIONAL, INTENT(IN) :: howmany
   COMPLEX(DP) :: f(:)
+  CALL flat_dft_stub(SIZE(f), f, -1.0_DP, 1.0_DP)
 END SUBROUTINE fwfft_y
 
 
@@ -248,4 +261,28 @@ SUBROUTINE invfft_y(fft_kind, f, dfft, howmany)
   TYPE(fft_type_descriptor), INTENT(IN) :: dfft
   INTEGER, OPTIONAL, INTENT(IN) :: howmany
   COMPLEX(DP) :: f(:)
+  CALL flat_dft_stub(SIZE(f), f, 1.0_DP, 1.0_DP / DBLE(SIZE(f)))
 END SUBROUTINE invfft_y
+
+
+! The DFT the DaCe side lowers fwfft/invfft to (emit_library.emit_fft + DaCe's pure FFT/IFFT expansion): one flat
+! transform over the whole buffer, ignoring dfft and howmany; forward exp(-2 pi i k n / N) unnormalized, inverse
+! exp(+...) scaled by 1/N.  The reference runs this so both sides compute the same exchange on the real path.
+SUBROUTINE flat_dft_stub(nn, f, sign, factor)
+  USE fft_param, ONLY: DP
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: nn
+  COMPLEX(DP), INTENT(INOUT) :: f(nn)
+  REAL(DP), INTENT(IN) :: sign, factor
+  COMPLEX(DP) :: out(nn)
+  REAL(DP) :: angle
+  INTEGER :: k, j
+  DO k = 0, nn - 1
+    out(k + 1) = (0.0_DP, 0.0_DP)
+    DO j = 0, nn - 1
+      angle = 2.0_DP * 3.141592653589793_DP * DBLE(MOD(k * j, nn)) / DBLE(nn)
+      out(k + 1) = out(k + 1) + CMPLX(COS(angle), sign * SIN(angle), KIND=DP) * f(j + 1)
+    END DO
+  END DO
+  f = out * factor
+END SUBROUTINE flat_dft_stub
