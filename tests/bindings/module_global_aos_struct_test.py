@@ -395,6 +395,77 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     np.testing.assert_allclose(g_sdfg, g_ref, rtol=1e-12, atol=1e-12)
 
 
+# A kernel-allocated global sized by a module scalar that is also the kernel's loop bound (QE vexx
+# ``ALLOCATE(coulomb_fac(ngm, nqs, nks))`` and ``DO iq = 1, nqs``): the symbol must come from the scalar.
+_SRC_ALLOC_SIZED = """
+module g_sized_mod
+  implicit none
+  integer :: nq = 0
+  real(8), allocatable :: gfac(:)
+contains
+  subroutine fill_g(r)
+    real(8), intent(out) :: r
+    integer :: i
+    if (.not. allocated(gfac)) allocate(gfac(nq))
+    r = 0.0d0
+    do i = 1, nq
+      gfac(i) = 2.0d0 * i
+      r = r + gfac(i)
+    end do
+  end subroutine fill_g
+end module g_sized_mod
+"""
+
+_DRIVER_ALLOC_SIZED = """
+subroutine run_fill_g(nq_in, r) bind(c, name='run_fill_g')
+  use iso_c_binding
+  use g_sized_mod, only: gfac, nq
+  use fill_g_dace_bindings, only: fill_g_dace, fill_g_dace_finalize
+  implicit none
+  integer(c_int), value :: nq_in
+  real(c_double), intent(out) :: r
+  if (allocated(gfac)) deallocate(gfac)
+  nq = nq_in
+  call fill_g_dace(r)
+  call fill_g_dace_finalize()
+end subroutine run_fill_g
+"""
+
+_REF_DRIVER_ALLOC_SIZED = """
+subroutine run_fill_g_ref(nq_in, r) bind(c, name='run_fill_g_ref')
+  use iso_c_binding
+  use g_sized_mod, only: gfac, nq, fill_g
+  implicit none
+  integer(c_int), value :: nq_in
+  real(c_double), intent(out) :: r
+  if (allocated(gfac)) deallocate(gfac)
+  nq = nq_in
+  call fill_g(r)
+end subroutine run_fill_g_ref
+"""
+
+
+def test_alloc_inside_global_sized_by_module_scalar_e2e(tmp_path):
+    """The wrapper allocates a kernel-allocated global from its extent symbols, so the symbols cannot be read back
+    off that buffer's size: ``nq`` comes from the module scalar, and the loop runs nq times (it ran zero times)."""
+    import ctypes
+
+    import numpy as np
+
+    _builder, _sdfg, so_path, binding = _build_module(_SRC_ALLOC_SIZED, "fill_g", "g_sized_mod::fill_g", tmp_path)
+    sdfg_lib, ref_lib = _link_pair(
+        _SRC_ALLOC_SIZED, "fill_g", _DRIVER_ALLOC_SIZED, _REF_DRIVER_ALLOC_SIZED, so_path, binding, tmp_path
+    )
+
+    def _run(fn):
+        r = np.zeros(1)
+        fn(ctypes.c_int(4), r.ctypes.data_as(ctypes.c_void_p))
+        return r[0]
+
+    assert _run(ref_lib.run_fill_g_ref) == 20.0
+    assert _run(sdfg_lib.run_fill_g) == 20.0
+
+
 # ---------------------------------------------------------------------------
 # PRESENCE: kernel branches on ALLOCATED/ASSOCIATED of a module global. Flang folds
 # both to a ``<g>_allocated`` FREE symbol; the binding must source it from the REAL

@@ -1629,6 +1629,9 @@ def _build_symbol_assigns(
     # Absent-optional args are degenerate (1,1,...) placeholders: a named blocking
     # symbol must NOT source from one, or every size(<arr>,dim) transient collapses.
     _unsourced_names = {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
+    # Nor from a kernel-allocated global: the wrapper allocates it FROM these symbols, so its size is circular (QE
+    # vexx sized coulomb_fac(ngm, nqs, nks) by an unset nqs, then read nqs = 0 back off it).
+    _extent_excluded = _unsourced_names | {a.sdfg_name for a in frozen.args if a.global_alloc_inside}
     arg_by_sdfg = {a.sdfg_name: a for a in frozen.args}
     # SCALAR outer dummies declared OPTIONAL: their <name>_present companion is
     # forwarded from the caller's present(<name>), not defaulted.
@@ -1758,7 +1761,7 @@ def _build_symbol_assigns(
             continue
         # A NAMED array extent of a symbol that is no module scalar: the SDFG sized its transients by this symbol,
         # so it must equal the actual allocation.
-        ext = _sym_from_array_extent(sym, frozen, exclude=_unsourced_names)
+        ext = _sym_from_array_extent(sym, frozen, exclude=_extent_excluded)
         if ext is not None:
             expr, dim = ext
             guard = optional_array_guards.get((expr or "").lower(), "")
