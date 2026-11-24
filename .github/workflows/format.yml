@@ -29,5 +29,5 @@ jobs:
     - name: Lint (pre-commit, every file)
       run: |
         # The project's locked environment: the package and dace for mypy / pyright, the pinned linters.
-        uv sync --frozen --no-default-groups --group linting
+        uv sync --frozen --no-default-groups --group testing --group linting
         uv run --no-sync pre-commit run --all-files --show-diff-on-failure --color=always
