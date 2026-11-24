@@ -244,7 +244,7 @@ Declare once with `apply_external_functions(EXTERNAL, IGNORE)`: `EXTERNAL` = lis
 
 - **LLVM/Flang 21 or 22** — auto-detected: `dace_fortran/llvm_toolchain.py` (`SUPPORTED_LLVM_VERSIONS`) probes `flang-new-<major>` / `flang-<major>` and then unversioned `flang-new` / `flang` (which must self-identify via `--version`), taking the first installed major; `LLVM_VERSION` pins one, `LLVM_DIR` overrides discovery outright. Validated on LLVM 21.1.8 and 22.1.5. Debian/Ubuntu: `llvm-N-dev libmlir-N-dev mlir-N-tools libflang-N-dev flang-N clang-N` from apt.llvm.org (N = 21 or 22). `libflang-N-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes. The C++ side keeps both majors' spellings behind `LLVM_VERSION_MAJOR` in `dace_fortran/llvm_compat.h`.
 - **Python** 3.10–3.14 (CI runs 3.12).
-- **DaCe** — pinned to a commit of the FaCe branch (`pyproject.toml`), which carries the DaCe-core pieces the frontend needs. Plus `fparser > 0.2`, `networkx`, `numpy`.
+- **DaCe** — chosen with an extra when installing from PyPI (below); a checkout tests against a commit of the FaCe branch (`[tool.uv.sources]` in `pyproject.toml`), which carries the DaCe-core pieces the frontend needs. Plus `fparser > 0.2`, `networkx`, `numpy`.
 - **nanobind** — bridge is a nanobind extension (in the `testing` dependency group).
 - **CMake ≥ 3.18**, C++17 compiler (the detected LLVM's own `clang++`/`clang++-<major>` auto-selected if present), **gfortran** (binding tests + numerical references compile with gfortran; Ubuntu's `flang-new-21` ships without `libflang_rt` → flang is emit-HLFIR-only).
 
@@ -252,7 +252,15 @@ Bridge locates LLVM/MLIR by deriving the install prefix from the flang it detect
 
 ## Install & build
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/) and locked in `uv.lock`:
+From PyPI, pick the DaCe the frontend builds SDFGs for with an extra; both install the `dace` package, so take exactly
+one:
+
+```bash
+pip install "dace-fortran[extended]"   # DaCe extended (PyPI dace-extended, Python >= 3.12)
+pip install "dace-fortran[dace]"       # spcl's dace: needs a release that carries the FaCe changes (spcl/dace#2448)
+```
+
+From a checkout, dependencies are managed with [uv](https://docs.astral.sh/uv/) and locked in `uv.lock`:
 
 ```bash
 uv sync                          # editable install + the dev group (testing + linting)

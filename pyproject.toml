@@ -26,8 +26,6 @@ classifiers = [
 keywords = ["fortran", "flang", "hlfir", "mlir", "dace", "frontend", "dataflow"]
 
 dependencies = [
-    # A commit of the FaCe branch, which carries the DaCe-core pieces the frontend needs; a sha keeps CI reproducible.
-    "dace @ git+https://github.com/spcl/dace.git@c4cc7bc0109f14216c4044f126c2cb4462176655",
     # fparser AST single-TU inliner (dace_fortran.fparser_inliner).  >0.2
     # carries the Fortran2003-before-Fortran2008 import ordering needed
     # under Python 3.14 (cf. d-face commit 74110d690).
@@ -38,8 +36,16 @@ dependencies = [
     "numpy",
 ]
 
+# The DaCe the frontend builds SDFGs for. Both extras install the ``dace`` package, so take exactly one.
+[project.optional-dependencies]
+extended = ["dace-extended>=1.0.0; python_version >= '3.12'"]
+dace = ["dace>=2.0.0b2"]
+
 [dependency-groups]
 testing = [
+    # CI and a checkout test against a commit of the FaCe branch ([tool.uv.sources]), which carries the DaCe-core pieces
+    # the frontend needs; a sha keeps CI reproducible. Groups and sources are never published.
+    "dace",
     "pytest",
     "pytest-cov",
     "pytest-timeout",
@@ -71,6 +77,9 @@ default-groups = ["dev"]
 # Editable installs as a plain path entry: mypy and pyright cannot follow setuptools' import-hook finders, so an
 # editable dace (``uv pip install -e <dace checkout>``) resolves for them only in compat mode.
 config-settings = { editable_mode = "compat" }
+
+[tool.uv.sources]
+dace = { git = "https://github.com/spcl/dace.git", rev = "c4cc7bc0109f14216c4044f126c2cb4462176655" }
 
 [project.urls]
 Homepage = "https://github.com/spcl/dace-fortran"
