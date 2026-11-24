@@ -102,6 +102,9 @@ DEFAULT_PIPELINE = (
     # bail, so the pair survived as a zero-filled phantom argument and every
     # write through it was silently dropped. No-op when nothing is stubbed.
     "hlfir-drop-stub-calls,"
+    # ALLOCATE(x, SOURCE=y) reaches us as Fortran-runtime calls the bridge does not model, which left x
+    # unsized and without y's values; rewrite it to the allocmem + ``x = y`` form a plain ALLOCATE takes.
+    "hlfir-lower-allocate-source,"
     # Erase dispatch-table bindings (``fir.dt_entry``) the entry never
     # dynamically invokes, so the symbol-dce below can drop the unreachable
     # (often polymorphic, e.g. ``fir.select_type`` over a ``class(*)`` key)
