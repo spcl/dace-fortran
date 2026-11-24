@@ -39,7 +39,7 @@ dependencies = [
 # The 2.x frontend builds SDFGs for DaCe extended (specialize_symbols is not in upstream DaCe 2.0.0b2); upstream DaCe
 # users stay on dace-fortran<2.
 [project.optional-dependencies]
-extended = ["dace-extended>=2.0.0a1; python_version >= '3.12'"]
+extended = ["dace-extended>=1.0.1; python_version >= '3.12'"]
 
 [dependency-groups]
 testing = [
