@@ -24,7 +24,7 @@ from dace_fortran.dace_types import input_connector, output_connector
 from dace_fortran.external import C_TYPES, Arg, ArgKind, CAbi, Intent
 
 if TYPE_CHECKING:
-    from dace.sdfg.nodes import LibraryNode, Node
+    from dace.sdfg.nodes import AccessNode, LibraryNode, Node
     from dace.sdfg.state import ControlFlowRegion, SDFGState
 
     from dace_fortran.builder import SDFGBuilder
@@ -1750,9 +1750,18 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
 
     fft_nodes = importlib.import_module("dace_fortran.libraries.fft.nodes")
     ctx.flush_and_ensure(builder, region)
+    sections = symbolize_subset_indices(builder, ctx, region, list(n.call_arg_subsets or ["", ""]))
     state = ctx.new_state(builder, region)
 
     in_arr, out_arr = n.call_args[0], n.call_args[1]
+    # A section buffer (QE ``invfft('Wave', temppsic_d(:, ii), dfftt)``) transforms only that section: the node reads
+    # and writes a View of it, so its expansion sees the section's extent and not the whole array.
+    in_section = fft_section_view(ctx, state, in_arr, sections[0], is_read=True) if sections[0] else None
+    out_section = fft_section_view(ctx, state, out_arr, sections[1], is_read=False) if sections[1] else None
+    if in_section:
+        in_arr = in_section.data
+    if out_section:
+        out_arr = out_section.data
     is_inverse = n.expr == "backward"
     cls = fft_nodes.IFFT if is_inverse else fft_nodes.FFT
     node = cls(f"{'i' if is_inverse else ''}fft_{builder.nid()}")
@@ -1792,10 +1801,12 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
 
     from dace_fortran.builder.emit_tasklet import ensure_view_read_link, ensure_view_writeback_link
 
-    in_node = state.add_read(in_arr)
+    in_node = in_section or state.add_read(in_arr)
     state.add_edge(in_node, None, node, "_inp", Memlet.from_array(in_arr, in_desc))
-    out_node = state.add_write(out_arr)
+    out_node = out_section or state.add_write(out_arr)
     state.add_edge(node, "_out", out_node, None, Memlet.from_array(out_arr, out_desc))
+    if in_section or out_section:
+        return
     # A View input / output (e.g. the ``bounds_remap_view`` ``prhoc_d`` flattening
     # ``rhoc_d(:, col_range)`` for an in-place FFT) needs its source linking
     # memlet on these fresh nodes -- source -> view for the read, view -> source
@@ -1805,6 +1816,34 @@ def emit_fft(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlowReg
         ensure_view_read_link(builder, state, in_node, in_arr)
     if isinstance(out_desc, View):
         ensure_view_writeback_link(builder, state, out_node, out_arr)
+
+
+def fft_section_view(ctx: Ctx, state: SDFGState, base: str, subset: str, is_read: bool) -> AccessNode:
+    """A fresh View of ``base[subset]`` linked to a fresh ``base`` access node (base -> view for a read, view -> base
+    for a write); the dims the subset indexes with a scalar drop out of the view's shape."""
+    from dace import subsets
+
+    desc = ctx.sdfg.arrays[base]
+    # The bridge renders a whole dim whose bounds it cannot resolve as a bare ``:``.
+    parts = [part.strip() for part in re.split(r",(?![^\[(]*[\])])", subset)]
+    parts = [f"0:{desc.shape[dim]}" if part == ":" else part for dim, part in enumerate(parts)]
+    subset = ", ".join(parts)
+    section = subsets.Range.from_string(subset)
+    kept = [dim for dim, part in enumerate(parts) if ":" in part]
+    view, _ = ctx.sdfg.add_view(
+        f"{base}_section",
+        [section.size()[dim] for dim in kept],
+        desc.dtype,
+        storage=desc.storage,
+        strides=[desc.strides[dim] * section.ranges[dim][2] for dim in kept],
+        find_new_name=True,
+    )
+    view_node = state.add_access(view)
+    if is_read:
+        state.add_edge(state.add_read(base), None, view_node, "views", Memlet(f"{base}[{subset}]"))
+    else:
+        state.add_edge(view_node, "views", state.add_write(base), None, Memlet(f"{base}[{subset}]"))
+    return view_node
 
 
 class PlannedArg(NamedTuple):
