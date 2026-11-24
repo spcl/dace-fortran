@@ -51,4 +51,15 @@ CONTAINS
     f = work(:, 2, :)
     DEALLOCATE (work)
   END SUBROUTINE run_fwfft_allocatable_column
+  !
+  ! QE vexx's FFT feed: a 1-D pointer remapped onto jc columns, jc known only at run time.
+  SUBROUTINE run_fwfft_remapped_columns(n, m, f)
+    INTEGER, INTENT(IN) :: n, m
+    COMPLEX(dp), TARGET, INTENT(INOUT) :: f(n, m)
+    COMPLEX(dp), POINTER :: p(:)
+    INTEGER :: jc
+    jc = MIN(2, m - 1)
+    p(1:n * jc) => f(:, 2:1 + jc)
+    CALL fwfft_y('Rho', p, n)
+  END SUBROUTINE run_fwfft_remapped_columns
 END MODULE qe_fft_section_probe

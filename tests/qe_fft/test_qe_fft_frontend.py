@@ -72,6 +72,17 @@ def test_qe_fwfft_on_allocatable_section_transforms_that_column(tmp_path):
     np.testing.assert_allclose(f, want, rtol=1e-12, atol=1e-12)
 
 
+def test_qe_fwfft_on_remapped_pointer_transforms_its_flat_extent(tmp_path):
+    """``p(1:n*jc) => f(:, 2:1+jc); fwfft_y(..., p, ...)`` with a run-time ``jc`` (QE vexx ``prhoc_d``): one flat
+    transform over the n*jc elements of columns 2..1+jc; column 1 is untouched."""
+    import numpy as np
+
+    f_in, f = run_section_probe("run_fwfft_remapped_columns", tmp_path)
+    want = f_in.copy(order="F")
+    want[:, 1:3] = np.fft.fft(f_in[:, 1:3].reshape(-1, order="F")).reshape(-1, 2, order="F")
+    np.testing.assert_allclose(f, want, rtol=1e-12, atol=1e-12)
+
+
 if __name__ == "__main__":
     import tempfile
 
@@ -82,6 +93,7 @@ if __name__ == "__main__":
         test_qe_invfft_on_columns_transforms_each_column,
         test_qe_fwfft_on_rows_transforms_each_strided_row,
         test_qe_fwfft_on_allocatable_section_transforms_that_column,
+        test_qe_fwfft_on_remapped_pointer_transforms_its_flat_extent,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             test(Path(tmp))

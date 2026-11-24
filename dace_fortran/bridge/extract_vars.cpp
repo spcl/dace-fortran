@@ -3873,6 +3873,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                   if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
                     return traceToDecl(ld.getMemref());
                   }
+                  // flang's extent clamp ``select(x > 0, x, 0)``: a pointer remap's extent is non-negative.
+                  if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
+                    auto cmp = sel.getCondition().getDefiningOp<mlir::arith::CmpIOp>();
+                    auto zero = traceConstInt(sel.getFalseValue());
+                    if (!cmp || cmp.getPredicate() != mlir::arith::CmpIPredicate::sgt ||
+                        cmp.getLhs() != sel.getTrueValue() || !zero || *zero != 0)
+                      return "";
+                    vv = sel.getTrueValue();
+                    continue;
+                  }
                   if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
                     std::string const lhs = renderExtent(mul.getLhs());
                     std::string const rhs = renderExtent(mul.getRhs());
