@@ -125,7 +125,7 @@ def _make_paw_flag_public(source: str) -> str:
 # vexx_bp_k_gpu_dace binding, which marshals every USE'd module global from the
 # real host on entry/exit so the SDFG sees the same no-op state as the reference.
 _SDFG_DRIVER = r"""
-subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, psi, hpsi) &
+subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in, psi, hpsi) &
     bind(c, name="run_vexx_dace_c")
   ! ``, intrinsic`` selects the real iso_c_binding even though the QE
   ! checkpoint stubs a same-named module (which lacks ``c_int``).
@@ -137,7 +137,7 @@ subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, psi, hpsi) &
   use mp_exx, only: max_ibands
   use vexx_bp_k_gpu_dace_bindings, only: vexx_bp_k_gpu_dace, vexx_bp_k_gpu_dace_finalize
   implicit none
-  integer(c_int), value :: lda, n, m, npol_in, max_ibands_in
+  integer(c_int), value :: lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in
   complex(dp), intent(inout) :: psi(lda*npol_in, max_ibands_in)
   complex(dp), intent(inout) :: hpsi(lda*npol_in, max_ibands_in)
   type(bec_type) :: becpsi
@@ -147,8 +147,18 @@ subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, psi, hpsi) &
       use, intrinsic :: iso_c_binding
       integer(c_int), value :: lda, n, m, npol_in, max_ibands_in
     end subroutine
+    subroutine init_vexx_bp_k_gpu_perf_state_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in) &
+        bind(c, name="init_vexx_bp_k_gpu_perf_state_c")
+      use, intrinsic :: iso_c_binding
+      integer(c_int), value :: lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in
+    end subroutine
   end interface
-  call init_vexx_bp_k_gpu_state_c(lda, n, m, npol_in, max_ibands_in)
+  ! nqs_in == 0 selects the no-op state, anything else the real exchange path.
+  if (nqs_in == 0) then
+    call init_vexx_bp_k_gpu_state_c(lda, n, m, npol_in, max_ibands_in)
+  else
+    call init_vexx_bp_k_gpu_perf_state_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in)
+  end if
   ! becxx is the module-global AoS struct the binding copies in via
   ! size(becxx); allocate a degenerate element so the copy is valid.
   if (allocated(becxx)) deallocate(becxx)
@@ -293,55 +303,35 @@ def test_vexx_bp_k_gpu_reference_runs(tmp_path):
     np.testing.assert_array_equal(hpsi_out, hpsi_in)
 
 
-# Builds, compiles and binds the whole vexx_bp_k_gpu SDFG: ~4 min on a CI runner, past the lanes' 300 s default.
-@pytest.mark.timeout(1200)
-def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
-    """End-to-end numerical correctness for vexx_bp_k_gpu THROUGH the
-    generated Fortran binding.
+def build_and_run_vexx_sdfg(tmp_path, dims, psi, hpsi, sdfg_hook=None, name="vexx_bp_k_gpu"):
+    """Build the vexx_bp_k_gpu SDFG, bind it through the generated Fortran binding and run it in place on psi/hpsi.
 
-    Kernel USE-imports dozens of QE module globals; a direct DaCe call would
-    need ~80 hand-supplied module-global arrays, so the e2e path goes through
-    the emitted vexx_bp_k_gpu_dace binding, which marshals all that state from
-    the real host on entry/exit -- as it would run in production.
-
-    Both sides see identical seeded psi/hpsi and the same no-op module state
-    (see test_vexx_bp_k_gpu_reference_runs), so output must match the
-    gfortran reference element-wise -- pinning that inlined-dummy
-    section-aliasing, becxx AoS marshalling, and module-global copy-in/out all lower correctly.
+    ``dims`` is (lda, n, m, npol, max_ibands, nnr, nqs, jblock); nqs == 0 runs the no-op state, otherwise the real
+    exchange-path state.  ``sdfg_hook(sdfg)`` runs on the built SDFG before the library is generated (the CPF driver
+    canonicalizes there). ``name`` names the SDFG and so its library and binding: two builds in one process need two
+    names, or the second binding resolves against the first build's already-loaded library.
     """
     import ctypes
-
-    import numpy as np
 
     from dace_fortran.bindings.build_fortran_library import build_fortran_library
     from dace_fortran.bindings.flatten_plan import FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
     from tests._util import build_sdfg
 
-    lda, n, m, npol, max_ibands = 4, 4, 1, 1, 1
-
-    # --- gfortran reference (identity on the no-op path) ---
-    # _compile_reference writes qe_ref.f90/libvexx_ref.so into tmp_path; no name collision with the SDFG side's files.
-    _, init, run = _compile_reference(tmp_path)
-    init(lda, n, m, npol, max_ibands)
-    psi_ref, hpsi_ref = _make_random_inputs(lda, npol, max_ibands)
-    psi_dace = psi_ref.copy(order="F")
-    hpsi_dace = hpsi_ref.copy(order="F")
-    run(lda, n, m, psi_ref.ctypes.data, hpsi_ref.ctypes.data)
-
-    # --- SDFG-via-binding ---
     src = _make_paw_flag_public(_preprocess(_SRC.read_text()))
     src_path = tmp_path / "qe.f90"
     src_path.write_text(src)
 
-    builder = build_sdfg(src, tmp_path / "sdfg", name="vexx_bp_k_gpu", entry=_ENTRY)
+    builder = build_sdfg(src, tmp_path / "sdfg", name=name, entry=_ENTRY)
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
-    sdfg.name = "vexx_bp_k_gpu"
+    sdfg.name = name
     iface = build_auto_interface(sdfg._fortran_interface_raw, sdfg.name)
+    if sdfg_hook is not None:
+        sdfg_hook(sdfg)
 
     driver_path = tmp_path / "driver.f90"
-    driver_path.write_text(_SDFG_DRIVER)
+    driver_path.write_text(_SDFG_DRIVER.replace("vexx_bp_k_gpu_dace", f"{name}_dace"))
 
     lib = build_fortran_library(
         sdfg,
@@ -356,8 +346,90 @@ def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
 
     fn = dace_lib.run_vexx_dace_c
     fn.restype = None
-    fn.argtypes = [ctypes.c_int] * 5 + [ctypes.c_void_p, ctypes.c_void_p]
-    fn(lda, n, m, npol, max_ibands, psi_dace.ctypes.data, hpsi_dace.ctypes.data)
+    fn.argtypes = [ctypes.c_int] * 8 + [ctypes.c_void_p, ctypes.c_void_p]
+    fn(*dims, psi.ctypes.data, hpsi.ctypes.data)
+
+
+def run_exchange_reference(tmp_path, dims, psi, hpsi):
+    """gfortran reference on the real exchange-path state, in place on psi/hpsi."""
+    import ctypes
+
+    lib, _, run = _compile_reference(tmp_path)
+    init = lib.init_vexx_bp_k_gpu_perf_state_c
+    init.argtypes = [ctypes.c_int] * 8
+    init.restype = None
+    init(*dims)
+    lda, n, m = dims[:3]
+    run(lda, n, m, psi.ctypes.data, hpsi.ctypes.data)
+
+
+# Real exchange path, small: 3 bands in jblocks of 2 (two band blocks, the second partial), 2 q-points, 8-point grid.
+EXCHANGE_DIMS = (4, 3, 3, 1, 3, 8, 2, 2)
+
+
+def test_vexx_bp_k_gpu_exchange_reference_changes_hpsi(tmp_path):
+    """On the real exchange path the gfortran reference adds a non-zero exchange term to every band of hpsi."""
+    import numpy as np
+
+    lda, n, m, npol, max_ibands = EXCHANGE_DIMS[:5]
+    psi, hpsi_in = _make_random_inputs(lda, npol, max_ibands)
+    hpsi = hpsi_in.copy(order="F")
+    run_exchange_reference(tmp_path, EXCHANGE_DIMS, psi, hpsi)
+    delta = np.abs(hpsi - hpsi_in)
+    assert np.all(delta[:n, :m] > 1e-6), delta
+    np.testing.assert_array_equal(hpsi[n:], hpsi_in[n:])
+
+
+# Builds, compiles and binds the whole vexx_bp_k_gpu SDFG: ~4 min on a CI runner, past the lanes' 300 s default.
+@pytest.mark.timeout(1200)
+def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
+    """End-to-end numerical correctness for vexx_bp_k_gpu THROUGH the
+    generated Fortran binding, on the no-op state.
+
+    Kernel USE-imports dozens of QE module globals; a direct DaCe call would
+    need ~80 hand-supplied module-global arrays, so the e2e path goes through
+    the emitted vexx_bp_k_gpu_dace binding, which marshals all that state from
+    the real host on entry/exit -- as it would run in production.
+
+    Both sides see identical seeded psi/hpsi and the same no-op module state
+    (see test_vexx_bp_k_gpu_reference_runs), so output must match the
+    gfortran reference element-wise -- pinning that inlined-dummy
+    section-aliasing, becxx AoS marshalling, and module-global copy-in/out all lower correctly.
+    """
+    import numpy as np
+
+    dims = (4, 4, 1, 1, 1, 1, 0, 1)
+    lda, n, m, npol, max_ibands = dims[:5]
+
+    # _compile_reference writes qe_ref.f90/libvexx_ref.so into tmp_path; no name collision with the SDFG side's files.
+    _, init, run = _compile_reference(tmp_path)
+    init(lda, n, m, npol, max_ibands)
+    psi_ref, hpsi_ref = _make_random_inputs(lda, npol, max_ibands)
+    psi_dace = psi_ref.copy(order="F")
+    hpsi_dace = hpsi_ref.copy(order="F")
+    run(lda, n, m, psi_ref.ctypes.data, hpsi_ref.ctypes.data)
+
+    build_and_run_vexx_sdfg(tmp_path, dims, psi_dace, hpsi_dace)
+
+    np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.timeout(1200)
+def test_vexx_bp_k_gpu_exchange_numerical_correctness(tmp_path):
+    """The default codegen matches gfortran on the REAL exchange path: nqs=2 q-points, 3 bands with all-pairs
+    exchange in two jblocks, band- and q-dependent exxbuff, x_occupation and Coulomb factors. Both sides run the same
+    flat DFT for fwfft/invfft (the reference through flat_dft_stub, the SDFG through its FFT library nodes)."""
+    import numpy as np
+
+    lda, n, m, npol, max_ibands = EXCHANGE_DIMS[:5]
+    psi_ref, hpsi_ref = _make_random_inputs(lda, npol, max_ibands)
+    hpsi_in = hpsi_ref.copy(order="F")
+    psi_dace = psi_ref.copy(order="F")
+    hpsi_dace = hpsi_ref.copy(order="F")
+    run_exchange_reference(tmp_path, EXCHANGE_DIMS, psi_ref, hpsi_ref)
+    assert np.all(np.abs(hpsi_ref - hpsi_in)[:n, :m] > 1e-6), "reference did not take the exchange path"
+
+    build_and_run_vexx_sdfg(tmp_path, EXCHANGE_DIMS, psi_dace, hpsi_dace, name="vexx_bp_k_gpu_exchange")
 
     np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)
 
