@@ -146,6 +146,33 @@ def test_refreeze_drops_specialized_scalar_and_symbol():
     assert sdfg._frozen_signature == new
 
 
+def test_refreeze_keeps_a_scalar_promoted_to_a_symbol():
+    """Canonicalization turns a read-only scalar argument into a free symbol of the same name: the same value, so
+    the binding keeps it, as a symbol of the live dtype in the entry point's argument order (reproducer: VT)."""
+    sdfg = dace.SDFG("compute")
+    sdfg.add_symbol("n", dace.int64)
+    sdfg.add_symbol("k", dace.int64)
+    sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
+    first = sdfg.add_state("first", is_start_block=True)
+    sdfg.add_state_after(first, "second", condition="k > 0")
+
+    sdfg._frozen_signature = FrozenSignature(
+        entry="compute",
+        mangled="_QPcompute",
+        args=(
+            FrozenArg(fortran_name="k", sdfg_name="k", kind=FrozenArgKind.SCALAR, dtype="int32", rank=0),
+            FrozenArg(fortran_name="a", sdfg_name="a", kind=FrozenArgKind.ARRAY, dtype="float64", rank=1, shape=("n",)),
+        ),
+        free_symbols=("n",),
+    )
+
+    new = refreeze(sdfg)
+    assert [a.sdfg_name for a in new.args] == [name for name in sdfg.arglist() if name in ("a", "k")]
+    (k,) = [a for a in new.args if a.sdfg_name == "k"]
+    assert k.kind is FrozenArgKind.SYMBOL and k.dtype == "int64"
+    assert set(new.free_symbols) == {"n", "k"}
+
+
 def test_refreeze_refuses_dropped_array():
     sdfg = dace.SDFG("compute")
     sdfg.add_symbol("n", dace.int64)

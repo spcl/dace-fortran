@@ -326,7 +326,9 @@ def refreeze(sdfg: SDFG) -> FrozenSignature:
       folding a value to a constant deletes its argument, and the binding simply derives
       and passes fewer. A scalar the kernel no longer reads costs the caller nothing;
     * anything NEW is refused, symbol or scalar -- the binding has no value derivation
-      for an argument that was not in the Fortran interface.
+      for an argument that was not in the Fortran interface. A scalar argument that became a
+      free symbol of the same name is not new: it carries the same value, so the binding keeps
+      deriving it and passes it as that symbol, in the live argument order.
 
     An array's STORAGE may change, which is how offloading shows up here: the caller-side
     location stays pinned in ``FrozenArg.storage`` and the kernel's new one is recorded in
@@ -344,7 +346,13 @@ def refreeze(sdfg: SDFG) -> FrozenSignature:
     live_fs = {str(s) for s in sdfg.free_symbols}
     snap_fs = set(frozen.free_symbols)
 
-    added = sorted(live_fs - snap_fs)
+    # Scalars an optimization promoted to symbols (canonicalization turns read-only scalars into symbols).
+    promoted = {
+        a.sdfg_name: sdfg.symbols[a.sdfg_name]
+        for a in frozen.args
+        if a.kind is FrozenArgKind.SCALAR and a.sdfg_name in live_fs and a.sdfg_name not in snap_fs
+    }
+    added = sorted(live_fs - snap_fs - set(promoted))
     if added:
         raise SignatureDriftError(
             f"refreeze on {frozen.entry!r}: optimization introduced free "
@@ -373,10 +381,21 @@ def refreeze(sdfg: SDFG) -> FrozenSignature:
         name = live.storage.name if live is not None else ""
         return replace(a, device_storage=name if name.startswith(DEVICE_STORAGE_PREFIX) else "")
 
+    def _promote(a: FrozenArg) -> FrozenArg:
+        dtype = promoted.get(a.sdfg_name)
+        return a if dtype is None else replace(a, kind=FrozenArgKind.SYMBOL, dtype=dtype.to_string())
+
+    order = list(live_arglist)
     new = replace(
         frozen,
-        args=tuple(_relocate(a) for a in frozen.args if _survives(a)),
-        free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs),
+        # A promoted scalar moves to its symbol's place in the entry point's argument list.
+        args=tuple(
+            sorted(
+                (_promote(_relocate(a)) for a in frozen.args if _survives(a)),
+                key=lambda a: order.index(a.sdfg_name) if a.sdfg_name in order else len(order),
+            )
+        ),
+        free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs) + tuple(promoted),
     )
     # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.
     new.verify_against(sdfg)
