@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dace-fortran"
-version = "1.1.0"
+version = "2.0.0a1"
 description = "Fortran (HLFIR) frontend for the DaCe data-centric framework"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.10, <3.15"
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -36,10 +36,10 @@ dependencies = [
     "numpy",
 ]
 
-# The DaCe the frontend builds SDFGs for. Both extras install the ``dace`` package, so take exactly one.
+# The 2.x frontend builds SDFGs for DaCe extended (specialize_symbols is not in upstream DaCe 2.0.0b2); upstream DaCe
+# users stay on dace-fortran<2.
 [project.optional-dependencies]
-extended = ["dace-extended>=1.0.0; python_version >= '3.12'"]
-dace = ["dace>=2.0.0b2"]
+extended = ["dace-extended>=2.0.0a1; python_version >= '3.12'"]
 
 [dependency-groups]
 testing = [
