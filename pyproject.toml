@@ -43,9 +43,9 @@ extended = ["dace-extended>=1.0.1; python_version >= '3.12'"]
 
 [dependency-groups]
 testing = [
-    # CI and a checkout test against a commit of the FaCe branch ([tool.uv.sources]), which carries the DaCe-core pieces
-    # the frontend needs; a sha keeps CI reproducible. Groups and sources are never published.
-    "dace",
+    # CI and a checkout test against DaCe extended, which carries the DaCe-core pieces the frontend needs
+    # (specialize_symbols, SDFG.set_symbol_scale). Groups are never published.
+    "dace-extended>=1.0.1; python_version >= '3.12'",
     "pytest",
     "pytest-cov",
     "pytest-timeout",
@@ -77,9 +77,6 @@ default-groups = ["dev"]
 # Editable installs as a plain path entry: mypy and pyright cannot follow setuptools' import-hook finders, so an
 # editable dace (``uv pip install -e <dace checkout>``) resolves for them only in compat mode.
 config-settings = { editable_mode = "compat" }
-
-[tool.uv.sources]
-dace = { git = "https://github.com/spcl/dace.git", rev = "c4cc7bc0109f14216c4044f126c2cb4462176655" }
 
 [project.urls]
 Homepage = "https://github.com/spcl/dace-fortran"

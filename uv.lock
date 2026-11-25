@@ -213,34 +213,8 @@ toml = [
 ]
 
 [[package]]
-name = "dace"
-version = "2.0.0b1"
-source = { git = "https://github.com/spcl/dace.git?rev=c4cc7bc0109f14216c4044f126c2cb4462176655#c4cc7bc0109f14216c4044f126c2cb4462176655" }
-dependencies = [
-    { name = "astunparse" },
-    { name = "click" },
-    { name = "cmake" },
-    { name = "dill" },
-    { name = "ml-dtypes" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "ninja" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "ordered-set" },
-    { name = "packaging" },
-    { name = "ply" },
-    { name = "pyreadline", marker = "sys_platform == 'win32'" },
-    { name = "pyyaml" },
-    { name = "scikit-build" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
-]
-
-[[package]]
 name = "dace-extended"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astunparse" },
@@ -264,14 +238,14 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "z3-solver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/19/77/f5d22bea269bd9dbff5f26a695ec796156c35c16a7ac0086c64a5c940e09/dace_extended-1.0.0.tar.gz", hash = "sha256:e400ccd5211ec3656e3604cd5dd4895bf9d8447041a6740b949a889093784119", size = 9173389, upload-time = "2026-11-23T16:19:30.534Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/1c/ba2b91893fa381c3b0462a896cc9114aa6ee36b1a490811d1c8659b8e825/dace_extended-1.0.1.tar.gz", hash = "sha256:04cdcad38ae4a7d3b7d4d58983d7aeb706fd571610c29d16af05555680adac17", size = 9287949, upload-time = "2026-11-25T12:39:36.437Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/41/8a456422f5dc378e6d3355a1251b9c922513d9e5a341f7d65ee3e27f52fc/dace_extended-1.0.0-py3-none-any.whl", hash = "sha256:5b230e739575de45a046da881ebd458090ce098e1218655a1699ef1b6a58381a", size = 10068641, upload-time = "2026-11-23T16:19:27.675Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/9d/fe6c33046e2d201433d194ac586ec501c2bc3dd28b4f63a3335832f14ed2/dace_extended-1.0.1-py3-none-any.whl", hash = "sha256:cdbf9f427cb0fc904327dce8e08149a35c5f95a845a87584993bb1875ccc4a52", size = 10187293, upload-time = "2026-11-25T12:39:33.158Z" },
 ]
 
 [[package]]
 name = "dace-fortran"
-version = "1.1.0"
+version = "2.0.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "fparser" },
@@ -284,9 +258,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dace = [
-    { name = "dace" },
-]
 extended = [
     { name = "dace-extended", marker = "python_full_version >= '3.12'" },
 ]
@@ -295,7 +266,7 @@ extended = [
 dev = [
     { name = "clang-format" },
     { name = "coverage" },
-    { name = "dace" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'" },
     { name = "fprettify" },
     { name = "meson" },
     { name = "mypy" },
@@ -321,7 +292,7 @@ mpi = [
 ]
 testing = [
     { name = "coverage" },
-    { name = "dace" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'" },
     { name = "meson" },
     { name = "ninja" },
     { name = "pytest" },
@@ -332,20 +303,19 @@ testing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dace", marker = "extra == 'dace'", git = "https://github.com/spcl/dace.git?rev=c4cc7bc0109f14216c4044f126c2cb4462176655" },
-    { name = "dace-extended", marker = "python_full_version >= '3.12' and extra == 'extended'", specifier = ">=1.0.0" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12' and extra == 'extended'", specifier = ">=1.0.1" },
     { name = "fparser", specifier = ">0.2" },
     { name = "nanobind" },
     { name = "networkx" },
     { name = "numpy" },
 ]
-provides-extras = ["extended", "dace"]
+provides-extras = ["extended"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "clang-format", specifier = "~=21.1" },
     { name = "coverage" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=c4cc7bc0109f14216c4044f126c2cb4462176655" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.1" },
     { name = "fprettify" },
     { name = "meson" },
     { name = "mypy", specifier = "==1.18.2" },
@@ -369,7 +339,7 @@ linting = [
 mpi = [{ name = "mpi4py" }]
 testing = [
     { name = "coverage" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=c4cc7bc0109f14216c4044f126c2cb4462176655" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.1" },
     { name = "meson" },
     { name = "ninja" },
     { name = "pytest" },
@@ -525,9 +495,7 @@ name = "ml-dtypes"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/12/72/307d7c4bd0600601c7133fba5cb78af7db968152951c1cd473abb1cda782/ml_dtypes-0.6.0.tar.gz", hash = "sha256:5e60251d32ced5598972e4d5e06a2f044341f9291402551a3f6f0ec44f9299b0", size = 3032327, upload-time = "2026-08-13T14:14:40.215Z" }
 wheels = [
@@ -1212,7 +1180,6 @@ dependencies = [
     { name = "distro" },
     { name = "packaging" },
     { name = "setuptools" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "wheel" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c7/ce/8ec52888f74a3e849a56bfe0a6d48d93646ac95ad4ff22915639a4393ea6/scikit_build-0.19.1.tar.gz", hash = "sha256:b9a8d07fca2d5d10d93220bc57a685161d72af1fc76285d55c564ddaa862e584", size = 276708, upload-time = "2026-06-23T01:39:06.454Z" }
