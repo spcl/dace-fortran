@@ -19,8 +19,8 @@ import subprocess
 import sys
 
 DACE_REPOSITORY = "https://github.com/spcl/dace.git"
-# DaCe branch v1.2: FaCe plus the symbol repository; FaCe alone lacks pieces this frontend calls.
-DACE_BRANCH = os.environ.get("DACE_FORTRAN_DACE_BRANCH", "v1.2")
+# The FaCe branch carries the DaCe-core pieces this frontend needs until it merges into DaCe main.
+DACE_BRANCH = os.environ.get("DACE_FORTRAN_DACE_BRANCH", "FaCe")
 OPT_OUT = "DACE_FORTRAN_NO_DACE_SETUP"
 
 

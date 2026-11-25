@@ -27,7 +27,7 @@ keywords = ["fortran", "flang", "hlfir", "mlir", "dace", "frontend", "dataflow"]
 
 dependencies = [
     # The released DaCe, so the package can go on PyPI. On first import, dace_fortran.dace_setup replaces it with the
-    # DaCe branch v1.2 (FaCe plus the symbol repository) while that branch exists.
+    # tip of the DaCe FaCe branch while that branch exists.
     "dace>=2.0.0b2,<2.1",
     # fparser AST single-TU inliner (dace_fortran.fparser_inliner).  >0.2
     # carries the Fortran2003-before-Fortran2008 import ordering needed
@@ -73,10 +73,10 @@ default-groups = ["dev"]
 # editable dace (``uv pip install -e <dace checkout>``) resolves for them only in compat mode.
 config-settings = { editable_mode = "compat" }
 
-# CI and a checkout test against a fixed commit of DaCe branch v1.2; a git install is never replaced by dace_setup.
+# CI and a checkout test against a fixed commit of the DaCe FaCe branch; a git install is never replaced by dace_setup.
 # Sources are never published.
 [tool.uv.sources]
-dace = { git = "https://github.com/spcl/dace.git", rev = "1228428c93054d37a87d095dbc9ad3b1cca6fad0" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "5f70abf41c9b427739c791b1cde1d8d32c954e78" }
 
 [project.scripts]
 dace-fortran-setup-dace = "dace_fortran.dace_setup:main"

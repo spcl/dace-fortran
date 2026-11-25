@@ -22,7 +22,7 @@ def test_the_opt_out_skips_the_switch():
 
 
 def test_the_install_command_names_the_branch():
-    assert f"dace @ git+{dace_setup.DACE_REPOSITORY}@v1.2" in dace_setup.install_command("v1.2")
+    assert f"dace @ git+{dace_setup.DACE_REPOSITORY}@FaCe" in dace_setup.install_command("FaCe")
 
 
 if __name__ == "__main__":
