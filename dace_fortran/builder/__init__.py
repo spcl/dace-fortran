@@ -671,7 +671,7 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
     for alias in composed.keys() & sdfg.symbols.keys():
         sdfg.remove_symbol(alias)
     for target, dtype in target_dtypes.items():
-        sdfg.symbol_repo.set_type(target, dtype)
+        sdfg.symbols[target] = dtype
 
 
 def initial_values(v: VarLike) -> Any:
