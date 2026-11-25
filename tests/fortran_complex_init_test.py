@@ -2,16 +2,13 @@
 DOUBLE COMPLEX arrays (kinds via ``KIND(1.0)``/``KIND(1.0D0)``) ingest as
 ``dace.complex64``/``dace.complex128``.
 
-Frontend-only (type ingestion); SDFG->C++ codegen is DaCe's.  One consequence: DaCe's
-tasklet codegen renders a complex literal via its always-complex128 ``1j`` imaginary
-unit, so a single-precision complex literal produces an uncompilable
-``complex128 * float32`` expression -- see ``test_single_complex_literal_codegen_raises``.
+Frontend-only (type ingestion); SDFG->C++ codegen is DaCe's.  A single-precision complex
+literal compiles since DaCe extended 1.0.1 -- see ``test_single_complex_literal_stores_its_value``.
 """
 
 import dace
 import numpy as np
 import pytest
-from dace.codegen.exceptions import CompilationError
 
 from tests._util import build_sdfg
 
@@ -86,11 +83,10 @@ end subroutine main
     assert z[1] == np.complex128(-7.0 + 8.0j)
 
 
-def test_single_complex_literal_codegen_raises(tmp_path):
-    """Frontend ingestion is correct, but running hits a DaCe SDFG->C++ codegen
-    limitation: complex128 ``1j`` on a single-precision COMPLEX literal emits
-    uncompilable ``float32 + complex128 * float32``.  Pinned as a loud
-    ``CompilationError`` (not silent wrong values) -- a DaCe-fork codegen limit."""
+# Reproducer: COMPLEX literal cast through decltype of a reference, readable codegen (dace 2514e17f17)
+def test_single_complex_literal_stores_its_value(tmp_path):
+    """A single-precision COMPLEX literal compiles and stores its value (DaCe once emitted an uncompilable
+    ``float32 + complex128 * float32`` for it)."""
     src = """
 subroutine main(c)
   integer, parameter :: sp = kind(1.0)
@@ -102,8 +98,8 @@ end subroutine main
     sdfg = build_sdfg(src, tmp_path, name="scomplex_lit").build()
     assert sdfg.arrays["c"].dtype == dace.complex64
     c = np.zeros(2, order="F", dtype=np.complex64)
-    with pytest.raises(CompilationError):
-        sdfg(c=c)
+    sdfg(c=c)
+    np.testing.assert_array_equal(c, np.array([1.0 + 2.0j, 3.0 - 4.0j], dtype=np.complex64))
 
 
 if __name__ == "__main__":

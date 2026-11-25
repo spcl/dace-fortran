@@ -89,13 +89,13 @@ def test_max_count_and_flag_updates_map(tmp_path):
         "b": np.zeros(n),
         "amax": np.zeros(1),
         "cnt": np.zeros(1, dtype=np.int32),
-        "hit": np.zeros(1, dtype=np.int32),
+        "hit": np.zeros(1, dtype=np.uint32),
     }
     optimize(sdfg, verify_inputs=inputs)
     loops = [r.label for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion)]
     assert not loops, f"order-free updates left loops sequential: {loops}"
 
-    b, amax, cnt, hit = np.zeros(n), np.zeros(1), np.zeros(1, dtype=np.int32), np.zeros(1, dtype=np.int32)
+    b, amax, cnt, hit = np.zeros(n), np.zeros(1), np.zeros(1, dtype=np.int32), np.zeros(1, dtype=np.uint32)
     sdfg(n=np.int32(n), a=a, b=b, amax=amax, cnt=cnt, hit=hit)
     picked = a > 0.5
     assert amax[0] == a[picked].max()

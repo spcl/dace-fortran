@@ -28,13 +28,13 @@ end module m
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="m::check").build()
     a = np.array([1.0, 1.0], dtype=np.float64, order="F")
     b = np.array([0.5, 0.5], dtype=np.float64, order="F")
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, out=out)
     assert out[0] != 0, f"both a > b -> AND should be true, got {out[0]}"
 
     a = np.array([1.0, 0.0], dtype=np.float64, order="F")
     b = np.array([0.5, 0.5], dtype=np.float64, order="F")
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, out=out)
     assert out[0] == 0, f"a(2)=0 < b(2)=0.5 -> AND should be false, got {out[0]}"
 
@@ -55,13 +55,13 @@ end module m
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="m::check").build()
     a = np.array([0.0, 1.0], dtype=np.float64, order="F")
     b = np.array([0.5, 0.5], dtype=np.float64, order="F")
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, out=out)
     assert out[0] != 0, f"a(2) > b(2) -> OR should be true, got {out[0]}"
 
     a = np.array([0.0, 0.0], dtype=np.float64, order="F")
     b = np.array([0.5, 0.5], dtype=np.float64, order="F")
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, out=out)
     assert out[0] == 0, f"neither -> OR should be false, got {out[0]}"
 
@@ -88,12 +88,12 @@ end module m
     d = np.array([0.0], dtype=np.float64, order="F")
     e = np.array([0.0], dtype=np.float64, order="F")
     f = np.array([1.0], dtype=np.float64, order="F")
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, c=c, d=d, e=e, f=f, out=out)
     assert out[0] != 0
     # case: AND false, e<=f -> OR is false
     c = np.array([0.0], dtype=np.float64, order="F")  # break AND
-    out = np.zeros((1,), dtype=np.int32, order="F")
+    out = np.zeros((1,), dtype=np.uint32, order="F")
     sdfg(a=a, b=b, c=c, d=d, e=e, f=f, out=out)
     assert out[0] == 0
 

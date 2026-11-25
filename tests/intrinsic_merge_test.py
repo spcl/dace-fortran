@@ -211,7 +211,7 @@ END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
 
-    val = np.full([2], 1, order="F", dtype=np.int32)
+    val = np.full([2], 1, order="F", dtype=np.uint32)
     res = np.full([2], 40, order="F", dtype=np.float64)
 
     sdfg(val=val, res=res)

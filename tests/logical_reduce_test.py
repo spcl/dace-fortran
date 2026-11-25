@@ -25,7 +25,7 @@ end subroutine
     sdfg = build_sdfg(src, tmp_path, name="kernel_any", pipeline="hlfir-propagate-shapes").build()
 
     rng = np.random.default_rng(42)
-    mask = np.asfortranarray(rng.random(8) > 0.5)
+    mask = np.asfortranarray((rng.random(8) > 0.5).astype(np.uint32))
     result = np.zeros(1, dtype=np.uint32)
     sdfg(mask=mask, result=result, n=8)
     expected = bool(mask.any())

@@ -51,7 +51,7 @@ subroutine main(d)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
-    d = np.full([2], 42, order="F", dtype=np.int64)
+    d = np.full([2], 42, order="F", dtype=np.int32)
     sdfg(d=d)
     assert np.all(d == [400, 42])
 

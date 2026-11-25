@@ -14,6 +14,7 @@ def _conditionals(sdfg):
 
 
 @pytest.mark.parametrize(("x", "expected"), [(float("nan"), 0.0), (1.0, 7.0)])
+# Reproducer: ieee guard returned 0.0, length-one staging skipped the copy-in (dace abbd5b9325)
 def test_an_ieee_class_test_guards_its_branch(tmp_path, x, expected):
     """``is.fpclass`` lowers to a test of ``x``; the branch is taken only for a NaN, never unconditionally."""
     src = """

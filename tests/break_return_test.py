@@ -86,7 +86,6 @@ def test_break_block_inside_loop_region(tmp_path):
     builder.init_emit_state()
 
     sdfg = SDFG("early_break")
-    sdfg.add_symbol("i", dace.int64)
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"),), dtype=dace.float64, transient=False)
 
@@ -112,13 +111,13 @@ def test_break_block_inside_loop_region(tmp_path):
     # Loop body has no writes; whether the break fires (a[3]>100 below) or not, a is unchanged.
     a_init = np.array([1.0, 2.0, 3.0, 200.0, 5.0], dtype=np.float64)
     a = a_init.copy()
-    sdfg(a=a, n=a.size, i=0)
+    sdfg(a=a, n=a.size)
     np.testing.assert_array_equal(a, a_init)
 
     # No-break path: every element below threshold, loop exits naturally on the counter.
     a_no_break = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
     a_nb = a_no_break.copy()
-    sdfg(a=a_nb, n=a_nb.size, i=0)
+    sdfg(a=a_nb, n=a_nb.size)
     np.testing.assert_array_equal(a_nb, a_no_break)
 
 
