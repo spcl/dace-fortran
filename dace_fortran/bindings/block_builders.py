@@ -1842,5 +1842,6 @@ def _build_symbol_assigns(
         if sym in _struct_member_sources:
             out.extend(_guarded_assign(sym, _struct_member_sources[sym], _member_sym_guard(sym)))
             continue
-        out.append(f"    ! TODO: no plan entry gives size for free symbol {sym!r}")
+        # An unset extent must never reach an allocate or the SDFG (QE's qgm(ngms, nij) was allocated at an unset nij).
+        raise ValueError(f"the binding of {frozen.entry} has no source for the free symbol {sym!r}")
     return out

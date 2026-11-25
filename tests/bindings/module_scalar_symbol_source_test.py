@@ -5,6 +5,8 @@ caller allocates it ``(1, 1)``. A binding that sourced ``nkb = size(becpsi % r, 
 sizes every ``nkb`` buffer by it, and the kernel overflowed them.
 """
 
+import pytest
+
 from dace_fortran.bindings.block_builders import _build_symbol_assigns
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
@@ -18,10 +20,10 @@ def becpsi_signature(nkb_origin: dict) -> FrozenSignature:
         kind=FrozenArgKind.ARRAY,
         dtype="float64",
         rank=2,
-        shape=("nkb", "nbnd"),
+        shape=("nkb", "1"),
     )
     return FrozenSignature(
-        entry="k", mangled="_QPk", args=(becpsi_r,), free_symbols=("nbnd", "nkb"), module_symbol_origins=nkb_origin
+        entry="k", mangled="_QPk", args=(becpsi_r,), free_symbols=("nkb",), module_symbol_origins=nkb_origin
     )
 
 
@@ -43,6 +45,14 @@ def test_symbol_of_no_module_still_takes_the_array_extent():
     assert "    nkb = int(size(becpsi_r, dim=1), c_int)" in lines
 
 
+def test_a_free_symbol_with_no_source_is_a_build_error():
+    frozen = FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("nij",))
+
+    with pytest.raises(ValueError, match="no source for the free symbol 'nij'"):
+        assigns(frozen)
+
+
 if __name__ == "__main__":
     test_module_scalar_is_read_from_its_module_not_from_an_array_extent()
     test_symbol_of_no_module_still_takes_the_array_extent()
+    test_a_free_symbol_with_no_source_is_a_build_error()
