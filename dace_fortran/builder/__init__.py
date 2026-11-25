@@ -674,7 +674,7 @@ def collapse_symbol_aliases(sdfg: SDFG, aliases: dict[str, str], *, keep_target_
     for alias in composed.keys() & sdfg.symbols.keys():
         sdfg.remove_symbol(alias)
     for target, dtype in target_dtypes.items():
-        sdfg.symbols[target] = dtype
+        cast(dict, sdfg.symbols)[target] = dtype  # FaCe types the property read-only
 
 
 def initial_values(v: VarLike) -> Any:
@@ -1862,9 +1862,10 @@ class SDFGBuilder:
             or (not v.intent and not v.module_origin_mod and "F" in (v.mangled_name or "").removeprefix("_Q"))
         ]
         if local:
-            sdfg.add_state_before(
-                sdfg.start_block, "define_local_symbols", is_start_block=True, assignments=dict.fromkeys(local, "0")
-            )
+            # FaCe DaCe's add_state_before takes a state only; the start block may be a region.
+            start = sdfg.start_block
+            entry = sdfg.add_state("define_local_symbols", is_start_block=True)
+            sdfg.add_edge(entry, start, InterstateEdge(assignments=dict.fromkeys(local, "0")))
 
     def _attach_frozen_signature(self, sdfg: SDFG) -> None:
         """Snapshot ``sdfg.arglist()`` + free symbols into a
