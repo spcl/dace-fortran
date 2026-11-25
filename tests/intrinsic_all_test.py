@@ -43,7 +43,12 @@ res(1) = ALL(d, 1)
 
 END SUBROUTINE intrinsic_all_test_function
 """
-    build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    res = np.zeros(2, dtype=np.uint32)
+    sdfg(d=np.ones(5, dtype=np.uint32), res=res)
+    assert res[0] != 0
+    sdfg(d=np.array([1, 1, 0, 1, 1], dtype=np.uint32), res=res)
+    assert res[0] == 0
 
 
 def test_fortran_frontend_all_array_comparison(tmp_path):

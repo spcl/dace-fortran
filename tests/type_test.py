@@ -361,8 +361,9 @@ subroutine f2(s)
 end subroutine f2
 """
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
-    a = np.full([5, 5], 42, order="F", dtype=np.float32)
+    a = np.zeros([5, 5], order="F", dtype=np.float32)
     sdfg(d=a)
+    assert a[0, 0] == 42
 
 
 def test_fortran_frontend_type_array2(tmp_path):
@@ -406,8 +407,9 @@ subroutine f2(s, x)
 end subroutine f2
 """
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
-    a = np.full([5, 5], 42, order="F", dtype=np.float32)
+    a = np.zeros([5, 5], order="F", dtype=np.float32)
     sdfg(d=a)
+    assert a[0, 1] == 43
 
 
 def test_fortran_frontend_type_pointer(tmp_path):
@@ -512,8 +514,9 @@ subroutine main(d)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
-    a = np.full([5, 5], 42, order="F", dtype=np.float32)
+    a = np.zeros([5, 5], order="F", dtype=np.float32)
     sdfg(d=a)
+    assert a[0, 0] == 5.5
 
 
 def test_fortran_frontend_type_view(tmp_path):

@@ -43,7 +43,10 @@ res(1) = COUNT(d, 1)
 
 END SUBROUTINE intrinsic_count_test_function
 """
-    build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    res = np.zeros(2, dtype=np.int32)
+    sdfg(d=np.array([1, 0, 1, 1, 0], dtype=np.uint32), res=res)
+    assert res[0] == 3
 
 
 def test_fortran_frontend_count_array_comparison(tmp_path):

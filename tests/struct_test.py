@@ -85,9 +85,10 @@ end subroutine fun
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
 
     size = 6
-    res = np.full([size], 42, order="F", dtype=np.int32)
-    res[:] = 0
+    res = np.zeros([size], order="F", dtype=np.int32)
     sdfg(res=res, start=2, end=5)
+    # fun writes a copy of res inside a local derived type, never res itself
+    np.testing.assert_array_equal(res, np.zeros(size, dtype=np.int32))
 
 
 if __name__ == "__main__":

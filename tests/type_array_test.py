@@ -116,8 +116,9 @@ subroutine main(d)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main", entry="main").build()
-    a = np.full([5, 5], 42, order="F", dtype=np.float32)
+    a = np.zeros([5, 5], order="F", dtype=np.float32)
     sdfg(d=a)
+    assert a[0, 0] == 42
 
 
 def test_fortran_frontend_type2_array(tmp_path):

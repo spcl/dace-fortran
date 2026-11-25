@@ -30,6 +30,8 @@ Pattern catalogue (status as of 2026-06-09):
      routes through a temporary. No alias.
 """
 
+import numpy as np
+
 from tests._util import build_sdfg
 
 
@@ -102,6 +104,9 @@ end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
+    arr = np.zeros(6, dtype=np.float64)
+    sdfg(arr=arr, n=6)
+    np.testing.assert_array_equal(arr, np.arange(1, 7, dtype=np.float64))
 
 
 def test_f_assumed_size_dummy_multi_dim(tmp_path):
@@ -131,6 +136,9 @@ end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
+    arr = np.zeros((5, 3), order="F", dtype=np.float64)
+    sdfg(arr=arr, n=3)
+    np.testing.assert_array_equal(arr, np.outer(np.arange(1, 6), np.arange(1, 4)).astype(np.float64))
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +226,9 @@ end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
+    arr = np.zeros(6, dtype=np.float64)
+    sdfg(arr=arr, n=6)
+    np.testing.assert_array_equal(arr, np.arange(1, 7, dtype=np.float64))
 
 
 def test_i_associate_section_binding(tmp_path):
@@ -243,6 +254,11 @@ end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
+    arr = np.zeros((3, 3, 3), order="F", dtype=np.float64)
+    sdfg(arr=arr, n=3, k=2)
+    expected = np.zeros((3, 3, 3), order="F", dtype=np.float64)
+    expected[:, :, 1] = np.add.outer(np.arange(1, 4), np.arange(1, 4))
+    np.testing.assert_array_equal(arr, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +349,9 @@ end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
+    a = np.zeros(100, dtype=np.float64)
+    sdfg(a=a)
+    np.testing.assert_array_equal(a, np.arange(1, 101, dtype=np.float64))
 
 
 if __name__ == "__main__":
