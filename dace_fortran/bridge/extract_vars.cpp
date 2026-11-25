@@ -1794,6 +1794,17 @@ void prepareExtractionState(mlir::ModuleOp module, const std::string& entry_symb
   // populated before any subsequent ``extractName`` consults it.
   rejectOrRenameReservedShortNames(module);
 
+  // A local EQUIVALENCE lowers to declares on one local byte buffer (convert of coordinate_of of an alloca); the
+  // bridge would give each member its own array, so a write through one member would never reach a read through
+  // another. Refuse used members loudly.
+  module.walk([&](hlfir::DeclareOp decl) {
+    auto cv = decl.getMemref().getDefiningOp<fir::ConvertOp>();
+    auto co = cv ? cv.getValue().getDefiningOp<fir::CoordinateOp>() : nullptr;
+    if (co && co.getRef().getDefiningOp<fir::AllocaOp>() && !decl->use_empty())
+      throw std::runtime_error("EQUIVALENCE is not supported: " + extractName(decl.getUniqName().str()) +
+                               " shares storage with another variable");
+  });
+
   // Post-``hlfir-inline-all`` copies of a POINTER-rebind local share one
   // uniq_name, but each copy's rebind target can differ --
   // ``exchange_data_r3d``'s ``send_ptr => recv`` inlined once per call site

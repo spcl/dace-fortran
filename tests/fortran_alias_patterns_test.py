@@ -25,7 +25,7 @@ Pattern catalogue (status as of 2026-06-09):
   K. RESHAPE intrinsic -- produces a fresh hlfir.expr, a VALUE copy, not an alias. No
      bridge work needed.
   L. TRANSFER intrinsic -- bit reinterpretation, VALUE copy. No bridge work needed.
-  M. EQUIVALENCE statement (legacy F77) -- two names share storage. Probe below.
+  M. EQUIVALENCE statement (legacy F77) -- two names share storage. REFUSED: the bridge has no shared storage.
   N. Vector subscripts arr([1,3,5]) / arr(idx) -- spec forbids LHS alias semantics; IR
      routes through a temporary. No alias.
 """
@@ -323,9 +323,10 @@ end module m
 # ---------------------------------------------------------------------------
 # Pattern M -- ``EQUIVALENCE`` statement (legacy F77).
 # ---------------------------------------------------------------------------
+# Reproducer: EQUIVALENCE members became separate arrays, scratch read none of alias's writes (ault 924755)
 def test_m_equivalence_statement(tmp_path):
-    """EQUIVALENCE (a, b) -- a(1) and b(1) share the same memory cell; flang may or may not
-    lower it in a form the bridge can recognise."""
+    """EQUIVALENCE (scratch, alias) -- both name one storage; the bridge has none to share, so it refuses the build
+    instead of giving each member its own array."""
     src = """
 module m
   implicit none
@@ -348,10 +349,7 @@ contains
 end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
-    assert sdfg is not None, f"build failed: {err}"
-    a = np.zeros(100, dtype=np.float64)
-    sdfg(a=a)
-    np.testing.assert_array_equal(a, np.arange(1, 101, dtype=np.float64))
+    assert sdfg is None and "EQUIVALENCE is not supported" in err, err
 
 
 if __name__ == "__main__":
