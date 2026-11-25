@@ -276,6 +276,7 @@ end module useapplu
 # --------------------------------------------------------------------------
 
 
+# Reproducer: A real/int literal with a numeric kind suffix (0.0_8, 1_4) must not crash the merge (054f812)
 def test_numeric_kind_literal_survives_merge():
     """A real/int literal with a numeric kind suffix (0.0_8, 1_4) must not
     crash the merge. consolidate_uses rewrites a *named* kind (0.0_wp) into a
@@ -452,6 +453,7 @@ end module drv
     assert _compiles(out)
 
 
+# Reproducer: inliner: 7 fixes for self-contained MPI-only kernel extraction (a9f4800)
 def test_external_interface_not_duplicated_after_pipeline_mangles_inplace():
     """Full single-TU path (optimize=True) mangles the external-interface copy
     in place (deconstruct_interface_calls renames it, const-eval folds kinds,

@@ -50,6 +50,7 @@ def _names(builder):
     return set(builder.arrays) | set(builder.scalars)
 
 
+# Reproducer: flatten AoS derived types, fix intra-state data dependencies (1595a8d)
 def test_flatten_structs_splits_members(tmp_path):
     """Array-of-struct ``z(8)`` of ``complex_t``: pass synthesises flat companions z_re/z_im."""
     b = build_sdfg(_SRC, tmp_path, name="complex_struct")
@@ -64,6 +65,7 @@ def test_flatten_structs_splits_members(tmp_path):
 # ----------------------------------------------------------------------------
 
 
+# Reproducer: flatten AoS derived types, fix intra-state data dependencies (1595a8d)
 def test_velocity_struct_arg_flattens_to_four_args(tmp_path):
     ir = run_passes_dump(_VELOCITY_SRC, tmp_path, name="velocity", pipeline=_FLATTEN_ONLY)
 
@@ -84,6 +86,7 @@ def test_velocity_struct_arg_flattens_to_four_args(tmp_path):
 # ----------------------------------------------------------------------------
 
 
+# Reproducer: flatten AoS derived types, fix intra-state data dependencies (1595a8d)
 def test_jagged_struct_arg_packs_into_2d(tmp_path):
     ir = run_passes_dump(_JAGGED_SRC, tmp_path, name="jagged", pipeline=_FLATTEN_ONLY)
 
@@ -110,6 +113,7 @@ def test_jagged_struct_arg_packs_into_2d(tmp_path):
 # ----------------------------------------------------------------------------
 
 
+# Reproducer: advance ICON-O coriolis lowering through 7 flatten/pointer-rewrite gates (8db37d9)
 def test_pointer_scalar_struct_local_not_flattened(tmp_path):
     src = """
 module lib
@@ -145,6 +149,7 @@ end subroutine main
     assert '"_QFmainEp"' in ir, f"pointer local declare should survive:\n{ir[:1200]}"
 
 
+# Reproducer: advance ICON-O coriolis lowering through 7 flatten/pointer-rewrite gates (8db37d9)
 def test_allocatable_scalar_struct_local_not_flattened(tmp_path):
     src = """
 module lib
@@ -209,6 +214,7 @@ end module lib
 """
 
 
+# Reproducer: advance ICON-O coriolis lowering through 7 flatten/pointer-rewrite gates (8db37d9)
 def test_inlined_multidim_aos_array_member_flattens_to_soa(tmp_path):
     sdfg = build_sdfg(_AOS_ARR_MEMBER_SRC, tmp_path / "sdfg", name="driver", entry="lib::driver").build()
     # Companion is the AoS dims followed by the member extent: (4, 2, 5, 3).
@@ -258,6 +264,7 @@ end module lib
 """
 
 
+# Reproducer: advance ICON-O coriolis lowering through 7 flatten/pointer-rewrite gates (8db37d9)
 def test_inlined_pointer_aor_array_member_flattens_to_dynamic_soa(tmp_path):
     sdfg = build_sdfg(_PTR_AOR_ARR_MEMBER_SRC, tmp_path / "sdfg", name="driver", entry="lib::driver").build()
     assert "c_e_x" in sdfg.arrays, f"missing pointer-AoR SoA companion; arrays={sorted(sdfg.arrays)}"
@@ -311,6 +318,7 @@ end module lib
 """
 
 
+# Reproducer: register nested pointer-AoR struct members as SDFG companions (gate #8 A/C + B-reg) (7d08e03)
 def test_nested_aor_scalar_member_loop_bound_registers_as_symbol(tmp_path):
     sdfg = build_sdfg(_NESTED_AOR_SCALAR_SYMBOL_SRC, tmp_path / "sdfg", name="inner", entry="lib::inner").build()
     syms = set(sdfg.symbols)
@@ -344,6 +352,7 @@ end module lib
 """
 
 
+# Reproducer: bind nested pointer-AoR array members via dummy-rooted AoS marshalling (gate #8-B) (d9db9da)
 def test_nested_aor_array_member_registers_with_record_dim(tmp_path):
     # ``patch % p1d(1) % dolic(i,j)`` -- a runtime pointer-array-of-records array
     # member left as a live designate chain. ``expandDesignateChain`` PREPENDS the
@@ -415,6 +424,7 @@ end module
     assert out[0] == 1.0 and n[0] == 7
 
 
+# Reproducer: don't flatten PRIVATE components the kernel never designates (81bd711)
 def test_private_component_never_designated_is_pruned(tmp_path):
     """Gate half 1: a PRIVATE component the kernel never designates must NOT get a
     flat companion. flang mangles it with an illegal '.' in the name; ICON's real
@@ -425,6 +435,7 @@ def test_private_component_never_designated_is_pruned(tmp_path):
     )
 
 
+# Reproducer: don't flatten PRIVATE components the kernel never designates (81bd711)
 def test_private_component_designated_in_module_survives(tmp_path):
     """Gate half 2: a PRIVATE component the in-module kernel DOES designate must
     still flatten -- keying on "is private" alone would drop a live member (the
@@ -435,6 +446,7 @@ def test_private_component_designated_in_module_survives(tmp_path):
     )
 
 
+# Reproducer: don't flatten PRIVATE components the kernel never designates (81bd711)
 def test_public_sibling_of_private_component_still_flattens(tmp_path):
     """Ordinary public members (``data``, unmangled) are never a gate candidate, unaffected."""
     names = _private_component_names(tmp_path)

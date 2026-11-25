@@ -27,6 +27,7 @@ def test_select_use_closure_excludes_unreached(tmp_path):
     assert closure == {a, b, c}  # not d
 
 
+# Reproducer: skip non-existent compile_commands sources; dycore parse test green (a1898d7)
 def test_parse_compile_commands_skips_missing_sources(tmp_path):
     # ``bear`` captures cmake's compiler-ABI probe TUs (e.g.
     # ``CMakeFortranCompilerABI.F90``) whose throw-away sources are gone once

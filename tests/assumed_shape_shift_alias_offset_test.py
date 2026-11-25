@@ -31,6 +31,7 @@ end module m
 
 
 @pytest.mark.parametrize("lb", [0, -2, 3])
+# Reproducer: keep fir.shift lower bounds in declareLowerBounds (f8e5df2)
 def test_assumed_shape_shift_alias_offset(tmp_path: Path, lb: int):
     """``b(2)`` reads the 2nd element regardless of ``lb`` (sequence association aliases ``b(1)`` to ``a``'s first element)."""
     sdfg = build_sdfg(_src(lb), tmp_path, name="outer", entry="outer").build()

@@ -195,6 +195,7 @@ def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
     assert "use mo_fields, only: t_fields, NX, NY" in text
 
 
+# Reproducer: shim flat-C-ABI reconstruction of nested AoR + cartesian arrays (gate #10b-shim) (a62a69e)
 def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
     """ARRAY of a flat *value* record (e.g. ``t_cartesian_coordinates%x(3)``)
     reconstructs element-wise: local allocatable + flat companion (rank outer+
@@ -279,6 +280,7 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
     assert "allocate(s%pnc(s_pnc_v1_d0, s_pnc_v1_d1, s_pnc_v1_d2))" in text
 
 
+# Reproducer: shim flat-C-ABI reconstruction of nested AoR + cartesian arrays (gate #10b-shim) (a62a69e)
 def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_path: Path):
     """Struct dummy with a rank-1 pointer-array-of-record member (``p1d(:)``)
     allocates to size 1, descended at ``(1)`` (ICON single-patch idiom). A

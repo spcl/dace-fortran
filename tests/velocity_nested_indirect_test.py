@@ -145,6 +145,7 @@ def views_with_source_link(sdfg):
     return views
 
 
+# Reproducer: link view_alias sources read only via interstate indirection (7df61ae)
 def test_rebound_pointer_indirect_index_view_compiles(tmp_path: Path):
     """A rebound POINTER read only as an inline indirect index must reach codegen as a
     properly-LINKED view_alias, not an orphaned View (pre-fix: ``KeyError`` in

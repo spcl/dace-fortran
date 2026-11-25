@@ -40,6 +40,7 @@ end module m
 """
 
 
+# Reproducer: register + slice nested cartesian-array struct member in inlined libcall (gate #12) (7e243a1)
 def test_nested_cartesian_member_in_inlined_dot_product(tmp_path):
     """diag%pvd(i)%x reached through an inlined DOT_PRODUCT lowers: SoA companion diag_pvd_x
     registers and the dot-product reads a 1-D element slice."""
@@ -87,6 +88,7 @@ end module m2
 """
 
 
+# Reproducer: resolve multi-level inlined cartesian-array chain + copy_in temp (gate #12b) (e2c8812)
 def test_nested_cartesian_member_through_multilevel_inline_copyin(tmp_path):
     """Cartesian companion still registers when the pointer member flows through MULTIPLE inlined
     levels + a hlfir.copy_in contiguous temp."""

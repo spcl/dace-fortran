@@ -47,6 +47,7 @@ def _becxx_member_arg():
     )
 
 
+# Reproducer: N-dim AoS gather + static value-member marshalling (gate #12d) (eb67d7a)
 def test_ndim_cartesian_copy_in_indexes_all_outer_dims():
     """The rank-3 record array is indexed by all three element loops, and the
     rank-4 companion is allocated over the three outer extents + literal 3."""
@@ -66,6 +67,7 @@ def test_ndim_cartesian_copy_in_indexes_all_outer_dims():
     ) in src
 
 
+# Reproducer: N-dim AoS gather + static value-member marshalling (gate #12d) (eb67d7a)
 def test_static_value_member_emits_no_presence_guard():
     """``x(3)`` is fixed-shape: no allocated/associated guard or cap-max scan on
     it, only the struct-present (``associated``) guard remains."""
@@ -75,6 +77,7 @@ def test_static_value_member_emits_no_presence_guard():
     assert "associated(p_diag % p_vn_dual)" in src  # struct-pointer guard kept
 
 
+# Reproducer: N-dim AoS gather + static value-member marshalling (gate #12d) (eb67d7a)
 def test_static_value_member_copy_out_scatters_all_dims():
     """When written, copy-out scatters back through all three element loops."""
     src = "\n".join(_render_aos_copy_out(_cartesian_member_arg(is_written=True)))
@@ -86,6 +89,7 @@ def test_static_value_member_copy_out_scatters_all_dims():
     ) in src
 
 
+# Reproducer: N-dim AoS gather + static value-member marshalling (gate #12d) (eb67d7a)
 def test_1d_allocatable_member_unchanged():
     """Regression: QE ``becxx(:)%k`` 1-D allocatable path keeps its single element
     loop, cap-max scan, and member ``allocated`` guard after the N-dim generalisation."""

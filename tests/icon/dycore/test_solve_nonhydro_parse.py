@@ -50,6 +50,7 @@ _SETUP_HINT = (
 pytestmark = pytest.mark.long
 
 
+# Reproducer: skip non-existent compile_commands sources; dycore parse test green (a1898d7)
 def test_solve_nonhydro_emits_hlfir():
     """flang cpp-preprocesses + emits HLFIR for the dycore, driven by the per-TU
     flags from compile_commands.json, with mpi/netcdf stubs standing in for unreadable .mod."""

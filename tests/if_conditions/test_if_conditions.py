@@ -15,6 +15,7 @@ import numpy as np
 from tests._util import build_sdfg
 
 
+# Reproducer: shortest-round-trip float printer + condition-accesses + matmul_transpose B-arg fix + IF cond... (6747fff)
 def test_if_scalar_compare_basic(tmp_path):
     """``IF (x > 0)`` -- trivial scalar condition, no lifting needed."""
     src = """
@@ -39,6 +40,7 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
 
 
+# Reproducer: shortest-round-trip float printer + condition-accesses + matmul_transpose B-arg fix + IF cond... (6747fff)
 def test_if_array_element_compare(tmp_path):
     """``IF (a(i) > 0)`` -- array element read must lift via per-occurrence connector so codegen binds a scalar."""
     src = """
@@ -64,6 +66,7 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [0.0, 100.0, 100.0, 0.0])
 
 
+# Reproducer: shortest-round-trip float printer + condition-accesses + matmul_transpose B-arg fix + IF cond... (6747fff)
 def test_if_max_over_array_elements(tmp_path):
     """``IF (MAX(a(i), b(i), c(i)) > eps)`` -- the graupel ``if_cond_38`` shape; each read must lift via its own per-occurrence connector."""
     src = """
@@ -96,6 +99,7 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [0.0, 1.0, 0.0, 0.0])
 
 
+# Reproducer: shortest-round-trip float printer + condition-accesses + matmul_transpose B-arg fix + IF cond... (6747fff)
 def test_if_logical_chain_mixed(tmp_path):
     """``IF (a(i) > 0 .AND. (b(i) < 1 .OR. c == 0))`` -- AND/OR chain mixing array reads and a scalar; each operand needs its own connector."""
     src = """
@@ -127,6 +131,7 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [1.0, 0.0, 0.0, 0.0])
 
 
+# Reproducer: shortest-round-trip float printer + condition-accesses + matmul_transpose B-arg fix + IF cond... (6747fff)
 def test_if_array_2d_with_indexed_read(tmp_path):
     """``IF (mat(i, j) > threshold)`` -- 2D array indexing in condition."""
     src = """

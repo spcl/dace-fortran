@@ -1557,6 +1557,7 @@ end subroutine main
     assert line == "x = t(1)"
 
 
+# Reproducer: sound PRESENT folding for forwarded optionals; per-copy pointer-view lowering (930c46f)
 def test_forwarded_caller_optional_presence_not_folded():
     """A dummy whose actual is a bare reference to the CALLER's own OPTIONAL
     dummy keeps its ``PRESENT`` guard: absence propagates through such an

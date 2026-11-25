@@ -25,6 +25,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.xdist_group("atmo_velocity_integration")
+# Reproducer: restore velocity callback _lb ABI + populate integration lane (9bf289a)
 def test_velocity_percall_orig_vs_binding_bitexact():
     """Duplicate the velocity call's input, run ORIGINAL ICON Fortran + OUR SDFG binding on
     it, require bit-exact agreement -- the per-call orig-vs-binding contract, single-rank."""

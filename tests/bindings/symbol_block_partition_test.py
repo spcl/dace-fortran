@@ -35,6 +35,7 @@ def _guard_block(guard, sym, shape):
     ]
 
 
+# Reproducer: keep guard blocks intact in the early/late symbol split (12a36da)
 def test_buffer_guarded_block_moves_late_intact():
     # Guard AND true-branch both read the flat buffer 'hbuf' -> the whole block is late.
     sym_lines = [
@@ -49,6 +50,7 @@ def test_buffer_guarded_block_moves_late_intact():
     assert early == ["    a = int(othermod, c_int)", "    c = int(modval, c_int)"]
 
 
+# Reproducer: keep guard blocks intact in the early/late symbol split (12a36da)
 def test_non_buffer_guarded_block_stays_early_intact():
     # Guard + shape read a module global, not a wrapper buffer -> whole block early.
     sym_lines = _guard_block("present(opt)", "k", "mod_extent")
@@ -58,6 +60,7 @@ def test_non_buffer_guarded_block_stays_early_intact():
     assert early == sym_lines
 
 
+# Reproducer: keep guard blocks intact in the early/late symbol split (12a36da)
 def test_multiple_interleaved_buffer_guard_blocks():
     sym_lines = [
         *_guard_block("associated(hbuf)", "h_d0", "size(hbuf, dim=1)"),
@@ -73,6 +76,7 @@ def test_multiple_interleaved_buffer_guard_blocks():
     assert "    else" not in early
 
 
+# Reproducer: keep guard blocks intact in the early/late symbol split (12a36da)
 def test_old_per_line_split_would_shear_the_block():
     # Pin the failure mode the fix prevents: a naive per-line split orphans the ELSE.
     import re

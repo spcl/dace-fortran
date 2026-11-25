@@ -39,6 +39,7 @@ end module mo_pv
 """
 
 
+# Reproducer: sound PRESENT folding for forwarded optionals; per-copy pointer-view lowering (930c46f)
 def test_inlined_pointer_rebind_copies_keep_their_targets(tmp_path: Path):
     """Both inlined copies' rebinds land on their own actual: a AND b bump."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="pvcopies", entry="mo_pv::run").build()

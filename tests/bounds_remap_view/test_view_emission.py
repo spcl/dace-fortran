@@ -68,6 +68,7 @@ def test_var_info_carries_bounds_remap_fields(tmp_path):
     assert pointer_vi.bounds_remap_source == "rhoc", f"bounds_remap_source={pointer_vi.bounds_remap_source!r}"
 
 
+# Reproducer: global read/write edge direction + allocatable-parent source trace (8ce09d1)
 def test_var_info_bounds_remap_view_through_allocatable_target(tmp_path):
     """Bounds-remap source trace must walk through the fir.load of an ALLOCATABLE target's
     descriptor box to reach the parent declare (QE vexx_bp_k_gpu Gate H: prhoc_d => rhoc_d(:, slice)).
@@ -155,6 +156,7 @@ def test_view_extent_is_symbolic_n_times_k(tmp_path):
     assert has_parsed or has_synth, f"View extent should be n*k or a synth symbol, got {extent_str!r}"
 
 
+# Reproducer: builder: fix flatten-view write-back off-by-one + surface literal-section (View facet 3) (2e6cf51)
 def test_offset_symbol_is_stamped_to_view_lb(tmp_path):
     """View's access offset is stamped to its Fortran lower bound (1): prhoc(i) subtracts 1 to reach
     the 0-based element. The per-rebind SOURCE column offset rides the linking memlet's source subset,

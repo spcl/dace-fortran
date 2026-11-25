@@ -603,6 +603,7 @@ end subroutine"""
     assert s[0] == a[: 3 if flag else 2, 1:3].sum()
 
 
+# Reproducer: Fold SIZE of a fixed-extent section and keep only the live side of a constant IF (a54269e)
 def test_branch_on_the_size_of_a_one_column_section_keeps_only_the_live_side(tmp_path: Path):
     """QE ``wave_g2r(orbital(:, ibnd : ibnd), ...)``: ``dim2 = SIZE(f_in(1, :))`` is 1, so the ``dim2 == 2`` branch
     reading ``f_in(:, 2)`` is dead and must not reach the SDFG, whose view has one column."""

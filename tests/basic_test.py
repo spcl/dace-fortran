@@ -7,6 +7,7 @@ import numpy as np
 from tests._util import build_sdfg
 
 
+# Reproducer: flatten AoS derived types, fix intra-state data dependencies (1595a8d)
 def test_elementwise_loop(tmp_path):
     """One tasklet, one state  --  c(i) = a(i) + b(i)."""
     src = """
@@ -37,6 +38,7 @@ end subroutine elementwise_add
     np.testing.assert_allclose(c, expected, rtol=1e-12, atol=1e-12)
 
 
+# Reproducer: flatten AoS derived types, fix intra-state data dependencies (1595a8d)
 def test_read_after_write_shares_access_node(tmp_path):
     """RAW within a loop body: exactly one AccessNode for ``tmp`` in the innermost
     state (single-access-node rule); numerical check catches a dropped RAW edge."""

@@ -73,6 +73,7 @@ def test_the_auto_optimize_helper_delegates():
     assert sdfg.arrays["buf"].lifetime == dace.AllocationLifetime.Persistent
 
 
+# Reproducer: Promote transients to Persistent only for sizes the caller fixes (c343bd6)
 def test_free_symbol_nobody_fixed_keeps_a_per_call_size():
     """``__dace_init`` runs once: sized from the first call, a later larger N would overrun the buffer."""
     sdfg = loop_with_transient("persist_per_call", [N])

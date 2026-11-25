@@ -12,6 +12,7 @@ import numpy as np
 from tests._util import build_sdfg
 
 
+# Reproducer: Gap 1 (scalar struct field) + Gap 2 (SUM-of-elemental) fixes (4cc4442)
 def test_sum_of_pow(tmp_path):
     """``SUM(q ** 2)`` -- inline elemental computing pow."""
     src = """
@@ -31,6 +32,7 @@ end module
     np.testing.assert_allclose(out[0], np.sum(q**2))
 
 
+# Reproducer: Gap 1 (scalar struct field) + Gap 2 (SUM-of-elemental) fixes (4cc4442)
 def test_sum_of_difference_squared(tmp_path):
     """SUM((a - b) ** 2) -- inline elemental over (a-b) composed with pow; QE's L2-norm-squared shape."""
     src = """
@@ -51,6 +53,7 @@ end module
     np.testing.assert_allclose(out[0], np.sum((a - b) ** 2))
 
 
+# Reproducer: Gap 1 (scalar struct field) + Gap 2 (SUM-of-elemental) fixes (4cc4442)
 def test_sum_of_element_product(tmp_path):
     """SUM(a * b) -- inline elemental element-wise product; QE's dot-product shape."""
     src = """
@@ -71,6 +74,7 @@ end module
     np.testing.assert_allclose(out[0], np.sum(a * b))
 
 
+# Reproducer: Gap 1 (scalar struct field) + Gap 2 (SUM-of-elemental) fixes (4cc4442)
 def test_product_of_elemental(tmp_path):
     """PRODUCT(arr + 1) -- non-SUM reduction verifies the op-agnostic routing covers all reductions."""
     src = """
@@ -90,6 +94,7 @@ end module
     np.testing.assert_array_equal(out[0], np.prod(arr + 1))
 
 
+# Reproducer: Gap 1 (scalar struct field) + Gap 2 (SUM-of-elemental) fixes (4cc4442)
 def test_minval_of_elemental(tmp_path):
     """``MINVAL(arr - 2)`` -- MINVAL over elemental."""
     src = """

@@ -108,6 +108,7 @@ END SUBROUTINE f
     assert res[0] == np.iinfo(np.int32).min, f"MAXVAL of empty int32 should be INT_MIN, got {res[0]}"
 
 
+# Reproducer: type-aware MINVAL/MAXVAL identity literals for integer reductions (36a6a39)
 def test_minval_float64_still_uses_inf(tmp_path):
     """Regression: float MINVAL identity stays ``inf`` -- type-aware path must not break the pre-existing float case."""
     src = """
@@ -124,6 +125,7 @@ END SUBROUTINE f
     assert res[0] == -1.1, f"MINVAL float should be -1.1, got {res[0]}"
 
 
+# Reproducer: type-aware MINVAL/MAXVAL identity literals for integer reductions (36a6a39)
 def test_sum_int32_still_uses_zero(tmp_path):
     """Regression: SUM identity stays ``0`` -- type-aware logic must not touch it."""
     src = """

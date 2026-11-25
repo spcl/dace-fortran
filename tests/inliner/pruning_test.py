@@ -489,6 +489,7 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+# Reproducer: inliner: 7 fixes for self-contained MPI-only kernel extraction (a9f4800)
 def test_use_consolidation_keeps_host_associated_import_for_specless_subprogram():
     """A module-level ``USE`` whose symbol is host-associated into a contained
     subprogram that has NO ``Specification_Part`` (a body of only host-associated
@@ -532,6 +533,7 @@ end subroutine main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+# Reproducer: inliner: 7 fixes for self-contained MPI-only kernel extraction (a9f4800)
 def test_prune_keeps_specifics_of_referenced_generic_interface():
     """A call that references a generic INTERFACE which was NOT resolved to a
     specific (``deconstruct_interface_calls`` could not pick one -- a keyword-arg

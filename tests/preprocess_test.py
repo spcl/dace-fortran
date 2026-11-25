@@ -313,6 +313,7 @@ def test_strip_openmp_idempotent_and_clean_passthrough():
 # --------------------------------------------------------------------------
 
 
+# Reproducer: Build against unmodified external trees: search_dirs + cpp + merge fixes (fb719dc)
 def test_merge_inserts_newline_between_module_blocks(tmp_path):
     """Two module files whose END MODULE lines lack trailing newlines must not glue together."""
     (tmp_path / "mod_a.f90").write_text("MODULE mod_a\nEND MODULE mod_a")  # no trailing \n
@@ -325,6 +326,7 @@ def test_merge_inserts_newline_between_module_blocks(tmp_path):
     assert "END MODULE mod_a\n" in out  # the inserted separator landed
 
 
+# Reproducer: Build against unmodified external trees: search_dirs + cpp + merge fixes (fb719dc)
 def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
     """A #include above a MODULE opener must be captured into the module's block --
     otherwise its macros vanish from the merged source and downstream refs break
@@ -346,6 +348,7 @@ def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
     assert "! header comment" in out
 
 
+# Reproducer: Build against unmodified external trees: search_dirs + cpp + merge fixes (fb719dc)
 def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
     """Two modules back-to-back in one file: mod_b's preamble walk must stop at
     mod_a's END MODULE, not retroactively pull part of mod_a into mod_b's block."""
@@ -369,6 +372,7 @@ def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
     assert "#define SHARED_MACRO 7" in out
 
 
+# Reproducer: Build against unmodified external trees: search_dirs + cpp + merge fixes (fb719dc)
 def test_merge_passthrough_for_self_contained_source(tmp_path):
     """A source USEing only intrinsic modules (or none) is returned unchanged -- merge is a no-op."""
     src = "subroutine k(a, n)\n  use iso_c_binding\n  integer :: n\n  real(8) :: a(n)\n  a(1) = 0.0d0\nend subroutine\n"

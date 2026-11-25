@@ -81,6 +81,7 @@ end module mo_mt2
 """
 
 
+# Reproducer: erase do_not_emit calls early; fold multi-triplet copy_in; reject the rest (c3b0d0f)
 def test_two_triplet_trailing_scalar_section(tmp_path: Path):
     """``v3(:, :, b)`` -- two triplets plus a trailing scalar. Writes must reach the member."""
     sdfg = build_sdfg(_SRC_TRAILING, tmp_path / "sdfg", name="run", entry="mo_mt::run").build()
@@ -97,6 +98,7 @@ def test_two_triplet_trailing_scalar_section(tmp_path: Path):
     np.testing.assert_array_equal(v3, 1000.0 * b + i + 100.0 * j)
 
 
+# Reproducer: erase do_not_emit calls early; fold multi-triplet copy_in; reject the rest (c3b0d0f)
 def test_two_triplet_middle_scalar_section(tmp_path: Path):
     """``v3(:, 1, :)`` -- scalar BETWEEN the triplets. A prefix-then-triplet rebuild would write
     plane ``v3(1, :, :)`` instead, so the untouched planes double as the transposition check."""

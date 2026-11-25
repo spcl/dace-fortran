@@ -63,6 +63,7 @@ _DO_NOT_EMIT = [
 
 
 @pytest.mark.xdist_group("ocean_fparser")
+# Reproducer: ocean/QE binding + extraction gaps; add solve_free_sfc e2e (xfail) (cd0f7ec)
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against
     stock gfortran (halo neutralised both sides). NOTE: seeds are a first attempt --

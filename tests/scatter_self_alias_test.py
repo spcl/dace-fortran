@@ -18,6 +18,7 @@ import numpy as np
 from tests._util import build_sdfg
 
 
+# Reproducer: trace vector-subscript-scatter RHS root from the yielded value (fcb8548)
 def test_scatter_self_alias_rotate(tmp_path: Path):
     src = """
 subroutine rot(a, idx_w, idx_r)
@@ -38,6 +39,7 @@ end subroutine rot
     np.testing.assert_allclose(a, expected, rtol=1e-12)
 
 
+# Reproducer: trace vector-subscript-scatter RHS root from the yielded value (fcb8548)
 def test_scatter_self_alias_reverse(tmp_path: Path):
     """Full reverse ``a(4:1:-1) = a(1:4)`` via index arrays -- another overlap
     that collapses without an eval-order temp."""

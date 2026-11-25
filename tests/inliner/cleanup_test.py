@@ -46,6 +46,7 @@ end module
 """
 
 
+# Reproducer: resolve type-bound procedures inherited via EXTENDS (ea604ed)
 def test_inherited_type_bound_function_through_component_resolves():
     """A type-bound function inherited via EXTENDS and called through a component must
     resolve without asserting.

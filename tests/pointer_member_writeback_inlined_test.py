@@ -105,6 +105,7 @@ end module mo_wb2
 """
 
 
+# Reproducer: fold copy_in/out reached through an assumed-shape dummy (b9eeef3)
 def test_writeback_through_forwarding_chain_inlined(tmp_path: Path):
     """Member forwarded through TWO inlined levels (outer -> inner). Each level re-declares the
     dummy, so the copy_in temp reaches the stores through a ladder of ``hlfir.declare`` re-views.
@@ -168,6 +169,7 @@ end module mo_wb3
 """
 
 
+# Reproducer: fold copy_in/out reached through an assumed-shape dummy (b9eeef3)
 def test_writeback_through_assumed_shape_forward_inlined(tmp_path: Path):
     """Member forwarded through an ASSUMED-shape dummy then an explicit-shape writer. The copy_in
     source is declare(rebox(load(designate))); dispatchNonSectionSource must trace past the rebox to

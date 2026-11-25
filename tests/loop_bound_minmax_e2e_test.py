@@ -34,6 +34,7 @@ end module lib
 """
 
 
+# Reproducer: render MIN/MAX-of-array-element loop bounds instead of collapsing the select (gate #9) (f3af8c8)
 def test_minmax_array_element_loop_bound_e2e(tmp_path):
     src = tmp_path / "min_bound_loop.f90"
     src.write_text(_SRC)

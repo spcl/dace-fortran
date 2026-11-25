@@ -25,21 +25,25 @@ def _sig():
     )
 
 
+# Reproducer: source a named array-extent symbol from size(), not the module global (73de1f0)
 def test_named_extent_resolves_to_size_of_its_array():
     """``n_zlev`` is the 2nd dim of ``vn`` -> ``size(vn, dim=2)``."""
     assert _sym_from_array_extent("n_zlev", _sig()) == ("vn", 2)
 
 
+# Reproducer: source a named array-extent symbol from size(), not the module global (73de1f0)
 def test_first_extent_dim_is_one_indexed():
     """``nproma`` is the 1st dim -> dim=1 (Fortran 1-based)."""
     assert _sym_from_array_extent("nproma", _sig()) == ("vn", 1)
 
 
+# Reproducer: source a named array-extent symbol from size(), not the module global (73de1f0)
 def test_non_extent_symbol_returns_none():
     """Symbol that isn't any array's extent falls through -> returns None."""
     assert _sym_from_array_extent("no_dual_edges", _sig()) is None
 
 
+# Reproducer: source a named array-extent symbol from size(), not the module global (73de1f0)
 def test_scalar_arg_shape_is_not_matched():
     """Only ARRAY args contribute extents; a scalar arg with a matching name is not picked up."""
     scal = FrozenArg(fortran_name="n_zlev", sdfg_name="n_zlev", kind=FrozenArgKind.SCALAR, dtype="int32", rank=0)

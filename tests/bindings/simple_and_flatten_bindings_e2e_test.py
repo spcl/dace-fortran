@@ -121,6 +121,7 @@ _SIMPLE_IFACE = OriginalInterface(
 )
 
 
+# Reproducer: /bindings: fix rank-0 scalar struct member in generated binding (5c4c8f1)
 def test_simple_flat_f90_binding(tmp_path: Path):
     """Minimal binding surface: one scalar + two rank-1 arrays, no flattening (plan must be empty)."""
     lib, plan = _build_sdfg_binding_lib(
@@ -231,6 +232,7 @@ _FLAT_IFACE = OriginalInterface(
 )
 
 
+# Reproducer: /bindings: fix rank-0 scalar struct member in generated binding (5c4c8f1)
 def test_struct_flatten_f90_binding(tmp_path: Path):
     """``type(t_state)`` dummy (two 2-D members + scalar) flattens (non-empty FlattenPlan) and round-trips through the binding's struct reconstruction."""
     lib, plan = _build_sdfg_binding_lib(

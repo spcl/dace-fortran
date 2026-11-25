@@ -33,6 +33,7 @@ end module m
 """
 
 
+# Reproducer: handle ECMWF statement-function idiom in single-TU extraction (101007a)
 def test_coalesce_split_specification_parts():
     """``coalesce_split_specification_parts`` folds a scope whose spec part
     fparser split back to a single spec + single exec part, without changing
@@ -55,6 +56,7 @@ def test_coalesce_split_specification_parts():
     SourceCodeBuilder().add_file(ast.tofortran()).check_with_gfortran()
 
 
+# Reproducer: handle ECMWF statement-function idiom in single-TU extraction (101007a)
 def test_interleaved_statement_functions_extract_end_to_end():
     """Full inliner over the interleaved-stmt-fn source: without the coalescer
     the pipeline raises "at most 1 item"; with it the statement functions
@@ -130,6 +132,7 @@ end module dmod
 """
 
 
+# Reproducer: make the emitted TU f2py-wrappable (CLOUDSC timer scaffolding) (51fdf1e)
 def test_make_noop_drops_calls_and_prunes_stub():
     """An EXPLICIT make_noop subroutine is a semantic no-op: its CALL
     statements are dropped outright and the stub -- with its derived-type
@@ -146,6 +149,7 @@ def test_make_noop_drops_calls_and_prunes_stub():
     assert "x = x * 2.0d0" in text
 
 
+# Reproducer: make the emitted TU f2py-wrappable (CLOUDSC timer scaffolding) (51fdf1e)
 def test_keep_external_stub_keeps_calls():
     """The do_not_emit/keep_external path must NOT drop call statements --
     those calls are real (an external implementation or the bridge serves
@@ -177,6 +181,7 @@ end module dmod2
     assert "call ext_impl" in text
 
 
+# Reproducer: make the emitted TU f2py-wrappable (CLOUDSC timer scaffolding) (51fdf1e)
 def test_pruned_memberless_type_gets_placeholder():
     """When pruning strips every component of a derived type that variables
     still reference, a placeholder component is kept: a zero-component type is
@@ -1860,6 +1865,7 @@ end module
     assert "call p_isend_dp(dbuf" in got, got
 
 
+# Reproducer: inliner: 7 fixes for self-contained MPI-only kernel extraction (a9f4800)
 def test_interface_replacer_reverts_unresolvable_generic():
     """A call to a generic interface that CANNOT be resolved to a specific -- an
     external generic with no in-project candidate (the injected ``iso_c_binding``

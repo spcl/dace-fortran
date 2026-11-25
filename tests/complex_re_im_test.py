@@ -57,6 +57,7 @@ END MODULE
     assert out_arr[0] == 4.0
 
 
+# Reproducer: complex %re/%im accessor lowering + complex-scalar by-ref ABI + drop 'i' from sympy-rename +... (a2a986a)
 def test_complex_re_read_element(tmp_path):
     """``out = z(1)%re`` returns the real part of a COMPLEX element."""
     src = """
@@ -77,6 +78,7 @@ END MODULE
     assert out_arr[0] == 3.0
 
 
+# Reproducer: complex %re/%im accessor lowering + complex-scalar by-ref ABI + drop 'i' from sympy-rename +... (a2a986a)
 def test_complex_im_read_element(tmp_path):
     """``out = z(1)%im`` returns the imaginary part of a COMPLEX element."""
     src = """

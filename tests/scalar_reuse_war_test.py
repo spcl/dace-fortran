@@ -51,6 +51,7 @@ def _run(tmp_path, body, name, n=8, seed=11, nvars=1):
     )
 
 
+# Reproducer: split state on reused-scalar WAR/WAW; close NPB-LU xfail (#2) (ac86cda)
 def test_scalar_reuse_minimal(tmp_path):
     """Minimal LU pattern: tmp=a(i); x=tmp*b(i); tmp=a(i-1); y=tmp*b(i-1).
 
@@ -77,6 +78,7 @@ END SUBROUTINE driver
     )
 
 
+# Reproducer: split state on reused-scalar WAR/WAW; close NPB-LU xfail (#2) (ac86cda)
 def test_scalar_reuse_multicomponent(tmp_path):
     """NPB-LU shape: one scalar ``tmp`` feeds five ``*i`` reads, is re-written, then feeds five ``*im1`` reads -- five separate clobbered values."""
     _run(
@@ -115,6 +117,7 @@ END SUBROUTINE driver
     )
 
 
+# Reproducer: split state on reused-scalar WAR/WAW; close NPB-LU xfail (#2) (ac86cda)
 def test_scalar_reuse_three_writes(tmp_path):
     """Three re-writes of the same scalar in one iteration: two splits."""
     _run(
@@ -141,6 +144,7 @@ END SUBROUTINE driver
     )
 
 
+# Reproducer: split state on reused-scalar WAR/WAW; close NPB-LU xfail (#2) (ac86cda)
 def test_scalar_reuse_in_if(tmp_path):
     """Re-write inside an IF body -- exercises ``emit_assign``'s realised-graph guard (the has_structured path), not the loop batch path."""
     _run(
@@ -167,6 +171,7 @@ END SUBROUTINE driver
     )
 
 
+# Reproducer: split state on reused-scalar WAR/WAW; close NPB-LU xfail (#2) (ac86cda)
 def test_loop_carried_scalar_preserved(tmp_path):
     """A loop-CARRIED scalar accumulator must NOT be broken by the split: ``s`` reads its
     previous-iteration value, so it stays one scalar. Guards against over-eager splitting."""

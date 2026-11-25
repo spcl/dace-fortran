@@ -87,6 +87,7 @@ def _first(sdfg, cls):
     return next(n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls))
 
 
+# Reproducer: thread user comm in alltoall, exact reduce-op map, count-ready buffers (a8b4339)
 def test_resolve_mpi_op_map():
     """The op-name -> ``MPI_Op`` map is exact: ``mpi_maxloc`` / ``mpi_minloc``
     must NOT be swallowed by a ``max`` / ``min`` substring, and a non-{max,min}
@@ -144,6 +145,7 @@ def test_collectives_lower_to_mpi_libnodes(tmp_path: Path):
         ("mpi_minloc", "MPI_MINLOC"),  # old heuristic: MPI_MIN via 'min' substring (wrong)
     ],
 )
+# Reproducer: thread user comm in alltoall, exact reduce-op map, count-ready buffers (a8b4339)
 def test_allreduce_op_not_coerced(tmp_path: Path, op_ref: str, expected: str):
     """End-to-end (flang -> bridge -> builder): the ``MPI_Allreduce`` op is
     mapped to the correct ``MPI_Op``, never silently coerced to ``MPI_SUM`` /
@@ -157,6 +159,7 @@ def test_allreduce_op_not_coerced(tmp_path: Path, op_ref: str, expected: str):
     sdfg.validate()
 
 
+# Reproducer: thread user comm in alltoall, exact reduce-op map, count-ready buffers (a8b4339)
 def test_allreduce_unrecognised_op_raises(tmp_path: Path):
     """A Fortran ``parameter`` op folds to an opaque ``f__assoc_scalar_N`` name
     (op identity lost upstream) -> the builder raises rather than silently

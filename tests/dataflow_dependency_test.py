@@ -316,6 +316,7 @@ END SUBROUTINE war_default
     )
 
 
+# Reproducer: cloudsc-shape WAR pattern under DEFAULT_PIPELINE -- reproduces the bottom_upper/cloudsc_full bug (0b08aa9)
 def test_cloudsc_shape_war_default_pipeline(tmp_path):
     """cloudsc-shape WAR pattern under DEFAULT_PIPELINE -- reproduces the
     bottom_upper/cloudsc_full bug; inputs chosen so MIN(d,f)=f and e/f_new

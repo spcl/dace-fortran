@@ -398,6 +398,7 @@ end subroutine
 """
 
 
+# Reproducer: don't fold PRESENT() for a forwarded caller-optional in specialize_at_source (5713f20)
 def test_forwarded_caller_optional_keeps_present_guard():
     """Dummy bound to the caller's own optional keeps its ``PRESENT`` guard when inlined -- presence is only known at the caller's runtime."""
     prog = parse_program(_FORWARDED_OPTIONAL_SRC)
@@ -410,6 +411,7 @@ def test_forwarded_caller_optional_keeps_present_guard():
     assert "IF (.TRUE.)" not in outer.replace(" ", "")
 
 
+# Reproducer: don't fold PRESENT() for a forwarded caller-optional in specialize_at_source (5713f20)
 def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
     """End-to-end: optional omitted at the ROOT, both inlining levels fold to ``start_level = 1``
     so every element is written. A ``.TRUE.`` misfold at the ``outer->inner`` boundary would

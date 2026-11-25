@@ -97,6 +97,7 @@ _REF_DRIVER = (
 )
 
 
+# Reproducer: only marshal struct members the kernel actually uses (f7b67d3)
 def test_emitted_guard_text(tmp_path: Path):
     """Wrapper presence-guards every marshal: ``associated(st%opt)`` with a scratch-remap
     ELSE, ``allocated(st%base)`` for the allocatable member."""
@@ -123,6 +124,7 @@ def test_emitted_guard_text(tmp_path: Path):
     assert "st_opt(1:1) => presence_scratch_float64" in text, text
 
 
+# Reproducer: only marshal struct members the kernel actually uses (f7b67d3)
 def test_e2e_disassociated_pointer_member(tmp_path: Path):
     """mode=0: ``st%opt`` stays disassociated; guarded wrapper takes the kernel's
     absent branch and matches the reference."""
@@ -161,6 +163,7 @@ def test_e2e_disassociated_pointer_member(tmp_path: Path):
     np.testing.assert_array_equal(base_ref, base_init + 1.0)
 
 
+# Reproducer: only marshal struct members the kernel actually uses (f7b67d3)
 def test_e2e_associated_pointer_member(tmp_path: Path):
     """mode=1: ``st%opt`` associated -- the guard's PRESENT branch must behave like the
     unguarded alias did."""

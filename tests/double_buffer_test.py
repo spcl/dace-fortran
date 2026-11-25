@@ -83,6 +83,7 @@ end subroutine
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
 
 
+# Reproducer: flatten(double-buffer): reject an in-kernel time-level swap instead of miscompiling (3ca95df)
 def test_dbuf_in_kernel_swap_rejected(tmp_path):
     """In-kernel swap(nnow, nnew) cannot be lane-split: static per-symbol companions are bound to one
     physical buffer each and can't be re-pointed mid-kernel. Bridge must reject loudly rather than

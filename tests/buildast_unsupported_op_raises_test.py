@@ -23,6 +23,7 @@ end subroutine where_masked_assign
 """
 
 
+# Reproducer: fail loud on unlowered hlfir.where/forall/region_assign (ab69ecc)
 def test_where_masked_assign_raises(tmp_path: Path):
     """Unlowered ``hlfir.where`` raises a located diagnostic naming the op, not a silent drop."""
     sdfg_dir = tmp_path / "sdfg"

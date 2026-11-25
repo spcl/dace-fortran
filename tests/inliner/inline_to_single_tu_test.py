@@ -601,6 +601,7 @@ end module lib
     assert "other" not in out.lower()
 
 
+# Reproducer: checkpoint(icon-o): externalize the GMRES solver subsystem; prove HLFIR can't devirtualize (5345b8d)
 def test_pointer_component_of_extension_type_survives_pruning():
     """Root-cause regression: a POINTER component written only via ``=>`` in a
     constructor must not be pruned from an ``EXTENDS`` type.

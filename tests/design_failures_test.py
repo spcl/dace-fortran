@@ -295,6 +295,7 @@ END MODULE kern_mod
     np.testing.assert_allclose(out[0], 14.0)
 
 
+# Reproducer: complex %re/%im accessor lowering + complex-scalar by-ref ABI + drop 'i' from sympy-rename +... (a2a986a)
 def test_local_i_loop_iterator_not_renamed(tmp_path):
     """LOCAL loop iterator ``i`` must NOT be renamed to ``fortran_i`` -- collides
     with DaCe's LoopRegion iterator-symbol machinery (``InvalidSDFGError: Loop
@@ -320,6 +321,7 @@ END MODULE kern_mod
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
 
 
+# Reproducer: complex %re/%im accessor lowering + complex-scalar by-ref ABI + drop 'i' from sympy-rename +... (a2a986a)
 def test_nested_loops_with_i_iterator(tmp_path):
     """Two ``i`` loop iterators (outer + reused in an inlined PURE FUNCTION):
     both stay bare, no LoopRegion iterator collision (broke test_dummy_shaped_fn_return)."""

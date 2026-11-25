@@ -129,6 +129,7 @@ def _build_ring(comm, tmp_path, src, entry, name):
 
 
 @pytest.mark.mpi
+# Reproducer: fix MPI_Waitall over a request array (was dropping receives) (9c2af85)
 def test_dual_typed_nonblocking_ring(tmp_path: Path):
     """Bridge lowers a real*8 + real*4 nonblocking ring (per-request Wait) to MPI
     libnodes; both received buffers equal the neighbor's value, per rank."""
@@ -146,6 +147,7 @@ def test_dual_typed_nonblocking_ring(tmp_path: Path):
     np.testing.assert_array_equal(rbuf_sp, np.full(n, np.float32(expected), dtype=np.float32))
 
 
+# Reproducer: fix MPI_Waitall over a request array (was dropping receives) (9c2af85)
 def test_mpi_waitall_covers_all_requests(tmp_path: Path):
     """MPI_Waitall over ``reqs(1:2)`` waits on BOTH posted requests (structural).
 
@@ -175,6 +177,7 @@ def test_mpi_waitall_covers_all_requests(tmp_path: Path):
 
 
 @pytest.mark.mpi
+# Reproducer: fix MPI_Waitall over a request array (was dropping receives) (9c2af85)
 def test_mpi_waitall_ring_delivers(tmp_path: Path):
     """MPI_Waitall over a request array completes the receive, per rank (numeric).
 
@@ -238,6 +241,7 @@ def _gfortran_compiles(src: str, tmp: Path, name: str, *, prelude: str = "") -> 
     return r.returncode == 0, r.stderr
 
 
+# Reproducer: fix MPI_Waitall over a request array (was dropping receives) (9c2af85)
 def test_dual_typed_ref_typestar_is_sound(tmp_path: Path):
     """A ``TYPE(*)`` interface is the sound fix for solve_nh's dual-typed MPI
     calls -- necessary AND sufficient, so -fallow-argument-mismatch is never

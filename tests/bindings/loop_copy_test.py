@@ -127,6 +127,7 @@ def test_render_copy_out_loop_shape():
     assert "deallocate(st_z_im)" in joined
 
 
+# Reproducer: AoS scalar-member deepcopy: read indexing + copy-back (symbol leak) (fb3e356)
 def test_render_copy_out_loop_inverse_for_single_flat_empty_write_expr():
     """Single-flat member with no ``write_expr`` copies out as the exact
     inverse of copy-in: ``<read_expr> = <flat>(idx)``, then deallocates."""
@@ -142,6 +143,7 @@ def test_render_copy_out_loop_inverse_for_single_flat_empty_write_expr():
     assert "deallocate(pts_x)" in body
 
 
+# Reproducer: AoS scalar-member deepcopy: read indexing + copy-back (symbol leak) (fb3e356)
 def test_render_copy_out_loop_raises_on_multi_flat_empty_write_expr():
     """A multi-flat recipe with no ``write_expr`` has no unambiguous inverse
     (the reconstruction must be supplied as ``write_expr``) and must raise."""

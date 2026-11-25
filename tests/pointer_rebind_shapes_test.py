@@ -302,6 +302,7 @@ end subroutine main
     assert list(out[12:20]) == [41, 42, 43, 44, 51, 52, 53, 54]
 
 
+# Reproducer: fix read-modify-write through a flatten View (gate H part 2) (29b955a)
 def test_c_section_flatten_read_modify_write(tmp_path: Path):
     """READ-MODIFY-WRITE through the flattened section view (``p(i) =
     p(i) * 2``): the view node is BOTH read and written in the same state.
@@ -371,6 +372,7 @@ end subroutine main
     np.testing.assert_array_equal(out, [21, 22, 23, 24, 31, 32, 33, 34, 41, 42, 43, 44])
 
 
+# Reproducer: complex(8) constant-offset flatten read -- QE's exact element type for prhoc (regression guar... (429d8ff)
 def test_c_section_flatten_complex(tmp_path: Path):
     """``complex(8)`` constant-offset flatten read -- QE's exact element
     type for ``prhoc`` (regression guard for the wired read path)."""
@@ -560,6 +562,7 @@ end subroutine main
     np.testing.assert_array_equal(out, [211, 212, 221, 222, 231, 232])
 
 
+# Reproducer: builder: fix flatten-view write-back off-by-one + surface literal-section (View facet 3) (2e6cf51)
 def test_f_3d_noncontig_plane_to_2d_read(tmp_path: Path):
     """``p(:,:) => a(:, j, :)`` -- a NON-packed 2-D view of a 3-D array
     (the middle dim is fixed).  The view's strides are ``(1, d0*d1)`` --

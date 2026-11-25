@@ -50,6 +50,7 @@ END MODULE m_seca
 """
 
 
+# Reproducer: (a) The inlined FUNCTION dummy bound to a(:, j) reads the correct column -- regression guard... (a566f03)
 def test_inlined_function_section_alias_reads_correct_column(tmp_path):
     """(a) The inlined FUNCTION dummy bound to ``a(:, j)`` reads the correct column
     -- regression guard for the box-peel section-alias fix."""

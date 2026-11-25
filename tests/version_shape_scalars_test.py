@@ -183,6 +183,7 @@ end subroutine
 # never the later-mutated scalar -- so no corruption, and the valid kernel LIFTS
 # (pre-fix the frontend REFUSED both of these).
 # ---------------------------------------------------------------------------
+# Reproducer: freeze extent at ALLOCATE instead of refusing loop/branch reassignment (a5a0413)
 def test_freeze_post_alloc_reassign_in_loop(tmp_path):
     """``x`` is allocated from ``m``; then INSIDE a loop ``m`` grows and a fresh
     ``y`` is allocated+freed each iteration.  ``x``'s extent is frozen at its
@@ -228,6 +229,7 @@ end subroutine
     np.testing.assert_allclose(xsum[0], 2.0 * sum(range(1, n + 1)))
 
 
+# Reproducer: freeze extent at ALLOCATE instead of refusing loop/branch reassignment (a5a0413)
 def test_freeze_post_alloc_reassign_in_branch(tmp_path):
     """``x`` is allocated from ``m``; then inside an ``if`` branch ``m`` grows and
     another array is allocated.  ``x``'s extent is frozen at its ALLOCATE

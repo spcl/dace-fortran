@@ -85,6 +85,7 @@ end module probe_mod
 """
 
 
+# Reproducer: noncontig vector-subscript gather + libcall-over-elemental materialise (305db7d)
 def test_transpose_of_elemental(tmp_path):
     """Regression: transpose(<inline elementwise expr>) -- operand is an hlfir.expr from an inline elemental, not a named array.  Without materialiseElementalForLibcall, traceToDecl returns "", emit_libcall does ctx.sdfg.arrays[''], and the build raises KeyError: ''.  Pure isolation so a failure here means the elemental-source materialise regressed."""
     src_path = tmp_path / "transpose_of_elem.f90"

@@ -76,6 +76,7 @@ END SUBROUTINE
     np.testing.assert_allclose(out, expected, rtol=1e-12, atol=1e-15)
 
 
+# Reproducer: Trimmed reproducer without the downstream condition -- catches the regression even when the f... (33437cf)
 def test_max_in_outer_branch_only(tmp_path: Path):
     """Trimmed reproducer without the downstream condition -- catches the regression even when
     the float scalar is never re-read inside another condition."""

@@ -123,6 +123,7 @@ def test_patched_body_calls_wrapper():
         assert arg in patched, f"forwarded arg {arg!r} missing"
 
 
+# Reproducer: un-red main — swap tests, velocity SEGV, extract-drift, solve_nh crash fixes, CI integration... (85681a2)
 def test_differential_driver_injected():
     """The patch keeps the original body as REF (renamed ``solve_nh_ref``) and
     injects the driver (clone -> DUT -> REF -> compare -> free) as the new

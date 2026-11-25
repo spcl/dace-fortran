@@ -1256,6 +1256,7 @@ end subroutine main
     np.testing.assert_array_equal(out[:, 1], [31, 32, 33, 34])
 
 
+# Reproducer: raise on intent(out) AoS-allocatable kernel-internal alloc (beddebf)
 def test_intent_out_aos_alloc_member_raises_loudly(tmp_path, capfd):
     """``intent(out)`` AoS dummy with an allocatable member: F2003 auto-deallocates on entry,
     so there's no caller data to size the padded companion. ``hlfir-flatten-structs`` must fail

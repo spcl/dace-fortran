@@ -46,6 +46,7 @@ end module vps_mod
 """
 
 
+# Reproducer: docs: value-projection SSA regression + generated-kernel linter (719848c)
 def test_loop_variant_element_extent_mutated_source(tmp_path: Path):
     """Per-iteration allocatable sized by a mutated array element -- extent snapshots the pre-write value each iteration."""
     sdfg = build_sdfg(SRC, tmp_path / "sdfg", name="vps", entry="vps_mod::vps").build()

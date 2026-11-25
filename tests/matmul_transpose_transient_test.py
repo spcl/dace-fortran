@@ -66,6 +66,7 @@ end module
     np.testing.assert_allclose(res, expected)
 
 
+# Reproducer: detect inline MATMUL/TRANSPOSE in expressions, raise descriptive error (31e1260)
 def test_matmul_no_transpose_whole_assign(tmp_path):
     """Regression: ``MATMUL(A, B)`` without TRANSPOSE still routes through the plain matmul lib node."""
     src = """

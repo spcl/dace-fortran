@@ -51,6 +51,7 @@ def test_pointer_view_bounds_remap_is_tagged():
     assert _count_tagged(ir) >= 1, "view probe should have exactly one bounds-remap-view tag"
 
 
+# Reproducer: global read/write edge direction + allocatable-parent source trace (8ce09d1)
 def test_pointer_view_bounds_remap_allocatable_is_tagged():
     """Bounds-remap view whose TARGET is ALLOCATABLE (QE's ``prhoc_d => rhoc_d(:, slice)`` shape) is still tagged -- detection is independent of the parent being allocatable."""
     ir = _emit_hlfir_and_mark(_HERE / "pointer_view_bounds_remap_allocatable_probe.f90")

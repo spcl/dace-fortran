@@ -916,6 +916,7 @@ end subroutine run_jag_ref
 """
 
 
+# Reproducer: resolve jagged AoS allocatable-member extent to companion cap (b6c57ab)
 def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     """``type(bag){allocatable w(:)} :: a(NB)`` with per-instance sizes (2,4,3) -> ELLPACK
     companion ``a_w(NB, cap_a_w)`` (cap=4). Verifies pack/unpack round-trips live data and

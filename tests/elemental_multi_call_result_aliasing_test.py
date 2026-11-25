@@ -139,6 +139,7 @@ end module m
     np.testing.assert_allclose(y, a**2 - b**2, atol=1e-13, rtol=0)
 
 
+# Reproducer: give each inlined callee-local a distinct SDFG scalar (0b9c560)
 def test_function_returning_array_multi_call(tmp_path: Path):
     """Bug-class breadth: a function returning an ARRAY, called twice in one expression.
     The two result arrays must not alias onto one SDFG transient."""
@@ -167,6 +168,7 @@ end module m
     np.testing.assert_allclose(y, a * 2.0 + b * 3.0, atol=1e-13, rtol=0)
 
 
+# Reproducer: give each inlined callee-local a distinct SDFG scalar (0b9c560)
 def test_multi_call_extra_local_temp(tmp_path: Path):
     """Bug-class breadth: callee has a LOCAL TEMP besides the result; both must be
     disambiguated across the two inlined call sites in one expression."""

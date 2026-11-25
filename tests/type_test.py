@@ -773,6 +773,7 @@ end subroutine kernel
     np.testing.assert_allclose(out_w_sdfg, out_w_ref, rtol=1e-12, atol=1e-12)
 
 
+# Reproducer: Regression test for s%X(i,j,k)%v1 with X = alloc-array-of-records whose element record holds... (14ae230)
 def test_alloc_array_of_records_inner_scalar_members(tmp_path):
     """Regression test for ``s%X(i,j,k)%v1`` with X = alloc-array-of-records whose
     element record holds plain SCALAR (non-pointer) members -- distinct from
