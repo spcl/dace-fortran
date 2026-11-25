@@ -10,6 +10,11 @@ README "Building an SDFG from a real project" for worked examples.
 
 from typing import TYPE_CHECKING, Any
 
+from dace_fortran.dace_setup import ensure_dace
+
+# Before anything imports dace: a PyPI DaCe is replaced by the DaCe branch the frontend needs (dace_setup.py).
+ensure_dace()
+
 if TYPE_CHECKING:
     from dace_fortran.acc_residency import extract_acc_residency, write_acc_residency_sidecar
     from dace_fortran.build import build_sdfg, build_sdfg_from_files, build_sdfg_from_hlfir, build_sdfg_from_project
