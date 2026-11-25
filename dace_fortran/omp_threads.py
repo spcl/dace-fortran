@@ -67,5 +67,7 @@ class BindOmpThreadCount(ppl.Pass):
         )
         first.add_edge(tasklet, "__out", first.add_write(scalar), None, dace.Memlet(f"{scalar}[0]"))
 
-        sdfg.add_symbol(self.symbol, dace.int32)
+        # A DaCe that already declares it (FaCe) keeps its declaration; the edge above now defines it
+        if self.symbol not in sdfg.symbols:
+            sdfg.add_symbol(self.symbol, dace.int32)
         return scalar
