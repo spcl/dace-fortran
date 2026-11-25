@@ -964,6 +964,10 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # reads are dead on every path that doesn't allocate the global.
             if v.unbindable_section:
                 transient = True
+            # A global the kernel allocates and frees within the call is scratch the kernel owns (QE's qgm): the
+            # binding could not size it, as only the kernel computes its extent.
+            if v.kernel_scoped_alloc:
+                transient = True
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
                 sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)

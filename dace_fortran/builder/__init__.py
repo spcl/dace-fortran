@@ -1292,6 +1292,7 @@ class SDFGBuilder:
             f for e in (_plan_raw.get("entries") or []) for f in (e.get("recipe", {}).get("flat_names") or [])
         }
         prune_unused_arrays(sdfg, binding_names=_binding_keep)
+        self._define_local_symbols_at_entry(sdfg)
         self._attach_frozen_signature(sdfg)
         # Stash the pre-flatten caller interface + the post-flatten plan so
         # the binding emitter can auto-derive both an ``OriginalInterface``
@@ -1843,6 +1844,27 @@ class SDFGBuilder:
                         new_cond = _deref_cb(nsdfg, cond)
                         if new_cond is not cond:
                             region.branches[idx] = (new_cond, body)
+
+    def _define_local_symbols_at_entry(self, sdfg: SDFG) -> None:
+        """Assign 0 at entry to every kernel-internal symbol the kernel assigns but that is still free.
+
+        A local the kernel assigns only on a conditional path (QE's ``qvan_init``'s ``nij``, under
+        ``IF (okvan)``) is not defined on every path to its uses, so DaCe keeps it free and the SDFG takes
+        it as an argument the caller cannot know. A Fortran local has no value before its first
+        assignment, so defining it as 0 at entry keeps the semantics and drops it from the signature.
+        """
+        assigned = {k for e in sdfg.all_interstate_edges() for k in e.data.assignments}
+        # A symbol of no Fortran variable is the builder's own (a remap view's ``<view>_total_extent_d0``).
+        local = [
+            name
+            for name in sorted(set(map(str, sdfg.free_symbols)) & assigned)
+            if (v := self.symbols.get(name)) is None
+            or (not v.intent and not v.module_origin_mod and "F" in (v.mangled_name or "").removeprefix("_Q"))
+        ]
+        if local:
+            sdfg.add_state_before(
+                sdfg.start_block, "define_local_symbols", is_start_block=True, assignments=dict.fromkeys(local, "0")
+            )
 
     def _attach_frozen_signature(self, sdfg: SDFG) -> None:
         """Snapshot ``sdfg.arglist()`` + free symbols into a

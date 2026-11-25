@@ -88,6 +88,9 @@ class VarRecord(Protocol):
     def unbindable_section(self) -> bool: ...
 
     @property
+    def kernel_scoped_alloc(self) -> bool: ...
+
+    @property
     def aos_origin_mod(self) -> str: ...
 
     @property

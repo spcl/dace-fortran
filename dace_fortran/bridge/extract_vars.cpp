@@ -1172,6 +1172,37 @@ static std::string traceToGlobalSymbol(mlir::Value memref) {
   return {};
 }
 
+/// Whether the global ``sym`` is allocated and freed within the call: its ``ALLOCATE`` and ``DEALLOCATE`` sites, in
+/// program order, alternate starting with an ``ALLOCATE`` and ending with a ``DEALLOCATE`` (QE's ``qgm``: allocated by
+/// ``qvan_init``, freed by ``qvan_clean``). Such a global is unallocated before and after the call, so it carries no
+/// host state: the kernel owns it as a scratch buffer sized where it is allocated.
+///
+/// shortcut: program order, not control flow -- an ALLOCATE and a DEALLOCATE under different conditions read as
+/// paired; upgrade to a dominance check if a kernel ever frees a global on a path that did not allocate it.
+static bool allocatedAndFreedWithinCall(const std::string& sym, mlir::ModuleOp module) {
+  std::string const allocName = sym + ".alloc";
+  std::vector<bool> isAlloc;  // the alloc (true) / free (false) sites of ``sym``, in program order
+  module.walk([&](mlir::Operation* op) {
+    if (auto a = mlir::dyn_cast<fir::AllocMemOp>(op)) {
+      if (auto un = a.getUniqName(); un && un->str() == allocName) isAlloc.push_back(true);
+      return;
+    }
+    auto f = mlir::dyn_cast<fir::FreeMemOp>(op);
+    if (!f) return;
+    // ``fir.freemem (fir.box_addr (fir.load <declare of sym>))``
+    auto addr = f.getHeapref().getDefiningOp<fir::BoxAddrOp>();
+    auto load = addr ? addr.getVal().getDefiningOp<fir::LoadOp>() : fir::LoadOp{};
+    if (!load) return;
+    mlir::Value ref = load.getMemref();
+    if (auto decl = ref.getDefiningOp<hlfir::DeclareOp>()) ref = decl.getMemref();
+    if (traceToGlobalSymbol(ref) == sym) isAlloc.push_back(false);
+  });
+  if (isAlloc.empty() || isAlloc.size() % 2 != 0) return false;
+  for (size_t i = 0; i < isAlloc.size(); ++i)
+    if (isAlloc[i] != (i % 2 == 0)) return false;
+  return true;
+}
+
 std::pair<std::string, std::string> decodeModuleGlobalSymbol(const std::string& sym) {
   llvm::StringRef s(sym);
   // Module data only.  ``_QF`` = function-scope SAVE local (private,
@@ -3594,7 +3625,11 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       };
       if (written) {
         v.is_written = true;
-        if (isModuleScope && !isParameter && v.intent.empty()) {
+        // A global the kernel allocates and frees within the call stays a kernel-owned transient: as an argument
+        // the binding would have to size it before the call, by an extent only the kernel computes.
+        v.kernel_scoped_alloc =
+            isModuleScope && !isParameter && v.intent.empty() && allocatedAndFreedWithinCall(sym, module);
+        if (isModuleScope && !isParameter && v.intent.empty() && !v.kernel_scoped_alloc) {
           // A WRITTEN module-scope global is host-shared INOUT state: the
           // kernel's update must be visible to the caller after the call.
           // Surface it as an inout arg with module-origin provenance -- the
