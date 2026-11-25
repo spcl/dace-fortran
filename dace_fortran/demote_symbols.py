@@ -11,7 +11,7 @@ from collections.abc import Container
 from typing import Any
 
 import dace
-from dace import SDFG, dtypes, symbolic
+from dace import SDFG, dtypes, subsets, symbolic
 from dace.sdfg import nodes
 from dace.sdfg.replace import replace_in_codeblock, tokenize_cpp
 from dace.sdfg.state import ConditionalBlock, LoopRegion, SDFGState
@@ -91,7 +91,12 @@ def assignment_tasklet(state: SDFGState, lhs: str, rhs: str) -> None:
     class ReadsToConnectors(ast.NodeTransformer):
         def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
             if isinstance(node.value, ast.Name) and node.value.id in arrays:
-                return connector(node.value.id, ast.unparse(node))
+                data = node.value.id
+                if not any(isinstance(n, ast.Name) and n.id in arrays for n in ast.walk(node.slice)):
+                    return connector(data, ast.unparse(node))
+                # An index read from a container (``a[ip[0]]``) is no memlet subset: the tasklet indexes the whole array
+                whole = connector(data, f"{data}[{subsets.Range.from_array(arrays[data])}]")
+                return ast.Subscript(value=whole, slice=self.visit(node.slice), ctx=ast.Load())
             return self.generic_visit(node)
 
         def visit_Name(self, node: ast.Name) -> ast.AST:

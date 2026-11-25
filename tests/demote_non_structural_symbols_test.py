@@ -85,6 +85,28 @@ def test_a_demoted_value_keeps_its_arithmetic_as_written():
     assert R[0] == 0.3 + (1.0 - 0.3) * ((S[0] - 0.8) / 0.2) ** 2
 
 
+# Reproducer: a(ip(1)) read became an invalid memlet subset, DemoteNonStructuralSymbols (QE vexx, dbcb18a)
+def test_a_demoted_value_read_through_an_index_array():
+    """QE vexx: ``z = A[ip[0]]`` reads an element at an index another container holds; no memlet subset spells it."""
+    sdfg = dace.SDFG("demoted_indirect_value")
+    sdfg.add_symbol("z", dace.float64)
+    sdfg.add_array("A", [4], dace.float64)
+    sdfg.add_array("ip", [1], dace.int64)
+    sdfg.add_array("R", [1], dace.float64)
+    start = sdfg.add_state("start", is_start_block=True)
+    use = sdfg.add_state_after(start, "use", assignments={"z": "A[ip[0]] + 1.0"})
+    write = use.add_tasklet("store", {}, {"o"}, "o = z")
+    use.add_edge(write, "o", use.add_write("R"), None, dace.Memlet("R[0]"))
+    sdfg.validate()
+    assert DemoteNonStructuralSymbols().apply_pass(sdfg, {}) == 1
+    sdfg.validate()
+
+    A = np.array([1.0, 2.0, 3.0, 4.0])
+    R = np.zeros(1)
+    sdfg(A=A, ip=np.array([2]), R=R)
+    assert R[0] == 4.0
+
+
 def test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression():
     """The read of a demoted symbol becomes a connector without reordering the tasklet: ``x - z + y`` stays in that
     order (sympy writes ``x + y - z``, which rounds differently)."""
@@ -197,6 +219,7 @@ if __name__ == "__main__":
     test_the_promotion_state_is_the_one_dace_creates()
     test_a_counter_becomes_a_scalar_and_its_loop_maps()
     test_a_demoted_value_keeps_its_arithmetic_as_written()
+    test_a_demoted_value_read_through_an_index_array()
     test_a_tasklet_reading_a_demoted_symbol_keeps_its_expression()
     test_an_index_read_inside_a_branch_condition_stays_a_symbol()
     with tempfile.TemporaryDirectory() as tmp:
