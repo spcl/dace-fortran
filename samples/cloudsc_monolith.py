@@ -4,8 +4,8 @@
 
 ``tests/cloudsc/full/cloudsc.F90`` is the whole scheme in one file, ``CLOUDSCOUTER`` driving ``CLOUDSC``. The
 species count ``NCLV`` is the only species constant that reaches the SDFG as a symbol (the ``NCLDQ*`` indices are
-``YOECLDP`` ``PARAMETER``s, folded by the build), so it is specialized to 5. Every column (``JL``) loop becomes a map;
-the vertical sweep and the species-ordered solver stay sequential.
+``YOECLDP`` ``PARAMETER``s, folded by the build), so it is specialized to 5. Every column (``JL``) loop but the ice
+sedimentation one becomes a map; that one, the vertical sweep and the species-ordered solver stay sequential.
 
 The optimized SDFG must match the gfortran build to fp64 precision and the unoptimized SDFG bit for bit on the same
 seeded physical state. Run from the repository root: ``python -m samples.cloudsc_monolith``.
@@ -26,7 +26,8 @@ from tests.cloudsc.full._registries import program_outputs
 
 SOURCE = Path(__file__).resolve().parents[1] / "tests" / "cloudsc" / "full" / "cloudsc.F90"
 MAX_MAPS = 264
-SEQUENTIAL_LOOPS = 8
+# One column loop stays a loop: under LAERICESED it writes ZVQX(NCLDQI), which later levels read
+SEQUENTIAL_LOOPS = 9
 
 
 def run(work_dir: Path) -> None:
