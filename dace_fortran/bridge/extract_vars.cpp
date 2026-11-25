@@ -1713,6 +1713,7 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
 // scope's -- collapsing the false-positive collision.
 void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   std::map<std::string, std::set<std::string>> shortToScopes;
+  std::set<std::string> optionalCalleeShorts;
   // A module global has no F scope and keeps its bare name; it still counts as a scope of its own, so an inlined
   // callee's same-named local (QE grid_set's ``g(3)`` vs gvect's ``g(:, :)``) is qualified instead of merged into it.
   auto record = [&](mlir::Operation* /*op*/, llvm::StringRef uniq) {
@@ -1750,6 +1751,10 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
       bool const isOptional = bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::optional);
       std::string const declScope = getFScope(decl.getUniqName().str());
       if (isOptional && !declScope.empty() && declScope != entryScope) {
+        std::string const un = decl.getUniqName().str();
+        bool const isArray =
+            mlir::isa<fir::SequenceType>(fir::unwrapPassByRefType(fir::unwrapRefType(decl.getResult(0).getType())));
+        if (auto p = un.rfind('E'); isArray && p != std::string::npos) optionalCalleeShorts.insert(un.substr(p + 1));
         return;
       }
     }
@@ -1766,6 +1771,13 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   std::set<std::string> collisions;
   for (auto& kv : shortToScopes) {
     if (kv.second.size() >= 2) collisions.insert(kv.first);
+  }
+  // An inlined callee's optional ARRAY dummy that names an entry-scope declare is a different variable all the same: an
+  // absent one still becomes an SDFG container, and unqualified it merged with the entry's (QE's addusxx_g
+  // ``becpsi_r(nkb)`` with the entry's flattened ``becpsi % r``, so the binding bound one to the other).
+  for (auto const& shortName : optionalCalleeShorts) {
+    auto it = shortToScopes.find(shortName);
+    if (it != shortToScopes.end() && it->second.count(entryScope)) collisions.insert(shortName);
   }
 
   // A module record that stays a record (not flattened into companion declares) names each member by composition,
