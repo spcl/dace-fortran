@@ -33,11 +33,13 @@ import numpy as np
 import pytest
 
 from dace_fortran.bindings import build_fortran_library
+from dace_fortran.bindings.frozen_signature import get_frozen_signature
 from dace_fortran.build import build_sdfg
 from dace_fortran.external import Arg, ArgKind, Intent, clear_external_registry, keep_external
 from tests._util import build_on_root
 from tests.icon.ocean._ocean_e2e import (
     _invoke,
+    _module_dim_seeds,
     _resolve_module_seeds,
     _retarget_shim,
     _size_derived_module_dims,
@@ -137,8 +139,8 @@ def _build_artifacts(tmp_path: Path) -> dict:
     binding_files = list((tmp_path / "lib").glob("*bindings.f90"))
     binding_text = binding_files[0].read_text() if binding_files else ""
 
-    # 4. REF: retarget the shim to the original kernel, seeding n_zlev/nproma from array extents
-    module_dims = _size_derived_module_dims(binding_text) if binding_text else []
+    # 4. REF: retarget the shim to the original kernel, seeding the grid-dim module globals n_zlev/nproma
+    module_dims = _size_derived_module_dims(binding_text, get_frozen_signature(sdfg)) if binding_text else []
     ref_shim = tmp_path / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(_retarget_shim(shim, dace_name, _ENTRY, module_dims, _N))
     ref_so = tmp_path / f"lib{dace_name}_ref.so"
@@ -175,6 +177,7 @@ def _build_artifacts(tmp_path: Path) -> dict:
         "dace_name": dace_name,
         "shim": shim,
         "binding_text": binding_text,
+        "module_dims": module_dims,
     }
 
 
@@ -197,6 +200,7 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
     binding_text = art["binding_text"]
     dace_name = art["dace_name"]
     seed_specs = _resolve_module_seeds(binding_text, {}) if binding_text else []
+    seed_specs += _module_dim_seeds(art["module_dims"], _N)
 
     # RTLD_GLOBAL preload so the DUT lib node and REF direct call resolve to the SAME .so instance
     ctypes.CDLL(art["sync_so"], mode=ctypes.RTLD_GLOBAL)

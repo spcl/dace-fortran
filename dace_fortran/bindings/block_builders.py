@@ -1112,10 +1112,9 @@ def _sym_from_array_extent(
     sym: str, frozen: FrozenSignature, exclude: Container[str] | None = None
 ) -> ArrayExtent | None:
     """A free symbol that's a NAMED extent of an array arg (e.g. n_zlev is dim 2 of
-    vn(nproma, n_zlev, nblks_e)). Must take precedence over a same-named module
-    global: ICON's n_zlev is unset (0) in an extracted kernel, and using it would
-    size SDFG transients to zero. ``exclude`` skips degenerate absent-optional args
-    so the symbol falls to a PRESENT array's real extent."""
+    vn(nproma, n_zlev, nblks_e)). The binding asks this only for a symbol that is no
+    module scalar: a module scalar is read from its module. ``exclude`` skips degenerate
+    absent-optional args so the symbol falls to a PRESENT array's real extent."""
     exclude = exclude or set()
     for a in frozen.args:
         if a.kind is not FrozenArgKind.ARRAY:
@@ -1746,24 +1745,24 @@ def _build_symbol_assigns(
             # wrapper aliases the absent optional onto.
             out.extend(_guarded_assign(sym, f"{query.value}({expr}, dim={dim})", guard, absent="1"))
             continue
-        # A NAMED array extent must beat the module-global fallback below: the SDFG
-        # sized its transients by this symbol, so it must equal the actual
-        # allocation, not a possibly-unset namelist global of the same name.
-        ext = _sym_from_array_extent(sym, frozen, exclude=_unsourced_names)
-        if ext is not None:
-            expr, dim = ext
-            guard = optional_array_guards.get((expr or "").lower(), "")
-            out.extend(_guarded_assign(sym, f"size({expr}, dim={dim})", guard, absent="1"))
-            continue
         # The allocation status of a whole module ALLOCATABLE the kernel only tests (QE's
         # ``ALLOCATED(comm_recv)``): its import alias names the entity itself.
         if sym in _module_sources and sym.endswith("_allocated") and sym not in _synth_members:
             out.append(f"    {sym} = int(merge(1, 0, allocated({_module_symbol_alias(sym)})), c_int)")
             continue
-        # Last resort: a module global the kernel reads directly, use-imported
-        # under the __mod alias -- assign from that import.
+        # A module scalar the kernel reads is read from its module, never off an array that names it as an extent:
+        # QE's becpsi%r(nkb, nbnd) is allocated (1, 1) on the k-point path, and nkb = size(becpsi%r, 1) = 1 sized
+        # every nkb buffer of the kernel to one element.
         if sym in _module_sources:
             out.append(f"    {sym} = int({_module_value_expr(sym, _synth_members)}, c_int)")
+            continue
+        # A NAMED array extent of a symbol that is no module scalar: the SDFG sized its transients by this symbol,
+        # so it must equal the actual allocation.
+        ext = _sym_from_array_extent(sym, frozen, exclude=_unsourced_names)
+        if ext is not None:
+            expr, dim = ext
+            guard = optional_array_guards.get((expr or "").lower(), "")
+            out.extend(_guarded_assign(sym, f"size({expr}, dim={dim})", guard, absent="1"))
             continue
         # Presence of a deferred-storage MODULE global: ALLOCATED/ASSOCIATED(g) ->
         # g_allocated, PRESENT(g) -> g_present. Source from the REAL host so a
