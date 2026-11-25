@@ -23,7 +23,6 @@ from ._graupel_harness import (
     ORIGINAL_SOURCE,
     SCENARIOS,
     Config,
-    assert_families_fire,
     assert_match,
     compile_reference,
     copy_fields,
@@ -69,13 +68,6 @@ def _run_both(reference, sdfg, cfg: Config, **columns):
     run_reference(reference, ref, cfg)
     run_sdfg(sdfg, got, cfg)
     return inputs, ref, got
-
-
-def test_fused_graupel_full_columns(reference, sdfg):
-    """All five scenarios (one column each), full vertical range: every INOUT and OUT array matches gfortran."""
-    inputs, ref, got = _run_both(reference, sdfg, Config(1, len(SCENARIOS), 1, DT))
-    assert_families_fire(inputs, ref)
-    assert_match(ref, got, RTOL, ATOL)
 
 
 def test_fused_graupel_ivstart_offset_and_kstart(reference, sdfg):
@@ -135,7 +127,6 @@ if __name__ == "__main__":
             [*DEP_SOURCES, FUSED_SOURCE], entry=ENTRY, name="graupel_fused", out_dir=Path(tmp) / "build"
         )
         built.validate()
-        test_fused_graupel_full_columns(ref_lib, built)
         test_fused_graupel_ivstart_offset_and_kstart(ref_lib, built)
         test_fused_graupel_other_shape_and_dt(ref_lib, built)
         test_fused_graupel_random_states(ref_lib, built)

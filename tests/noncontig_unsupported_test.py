@@ -24,10 +24,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"
 # test_gather_scatter_aliasing_same_array there (xfailed).
 
 
-def test_placeholder_for_future_unsupported_cases(tmp_path: Path):
-    """Stub -- add bail-out tests here when new deliberately-unsupported patterns are introduced."""
-
-
 def test_virtual_dispatch_bails_loudly(tmp_path: Path):
     """Genuinely runtime-polymorphic fir.dispatch -- a polymorphic dummy
     class(t) the function itself dispatches on. Flang's static devirtualisation

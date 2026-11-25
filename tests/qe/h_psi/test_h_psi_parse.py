@@ -357,8 +357,8 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
     declared for 'nyfft'`` at line 4479.  With both applied flang
     processes the file to HLFIR with only the ``DOUBLE PRECISION :: max``
     intrinsic-shadow warning.  This pins the preprocessing's correctness
-    independently of the bridge: when the full SDFG path also lands,
-    ``test_h_psi_parses`` flips.
+    independently of the bridge, which ``test_h_psi_numerical_correctness``
+    drives.
     """
     import subprocess
 
@@ -383,21 +383,6 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
     )
     assert result.returncode == 0, f"flang rejected the rewritten source:\n{result.stderr[:2000]}"
     assert out.exists() and out.stat().st_size > 0, "flang did not produce a HLFIR output"
-
-
-# The full h_psi build takes ~25 minutes (h_psi inlines ~9.6k lines): a long test, run by the CI heavy lanes.
-@pytest.mark.long
-@pytest.mark.timeout(3600)
-def test_h_psi_parses(tmp_path):
-    """End-to-end SDFG build for ``h_psi``: the QE checkpoint parses,
-    inlines, and lowers to a validated SDFG, with the routines the bridge
-    does not lower kept external (see :func:`_keep_unlowerable_routines_external`)."""
-    _keep_unlowerable_routines_external()
-    src = _preprocess(_SRC.read_text())
-    sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="h_psi")
-    sdfg.validate()
-    assert sdfg is not None
-    assert any("h_psi" in name for name in sdfg.arrays) or "h_psi" in str(sdfg.label)
 
 
 _CALLER = _HERE / "h_psi_caller.f90"
@@ -561,7 +546,7 @@ def test_fftx_c2psi_k_tg_indexes_only_by_symbols(tmp_path):
     sdfg.compile()
 
 
-# Builds the same SDFG as test_h_psi_parses, then compiles it and its binding.
+# Builds the h_psi SDFG, then compiles it and its binding.
 @pytest.mark.long
 @pytest.mark.timeout(7200)
 def test_h_psi_numerical_correctness(tmp_path):

@@ -1,7 +1,7 @@
 """Regression: literal-lower-bound heuristic must not poison an explicit-shape
 (fir.ShapeOp) array's offset.
 
-cloudsc shape (cloudsc_bottom_lower.F90:1574-91): mixed constant/loop 3rd-dim
+cloudsc shape (a cloudsc.F90 lower-half extract, lines 1574-91): mixed constant/loop 3rd-dim
 subscripts made ``inferLowerBoundsFromLiteralAccesses`` mis-resolve via
 ``traceConstIntThroughLoad`` to a ``-999`` sentinel offset -> OOB store
 (segfault/garbage). Fix gates the heuristic off plain-shape declares (lower

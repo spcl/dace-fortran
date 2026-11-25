@@ -1,6 +1,6 @@
 """Implicit microphysics solver pipeline from CLOUDSC (cloudscexp2_simplified.F90 lines
 3257-3380): ZQLHS construction, ZQXN RHS init, LU forward+back substitution (also
-covered alone in cloudsc_lu_solver_test.py), sub-epsilon clamp, ZQXN2D/ZQXNM1 carry,
+covered alone in test_sdfg_equivalence.py), sub-epsilon clamp, ZQXN2D/ZQXNM1 carry,
 precip-flux + ZCOVPTOT reset -- six loopnests run back to back.
 
 Origin of cloudsc_full's per-step flux errors at JK=22,34,39,48; running the full chain

@@ -11,7 +11,7 @@ microkernel, and a sibling of the ``exx_bp::vexx_bp_k_gpu`` /
 Unlike those siblings, this checkpoint needs NO source rewrites to parse
 (no empty ``fft_interfaces`` block, no dropped declaration), so flang and
 gfortran accept it verbatim (``test_newdxx_g_flang_parses`` pins that) and
-the SDFG build lands cleanly (``test_newdxx_g_parses``).
+the SDFG build lands cleanly (``test_newdxx_g_numerical_correctness``).
 
 This harness drives the ACTIVE ultrasoft path: ``okvan = .TRUE.`` with
 ``flag = 'c'`` (the complex / non-gamma case).  ``newdxx_g`` then runs its
@@ -38,7 +38,6 @@ See ``newdxx_g_caller.f90`` for the C-callable driver harness.
 
 from pathlib import Path
 
-import dace_fortran
 from tests._util import flang_binary, flang_intrinsic_modules_path
 
 _HERE = Path(__file__).resolve().parent
@@ -131,18 +130,6 @@ def test_newdxx_g_flang_parses(tmp_path):
     )
     assert result.returncode == 0, f"flang rejected the checkpoint:\n{result.stderr[:2000]}"
     assert out.exists() and out.stat().st_size > 0, "flang did not produce a HLFIR output"
-
-
-def test_newdxx_g_parses(tmp_path):
-    """End-to-end SDFG build for ``newdxx_g``: the QE checkpoint parses,
-    inlines, and lowers to a validated SDFG.  This small self-contained
-    kernel builds cleanly (no downstream gap), so the build returns a
-    validated SDFG."""
-    src = _SRC.read_text()
-    sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="newdxx_g")
-    sdfg.validate()
-    assert sdfg is not None
-    assert any("newdxx_g" in name for name in sdfg.arrays) or "newdxx_g" in str(sdfg.label)
 
 
 def _compile_reference(tmp_path):

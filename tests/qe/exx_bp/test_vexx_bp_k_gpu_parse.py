@@ -199,6 +199,7 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     assert out.exists() and out.stat().st_size > 0, "flang did not produce a HLFIR output"
 
 
+# Reproducer: module-level struct global vcut_a not flattened, KeyError in the bridge (55521e5)
 def test_vexx_bp_k_gpu_parses(tmp_path):
     """End-to-end SDFG build for vexx_bp_k_gpu: QE checkpoint parses, inlines,
     and lowers to a validated SDFG. Previously xfailed on KeyError: 'vcut_a'

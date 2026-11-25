@@ -8,7 +8,7 @@ import numpy as np
 from dace import SDFG
 
 from dace_fortran.pipelines import accepted_call_args, verify_numerics
-from tests._util import build_sdfg, f2py_compile
+from tests._util import f2py_compile
 from tests.cloudsc.full._registries import CLOUDSC_F90FLAGS, get_inputs_physical, get_outputs
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
@@ -59,12 +59,6 @@ def f2py_reference(out_dir: Path):
     return f2py_compile(
         _FULL_SOURCE.read_text(), out_dir, "cloudsc_ref", extra_f90flags=CLOUDSC_F90FLAGS, only=(_ENTRY,)
     )
-
-
-def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42):
-    """Build the SDFG of ``src`` and :func:`run_against_reference` it as built."""
-    sdfg_dir.mkdir(parents=True, exist_ok=True)
-    return run_against_reference(build_sdfg(src, sdfg_dir, name=name, entry=_ENTRY).build(), f2py_ref, seed=seed)
 
 
 def run_against_reference(sdfg: SDFG, f2py_ref, *, unoptimized: SDFG | None = None, seed: int = 42):
