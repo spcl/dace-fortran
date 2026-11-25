@@ -491,6 +491,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
       .def_ro("bounds_remap_source_subset", &VarInfo::bounds_remap_source_subset)
       .def_ro("unbindable_section", &VarInfo::unbindable_section)
+      .def_ro("kernel_scoped_alloc", &VarInfo::kernel_scoped_alloc)
       .def_ro("aos_origin_mod", &VarInfo::aos_origin_mod)
       .def_ro("aos_origin_struct", &VarInfo::aos_origin_struct)
       .def_ro("aos_member_path", &VarInfo::aos_member_path)
