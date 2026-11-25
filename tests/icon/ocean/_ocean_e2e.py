@@ -24,6 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
+from dace_fortran.bindings.block_builders import _sym_from_array_extent
+from dace_fortran.bindings.frozen_signature import FrozenSignature, get_frozen_signature
+
 _HERE = Path(__file__).resolve().parent
 
 # Fortran C-ABI type -> (numpy dtype, ctypes value type).
@@ -68,23 +71,23 @@ def _module_symbol_map(binding: str) -> dict:
     return sym_module
 
 
-def _size_derived_module_dims(binding: str):
-    """ICON grid-DIMENSION module globals the DUT binding derives from an array
-    extent (``n_zlev = int(size(psi_c, dim=2), c_int)``, ``nproma``, etc).
+def _size_derived_module_dims(binding: str, frozen: FrozenSignature):
+    """ICON grid-DIMENSION module globals that name an array extent of the kernel
+    (``n_zlev`` of ``psi_c(nproma, n_zlev, nblks)``, ``nproma``, etc).
 
-    An isolated kernel reads these as BSS=0, sizing automatic locals to zero ->
-    OOB; the SDFG path derives them as free symbols instead, so the reference
-    must seed them too (every extent here is mesh size ``n``).  Returns
-    ``[(sym, module), ...]`` for syms with a ``size()`` derivation; a directly-read
-    global goes through :func:`_resolve_module_seeds` instead.
+    The binding reads them from their module, and an isolated kernel reads them
+    as BSS=0, sizing automatic locals and SDFG transients to zero -> OOB, so the
+    harness seeds them on both sides (every extent here is mesh size ``n``).
+    Returns ``[(sym, module), ...]``; a config global that names no extent goes
+    through :func:`_resolve_module_seeds` instead.
     """
     sym_module = _module_symbol_map(binding)
-    seen, out = set(), []
-    for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.MULTILINE):
-        if sym in sym_module and sym not in seen:
-            seen.add(sym)
-            out.append((sym, sym_module[sym]))
-    return out
+    return [(sym, module) for sym, module in sym_module.items() if _sym_from_array_extent(sym, frozen) is not None]
+
+
+def _module_dim_seeds(module_dims, n: int):
+    """``module_dims`` as ``in_dll`` seeds of value ``n`` for both ``.so``s (see :func:`_resolve_module_seeds`)."""
+    return [(f"__{module}_MOD_{sym}", 1, int(n)) for sym, module in module_dims]
 
 
 def _resolve_module_seeds(binding: str, seeds: dict):
@@ -610,10 +613,11 @@ def build_dut_and_ref(
     # from the binding's ``<sym> = int(size(...))`` lines.
     binding_files = list((out / "lib").glob("*bindings.f90"))
     binding_text = binding_files[0].read_text() if binding_files else ""
-    module_dims = _size_derived_module_dims(binding_text) if binding_text else []
+    module_dims = _size_derived_module_dims(binding_text, get_frozen_signature(sdfg)) if binding_text else []
     # Config globals read straight from the module (nproma/nflatlev/...) -- BSS 0
     # in isolation, so seeded on both sides to test-supplied namelist values.
     seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
+    seed_specs += _module_dim_seeds(module_dims, n)
     array_specs = _resolve_module_array_seeds(binding_text, module_array_seeds or {}) if binding_text else []
     # t_ocean_solve mixes ALLOCATABLE and POINTER scratch members; the pre-alloc
     # guard must match each kind (allocated rejects a pointer) -- recovered from
