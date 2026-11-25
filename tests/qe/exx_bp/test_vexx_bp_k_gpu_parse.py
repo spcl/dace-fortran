@@ -174,6 +174,35 @@ subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jbloc
 end subroutine run_vexx_dace_c
 """
 
+# The USPP driver: the USPP state (its own becxx) and a becpsi the reference fills the same way.
+_SDFG_DRIVER_USPP = (
+    _SDFG_DRIVER.replace(
+        "call init_vexx_bp_k_gpu_perf_state_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in)",
+        "call init_vexx_bp_k_gpu_uspp_state_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in)",
+    )
+    .replace(
+        "    subroutine init_vexx_bp_k_gpu_perf_state_c(",
+        "    subroutine init_vexx_bp_k_gpu_uspp_state_c(lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in) &\n"
+        '        bind(c, name="init_vexx_bp_k_gpu_uspp_state_c")\n'
+        "      use, intrinsic :: iso_c_binding\n"
+        "      integer(c_int), value :: lda, n, m, npol_in, max_ibands_in, nnr, nqs_in, jblock_in\n"
+        "    end subroutine\n"
+        "    subroutine init_vexx_bp_k_gpu_perf_state_c(",
+    )
+    .replace(
+        """  if (allocated(becxx)) deallocate(becxx)
+  allocate(becxx(1))
+  allocate(becxx(1)%k(1,1));  becxx(1)%k = (0.0_dp, 0.0_dp)
+""",
+        "",
+    )
+    # The binding c_loc's every becpsi component: r and nc stay allocated, only k is refilled.
+    .replace(
+        "  becpsi%nbnd = 1\n",
+        "  becpsi%nbnd = 1\n  call fill_uspp_becpsi(becpsi, max_ibands_in)\n",
+    )
+)
+
 
 def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     """_restore_fft_interfaces rewrites the source to a flang-parseable form.
@@ -304,7 +333,7 @@ def test_vexx_bp_k_gpu_reference_runs(tmp_path):
     np.testing.assert_array_equal(hpsi_out, hpsi_in)
 
 
-def build_and_run_vexx_sdfg(tmp_path, dims, psi, hpsi, sdfg_hook=None, name="vexx_bp_k_gpu"):
+def build_and_run_vexx_sdfg(tmp_path, dims, psi, hpsi, sdfg_hook=None, name="vexx_bp_k_gpu", driver=_SDFG_DRIVER):
     """Build the vexx_bp_k_gpu SDFG, bind it through the generated Fortran binding and run it in place on psi/hpsi.
 
     ``dims`` is (lda, n, m, npol, max_ibands, nnr, nqs, jblock); nqs == 0 runs the no-op state, otherwise the real
@@ -332,7 +361,7 @@ def build_and_run_vexx_sdfg(tmp_path, dims, psi, hpsi, sdfg_hook=None, name="vex
         sdfg_hook(sdfg)
 
     driver_path = tmp_path / "driver.f90"
-    driver_path.write_text(_SDFG_DRIVER.replace("vexx_bp_k_gpu_dace", f"{name}_dace"))
+    driver_path.write_text(driver.replace("vexx_bp_k_gpu_dace", f"{name}_dace"))
 
     lib = build_fortran_library(
         sdfg,
@@ -360,6 +389,22 @@ def run_exchange_reference(tmp_path, dims, psi, hpsi):
     init.argtypes = [ctypes.c_int] * 8
     init.restype = None
     init(*dims)
+    lda, n, m = dims[:3]
+    run(lda, n, m, psi.ctypes.data, hpsi.ctypes.data)
+
+
+def run_uspp_reference(tmp_path, dims, psi, hpsi):
+    """gfortran reference on the USPP exchange-path state, in place on psi/hpsi."""
+    import ctypes
+
+    lib, _, _ = _compile_reference(tmp_path)
+    init = lib.init_vexx_bp_k_gpu_uspp_state_c
+    init.argtypes = [ctypes.c_int] * 8
+    init.restype = None
+    init(*dims)
+    run = lib.run_vexx_bp_k_gpu_uspp_c
+    run.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+    run.restype = None
     lda, n, m = dims[:3]
     run(lda, n, m, psi.ctypes.data, hpsi.ctypes.data)
 
@@ -432,6 +477,42 @@ def test_vexx_bp_k_gpu_exchange_numerical_correctness(tmp_path):
 
     build_and_run_vexx_sdfg(tmp_path, EXCHANGE_DIMS, psi_dace, hpsi_dace, name="vexx_bp_k_gpu_exchange")
 
+    np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)
+
+
+# USPP exchange path: 300 plane waves, so the augmentation runs over two blocks of 256 (the second partial).
+USPP_DIMS = (300, 300, 3, 1, 3, 320, 2, 2)
+
+
+def test_vexx_bp_k_gpu_uspp_reference_adds_the_augmentation(tmp_path):
+    """With okvan the gfortran reference adds the ultrasoft augmentation: hpsi differs from the norm-conserving
+    exchange on the same state."""
+    import numpy as np
+
+    lda, n, m, npol, max_ibands = USPP_DIMS[:5]
+    psi, hpsi_in = _make_random_inputs(lda, npol, max_ibands)
+    plain, uspp = hpsi_in.copy(order="F"), hpsi_in.copy(order="F")
+    (tmp_path / "plain").mkdir()
+    (tmp_path / "uspp").mkdir()
+    run_exchange_reference(tmp_path / "plain", USPP_DIMS, psi.copy(order="F"), plain)
+    run_uspp_reference(tmp_path / "uspp", USPP_DIMS, psi.copy(order="F"), uspp)
+    assert np.all(np.abs(uspp - plain)[:n, :m] > 1e-9), "the USPP state did not change the exchange term"
+
+
+@pytest.mark.timeout(1800)
+def test_vexx_bp_k_gpu_uspp_numerical_correctness(tmp_path):
+    """The default codegen matches gfortran on the USPP exchange path: qvan_init, addusxx_g over two blocks,
+    newdxx_g and add_nlxx_pot all run."""
+    import numpy as np
+
+    lda, _, _, npol, max_ibands = USPP_DIMS[:5]
+    psi_ref, hpsi_ref = _make_random_inputs(lda, npol, max_ibands)
+    psi_dace, hpsi_dace = psi_ref.copy(order="F"), hpsi_ref.copy(order="F")
+    (tmp_path / "ref").mkdir()
+    run_uspp_reference(tmp_path / "ref", USPP_DIMS, psi_ref, hpsi_ref)
+    build_and_run_vexx_sdfg(
+        tmp_path, USPP_DIMS, psi_dace, hpsi_dace, name="vexx_bp_k_gpu_uspp", driver=_SDFG_DRIVER_USPP
+    )
     np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)
 
 
