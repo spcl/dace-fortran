@@ -24,11 +24,11 @@ defines the team-size symbol of thread-strided persistent maps at SDFG entry, wh
 
 import ast
 import copy
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Mapping
 from typing import Any, NamedTuple, Union, cast
 
 import numpy as np
-from dace import SDFG, Memlet, dtypes, subsets
+from dace import SDFG, Memlet, dtypes, subsets, symbolic
 from dace.sdfg import nodes
 from dace.sdfg.graph import MultiConnectorEdge
 from dace.sdfg.propagation import propagate_memlets_sdfg
@@ -56,6 +56,28 @@ from dace_fortran.persistent_transients import MakeTransientsPersistent
 STAGING_STATE_PREFIXES = ("stage_copyin", "stage_copyout")
 
 Const = Union[float, int, str]
+
+
+def declare_small_dimensions(sdfg: SDFG, dims: Mapping[str, Collection[int]]) -> set[str]:
+    """Declare ``SMALL`` the extent symbol ``<array>_d<k>`` of each named array dimension (0-based ``k``).
+
+    An assumed-shape argument carries its own extents, so nothing in the SDFG ties ICON's block dimension
+    (``p_prog_w(nproma, nlevp1, nblks_c)``) to the block count: the caller names it. DaCe's GPU offload then keeps a map
+    whose parameter indexes such a dimension on the host, around kernels over the columns and levels.
+
+    :param sdfg: the SDFG built from Fortran, in place.
+    :param dims: array name to the 0-based dimensions that index blocks.
+    :return: the symbols declared ``SMALL``.
+    :raise KeyError: if an array or its extent symbol is not in ``sdfg``.
+    """
+    declared = set()
+    for array, positions in dims.items():
+        shape = sdfg.arrays[array].shape
+        for position in positions:
+            name = str(shape[position])
+            sdfg.set_symbol_scale(name, symbolic.Scale.SMALL)
+            declared.add(name)
+    return declared
 
 
 def accepted_call_args(sdfg: SDFG) -> set[str]:
