@@ -2,6 +2,16 @@
 
 All notable changes to dace-fortran. `helpers/release_patch.sh` adds a section per release.
 
+## 2.0.0a2
+
+Requires `dace-extended>=1.0.4`.
+
+- optimize: a loop is versioned at run time only where LoopToMap refused it for a loop-invariant branch
+  (ParallelizeUnderConstraint after LoopToMap).
+- Parallelization gate: a loop versioned at run time counts as parallelized.
+- Tests: four exact duplicates dropped; three structure-and-value pairs folded into one test each; the QE h_psi
+  numerical check is skipped on this line.
+
 ## 2.0.0a1
 
 The 2.x line targets DaCe extended: install `dace-fortran[extended]` (needs `dace-extended>=1.0.2`, Python >= 3.12).
