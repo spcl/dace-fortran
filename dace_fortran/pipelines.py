@@ -44,6 +44,7 @@ from dace.transformation.interstate.state_fusion_with_happens_before import Stat
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
+from dace.transformation.passes.parallelization.contracts.under_constraint import ParallelizeUnderConstraint
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
@@ -423,6 +424,9 @@ def optimize(
     fission_scalars(sdfg)
     order_free_reductions(sdfg)
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
+    # A loop LoopToMap refused only for a branch on a loop-invariant condition (CloudSC: IF (LAERICESED .AND.
+    # JM == NCLDQI) around the jl loop) becomes two versions: a map when the condition is false, the loop otherwise.
+    ParallelizeUnderConstraint().apply_pass(sdfg, {})
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
     # LoopToMap nests every loop body; pushing guards into the inner maps and inlining the bodies leaves map nests
     # that MapCollapse below turns into one multi-dimensional map (VT: nproma x nlev kernels).
