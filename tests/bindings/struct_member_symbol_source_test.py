@@ -136,6 +136,51 @@ def test_plan_entry_still_wins_over_struct_layout_fallback():
     assert "TODO: no plan entry gives size" not in text
 
 
+# Reproducer: ICON solve_nh failed to bind ("no source for the free symbol 'p_patch_comm_pat_c_n_recv'"): its halo
+# buffers are sized by p_patch%comm_pat_c%n_recv, and the layout left the POINTER member comm_pat_c out
+def test_a_symbol_read_through_a_pointer_record_is_sourced_under_its_association():
+    iface = OriginalInterface(
+        entry="solve_nh",
+        args=(OriginalArg(name="p_patch", fortran_type="type(t_patch)", rank=0, intent="in", struct_type="t_patch"),),
+        struct_types={
+            "t_patch": DerivedType(
+                name="t_patch",
+                module="m",
+                members=(Member(name="nlev", fortran_type="integer(c_int)", rank=0),),
+                handles=(
+                    Member(name="comm_pat_c", fortran_type="type(t_pat)", rank=0, struct_name="t_pat", alloc="pointer"),
+                ),
+            ),
+            # A pattern that points at itself: the walk takes each type once per path
+            "t_pat": DerivedType(
+                name="t_pat",
+                module="m",
+                members=(Member(name="n_recv", fortran_type="integer(c_int)", rank=0),),
+                handles=(
+                    Member(name="next", fortran_type="type(t_pat)", rank=0, struct_name="t_pat", alloc="pointer"),
+                ),
+            ),
+        },
+    )
+    frozen = FrozenSignature(
+        entry="solve_nh",
+        mangled="_QPsolve_nh",
+        args=(),
+        free_symbols=("p_patch_comm_pat_c_n_recv",),
+        size_symbols=("p_patch_comm_pat_c_n_recv",),
+    )
+
+    lines = _build_symbol_assigns(frozen, FlattenPlan(entries=()), {"p_patch"}, iface)
+
+    assert lines == [
+        "    if (associated(p_patch%comm_pat_c)) then",
+        "      p_patch_comm_pat_c_n_recv = int(p_patch%comm_pat_c%n_recv, c_int)",
+        "    else",
+        "      p_patch_comm_pat_c_n_recv = 0",
+        "    end if",
+    ]
+
+
 if __name__ == "__main__":
     import pytest
 

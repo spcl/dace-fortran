@@ -158,6 +158,9 @@ struct FortranStructLayout {
   std::string module;  // defining module (``mo_fld``), or ``""`` for a
                        // host-associated / program-local type
   std::vector<FortranMemberInfo> members;
+  // Pointer-to-record members (ICON's ``comm_pat_c``), kept out of ``members`` (the C ABI) and listed only so the
+  // binding can read the scalars a kernel extent comes from through them
+  std::vector<FortranMemberInfo> handles;
 };
 
 /// The whole caller-facing surface of one entry: its dummies in order, plus the ``use <mod>, only: <syms>`` set the

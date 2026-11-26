@@ -4794,7 +4794,18 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
           // record>>>``, for which ``pointerToRecordMember`` returns
           // null, so it is NOT skipped here and marshals per record
           // field as before.)
-          if (pointerToRecordMember(p.second)) continue;
+          if (auto pointee = pointerToRecordMember(p.second)) {
+            FortranMemberInfo h;
+            h.name = p.first;
+            bool const heap = mlir::isa<fir::HeapType>(mlir::cast<fir::BoxType>(p.second).getEleTy());
+            h.alloc = heap ? "allocatable" : "pointer";
+            parseRecordName(pointee.getName(), h.struct_module, h.struct_name);
+            if (!h.struct_name.empty()) {
+              nested.emplace_back(pointee, std::make_pair(h.struct_module, h.struct_name));
+              slot.handles.push_back(std::move(h));
+            }
+            continue;
+          }
           FortranMemberInfo m;
           m.name = p.first;
           mlir::Type mt = p.second;

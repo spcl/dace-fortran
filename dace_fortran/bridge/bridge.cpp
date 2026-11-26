@@ -337,6 +337,16 @@ class HLFIRModule {
         members.append(md);
       }
       sd["members"] = members;
+      nb::list handles;
+      // Over the pointer-to-record members: name and pointee type, for symbol sources only
+      for (auto& h : layout.handles) {
+        nb::dict hd;
+        hd["name"] = h.name;
+        hd["struct_name"] = h.struct_name;
+        hd["alloc"] = h.alloc;
+        handles.append(hd);
+      }
+      sd["handles"] = handles;
       struct_types[kv.first.c_str()] = sd;
     }
     return out;

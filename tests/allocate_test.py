@@ -143,5 +143,52 @@ end subroutine
         build_sdfg(src, tmp_path, name="top", entry="top").build()
 
 
+# Reproducer: QE h_psi stopped building: ``ALLOCATE(iexx_istart_d, SOURCE = iexx_istart)`` copies an allocatable whose
+# lower bound flang reads off its descriptor, which the pass left as a runtime call
+@pytest.mark.parametrize("low", [0, 1])
+def test_allocate_with_source_takes_the_lower_bound_of_an_allocatable_source(tmp_path, low):
+    src = f"""
+subroutine top(n, b, lo)
+  integer, intent(in) :: n
+  integer, intent(out) :: b(n), lo
+  integer, allocatable :: s(:), t(:)
+  integer :: i
+  allocate(s({low}:n + {low} - 1))
+  do i = {low}, n + {low} - 1
+    s(i) = 10 * i
+  end do
+  allocate(t, source=s)
+  lo = lbound(t, 1)
+  do i = 1, n
+    b(i) = t(i + {low} - 1) + 1
+  end do
+  deallocate(s, t)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    b, lo = np.zeros(5, np.int32), np.zeros(1, np.int32)
+    sdfg(n=5, b=b, lo=lo)
+    assert lo[0] == low
+    np.testing.assert_array_equal(b, 10 * np.arange(low, low + 5) + 1)
+
+
+def test_allocate_with_source_of_a_run_time_lower_bound_is_refused(tmp_path):
+    """The copy's lower bound would be ``k``, which the frontend cannot name for it: refused, never taken as 1."""
+    src = """
+subroutine top(n, k, b)
+  integer, intent(in) :: n, k
+  integer, intent(out) :: b(n)
+  integer, allocatable :: s(:), t(:)
+  allocate(s(k:k + n - 1))
+  s = 1
+  allocate(t, source=s)
+  b = t
+  deallocate(s, t)
+end subroutine
+"""
+    with pytest.raises(Exception, match=r"SOURCE=\.\.\.\)"):
+        build_sdfg(src, tmp_path, name="top", entry="top").build()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

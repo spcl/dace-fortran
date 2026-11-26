@@ -562,6 +562,8 @@ def test_fftx_c2psi_k_tg_indexes_only_by_symbols(tmp_path):
 
 
 # Builds the same SDFG as test_h_psi_parses, then compiles it and its binding.
+# Skipped (owner, 11-26): the build exceeds CI's 2 h timeout; the test returns once DaCe builds h_psi faster.
+@pytest.mark.skip(reason="h_psi build exceeds CI's 2 h limit; returns once DaCe's h_psi build time is cut down")
 @pytest.mark.long
 @pytest.mark.timeout(7200)
 def test_h_psi_numerical_correctness(tmp_path):

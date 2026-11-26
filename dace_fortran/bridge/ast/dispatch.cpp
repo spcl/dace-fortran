@@ -2215,7 +2215,8 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // An ALLOCATE(..., SOURCE=...) hlfir-lower-allocate-source left as a runtime call (a scalar or polymorphic
   // allocatable, a lower bound other than 1): its copy has no model here, and dropping it would lose the source's
   // values
-  if (n.callee == "_FortranAAllocatableAllocateSource")
+  // n.callee is the printed symbol reference (``@_FortranA...``)
+  if (n.callee == "@_FortranAAllocatableAllocateSource")
     throw std::runtime_error(
         "ALLOCATE(..., SOURCE=...) of a scalar or polymorphic allocatable, or with a lower bound "
         "other than 1, is not supported");
