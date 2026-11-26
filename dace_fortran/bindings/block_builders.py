@@ -1603,7 +1603,8 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSourc
                     # EVERY dim (kernel reads the single-domain first element, same
                     # constant index the access generator prepends).
                     idx1 = ", ".join(["1"] * m.rank)
-                    walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc, through)
+                    # The path records this type too: a member record pointing back to it would recurse forever
+                    walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc, (*through, st.name))
                 continue
             member_paths[msym] = macc
             if m.rank == 0:
