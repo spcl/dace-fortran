@@ -8,6 +8,7 @@ form, which folds every value in one pass and also reaches the tasklets the valu
 
 import copy
 import numbers
+from collections.abc import Mapping
 from typing import cast
 
 import dace
@@ -199,7 +200,7 @@ def _specialize_scalar_impl(root: "dace.SDFG", sdfg: "dace.SDFG", scalars: dict[
             _specialize_scalar_impl(root, nsdfg_node.sdfg, inner)
 
 
-def _interacting(values: dict[str, float | int | str]) -> bool:
+def _interacting(values: Mapping[str, float | int | str]) -> bool:
     """Whether a value names another entry (``{a: 'b+1', b: '2'}``), where one batched substitution differs from
     substituting one at a time."""
     import re
@@ -217,7 +218,7 @@ def specialize_scalar(sdfg: "dace.SDFG", scalar_name: str, scalar_val: float | s
     specialize_scalars(sdfg, {scalar_name: scalar_val})
 
 
-def specialize_scalars(sdfg: "dace.SDFG", values: dict[str, float | int | str]):
+def specialize_scalars(sdfg: "dace.SDFG", values: Mapping[str, float | int | str]):
     """Bake scalar data containers to constant values, recursively through nested SDFGs, in one walk: reads fold
     into the tasklets, edges and connectors go, and loop/branch conditions and interstate edges are rewritten.
 
@@ -242,7 +243,7 @@ def specialize_scalars(sdfg: "dace.SDFG", values: dict[str, float | int | str]):
     _specialize_scalar_impl(sdfg, sdfg, scalars)
 
 
-def specialize_symbols(sdfg: "dace.SDFG", values: dict[str, float | int | str]) -> None:
+def specialize_symbols(sdfg: "dace.SDFG", values: Mapping[str, float | int | str]) -> None:
     """Bake free symbols to constant values in one walk over every nested SDFG, dropping them from each
     ``symbol_mapping``. For a scalar data container holding the value, use :func:`specialize_scalars`.
 
