@@ -1850,6 +1850,9 @@ def _build_symbol_assigns(
         if sym in _struct_member_sources:
             out.extend(_guarded_assign(sym, _struct_member_sources[sym], _member_sym_guard(sym)))
             continue
-        # An unset extent must never reach an allocate or the SDFG (QE's qgm(ngms, nij) was allocated at an unset nij).
-        raise ValueError(f"the binding of {frozen.entry} has no source for the free symbol {sym!r}")
+        # An unset extent must never reach an allocate (QE's qgm(ngms, nij) was allocated at an unset nij)
+        if sym in frozen.size_symbols:
+            raise ValueError(f"the binding of {frozen.entry} has no source for the free symbol {sym!r}")
+        # A symbol that sizes nothing (a status a call the kernel keeps sets, ICON ocean's n_it_sp) gets a fixed value
+        out.append(f"    {sym} = 0  ! no caller value, and it sizes no array")
     return out

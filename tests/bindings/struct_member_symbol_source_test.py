@@ -200,6 +200,7 @@ def test_a_symbol_read_through_a_pointer_record_is_sourced_under_its_association
         mangled="_QPsolve_nh",
         args=(),
         free_symbols=("p_patch_comm_pat_c_n_recv",),
+        size_symbols=("p_patch_comm_pat_c_n_recv",),
     )
 
     lines = _build_symbol_assigns(frozen, FlattenPlan(entries=()), {"p_patch"}, iface)

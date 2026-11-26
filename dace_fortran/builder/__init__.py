@@ -46,7 +46,7 @@ import weakref
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, cast
 
-from dace import SDFG, InterstateEdge, SDFGState, config
+from dace import SDFG, InterstateEdge, SDFGState, config, symbolic
 from dace.data import Data
 from dace.frontend.python import astutils
 from dace.properties import CodeBlock
@@ -2078,11 +2078,21 @@ class SDFGBuilder:
         name_map = self.dace_name_map
         for name, origin in origin_by_name.items():
             module_symbol_origins.setdefault(name_map.get(name) or name, origin)
+        # Over every array of the SDFG and its nested SDFGs: the free symbols its shape reads
+        shaped_by = {
+            str(s)
+            for sd in sdfg.all_sdfgs_recursive()
+            for desc in sd.arrays.values()
+            for extent in desc.shape
+            if symbolic.issymbolic(extent)
+            for s in extent.free_symbols
+        }
         fs = FrozenSignature(
             entry=sdfg.name,
             mangled=next((v.mangled_name for v in self.arrays.values() if v.mangled_name), sdfg.name),
             args=tuple(args_list),
             free_symbols=free_syms,
+            size_symbols=tuple(s for s in free_syms if s in shaped_by),
             module_symbol_origins=module_symbol_origins,
             module_symbol_members=module_symbol_members,
         )
