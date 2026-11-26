@@ -2212,6 +2212,13 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
       return;
     }
   }
+  // An ALLOCATE(..., SOURCE=...) hlfir-lower-allocate-source left as a runtime call (a scalar or polymorphic
+  // allocatable, a lower bound other than 1): its copy has no model here, and dropping it would lose the source's
+  // values
+  if (n.callee == "_FortranAAllocatableAllocateSource")
+    throw std::runtime_error(
+        "ALLOCATE(..., SOURCE=...) of a scalar or polymorphic allocatable, or with a lower bound "
+        "other than 1, is not supported");
   // Fortran I/O runtime call: advances the open/read/write/close state machine (see recognizeIoCall); consumed here
   // either way.
   if (n.callee.find("_FortranAio") != std::string::npos) {

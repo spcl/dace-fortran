@@ -99,5 +99,49 @@ end subroutine
     np.testing.assert_allclose(b, want, rtol=1e-14)
 
 
+# Reproducer: ICON velocity and solve_nh stopped building: their sources hold a CLASS(*) ``ALLOCATE(.., SOURCE=..)``
+# (mo_key_value_store) the kernel never calls, and the pass failed the whole module on it
+def test_an_unsupported_allocate_with_source_the_kernel_never_calls_builds(tmp_path):
+    src = """
+module store
+  implicit none
+contains
+  subroutine put(val)
+    class(*), intent(in) :: val
+    class(*), pointer :: obj
+    allocate(obj, source=val)
+  end subroutine
+end module
+
+subroutine top(n, a, b)
+  integer, intent(in) :: n
+  double precision, intent(in) :: a(n)
+  double precision, intent(out) :: b(n)
+  b = 2 * a
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    a = np.arange(4, dtype=np.float64)
+    b = np.zeros(4)
+    sdfg(n=4, a=a, b=b)
+    np.testing.assert_array_equal(b, 2 * a)
+
+
+def test_a_scalar_allocate_with_source_the_kernel_runs_is_refused(tmp_path):
+    """The copy a scalar ``ALLOCATE(.., SOURCE=..)`` performs has no lowering: dropping it would leave ``t`` empty."""
+    src = """
+subroutine top(x, y)
+  double precision, intent(in) :: x
+  double precision, intent(out) :: y
+  double precision, allocatable :: t
+  allocate(t, source=x)
+  y = 2 * t
+  deallocate(t)
+end subroutine
+"""
+    with pytest.raises(Exception, match=r"SOURCE=\.\.\.\) of a scalar or polymorphic allocatable"):
+        build_sdfg(src, tmp_path, name="top", entry="top").build()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

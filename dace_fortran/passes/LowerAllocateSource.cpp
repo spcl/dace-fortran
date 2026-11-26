@@ -19,9 +19,10 @@
 //     fir.allocmem with the SetBounds extents, fir.shape + fir.embox + fir.store into x's
 //     descriptor, then ``hlfir.assign y to x realloc``.  The runtime's stat result becomes 0.
 //
-// Limits (rejected with an error, never lowered silently wrong):
+// Limits (left as runtime calls, never lowered silently wrong):
 //     a lower bound other than the literal 1, a scalar or polymorphic allocatable, a missing
-//     SetBounds for some dim.
+//     SetBounds for some dim. The bridge refuses such a call where a translated procedure makes it;
+//     a module procedure the kernel never calls (ICON's CLASS(*) key-value store) builds as before.
 // ============================================================================
 
 #include <optional>
@@ -84,8 +85,8 @@ struct LowerAllocateSourcePass
     getOperation().walk([&](fir::CallOp call) {
       if (calleeName(call) == "_FortranAAllocatableAllocateSource") sources.push_back(call);
     });
-    for (fir::CallOp call : sources)
-      if (mlir::failed(lower(call))) return signalPassFailure();
+    // Over the calls: each one this pass can model is rewritten, the rest stay for the bridge to refuse if reached
+    for (fir::CallOp call : sources) (void)lower(call);
   }
 
   static mlir::LogicalResult lower(fir::CallOp call) {
@@ -94,8 +95,10 @@ struct LowerAllocateSourcePass
     auto boxTy = mlir::dyn_cast<fir::BoxType>(fir::dyn_cast_ptrEleTy(boxRef.getType()));
     auto heapTy = boxTy ? mlir::dyn_cast<fir::HeapType>(boxTy.getEleTy()) : fir::HeapType{};
     auto seqTy = heapTy ? mlir::dyn_cast<fir::SequenceType>(heapTy.getEleTy()) : fir::SequenceType{};
-    if (!seqTy)
-      return call.emitError("ALLOCATE(..., SOURCE=...) of a scalar or polymorphic allocatable is not supported");
+    if (!seqTy) return mlir::failure();  // a scalar or polymorphic allocatable
+    // ``<decl>.alloc``, as flang names a plain ALLOCATE's allocmem: the bridge finds a variable's ALLOCATEs by it.
+    auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
+    if (!decl) return mlir::failure();
 
     // The SetBounds calls on this descriptor before the AllocateSource, one per dim.
     unsigned const rank = seqTy.getDimension();
@@ -107,24 +110,21 @@ struct LowerAllocateSourcePass
       if (!dim || *dim < 0 || *dim >= rank || setBounds[*dim]) continue;
       setBounds[*dim] = sb;
     }
+    // Over the dims: every one needs its SetBounds with lower bound 1, checked before any op is created
+    for (fir::CallOp sb : setBounds)
+      if (!sb || constInt(sb.getArgs()[2]) != 1) return mlir::failure();
     mlir::OpBuilder b(call);
     mlir::Location const loc = call.getLoc();
     mlir::Type const idx = b.getIndexType();
     llvm::SmallVector<mlir::Value, 4> extents;
     for (unsigned dim = 0; dim < rank; ++dim) {
       fir::CallOp sb = setBounds[dim];  // NOLINT(misc-const-correctness): getArgs is non-const
-      if (!sb) return call.emitError("ALLOCATE(..., SOURCE=...) without a SetBounds call for every dim");
-      if (constInt(sb.getArgs()[2]) != 1)
-        return call.emitError("ALLOCATE(..., SOURCE=...) with a lower bound other than 1 is not supported");
       mlir::Value const declared = declaredExtent(source, dim);
       extents.push_back(declared ? declared : b.create<fir::ConvertOp>(loc, idx, sb.getArgs()[3]));  // ub, lb == 1
     }
     llvm::SmallVector<mlir::Value, 4> dynamicExtents;
     for (unsigned dim = 0; dim < rank; ++dim)
       if (seqTy.getShape()[dim] == fir::SequenceType::getUnknownExtent()) dynamicExtents.push_back(extents[dim]);
-    // ``<decl>.alloc``, as flang names a plain ALLOCATE's allocmem: the bridge finds a variable's ALLOCATEs by it.
-    auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
-    if (!decl) return call.emitError("ALLOCATE(..., SOURCE=...) of an allocatable without an hlfir.declare");
     mlir::Value const heap = b.create<fir::AllocMemOp>(loc, seqTy, (decl.getUniqName().getValue() + ".alloc").str(),
                                                        mlir::ValueRange{}, dynamicExtents);
     mlir::Value const shape = b.create<fir::ShapeOp>(loc, extents);

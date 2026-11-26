@@ -151,6 +151,9 @@ class FrozenSignature:
     mangled: str  # '_QPcompute_tendencies'
     args: tuple[FrozenArg, ...]
     free_symbols: tuple[str, ...] = field(default_factory=tuple)
+    # The free symbols an array of the SDFG (an argument or a transient, nested SDFGs included) is shaped by: one with
+    # no caller value would size an allocation by an unset extent.
+    size_symbols: tuple[str, ...] = field(default_factory=tuple)
     schema_version: int = 1
     # Auto-detected module-global provenance for SDFG names that aren't
     # outer dummies.  Maps sdfg_name -> (module, entity).  Binding emitter
@@ -177,6 +180,7 @@ class FrozenSignature:
             "mangled": self.mangled,
             "args": [a.to_dict() for a in self.args],
             "free_symbols": list(self.free_symbols),
+            "size_symbols": list(self.size_symbols),
             "schema_version": self.schema_version,
             "module_symbol_origins": {k: list(v) for k, v in self.module_symbol_origins.items()},
             "module_symbol_members": dict(self.module_symbol_members),
@@ -191,6 +195,7 @@ class FrozenSignature:
             mangled=d["mangled"],
             args=tuple(FrozenArg.from_dict(a) for a in d["args"]),
             free_symbols=tuple(d.get("free_symbols", [])),
+            size_symbols=tuple(d.get("size_symbols", [])),
             schema_version=d.get("schema_version", 1),
             module_symbol_origins={k: ModuleOrigin(*v) for k, v in d.get("module_symbol_origins", {}).items()},
             module_symbol_members=dict(d.get("module_symbol_members", {})),
@@ -396,6 +401,7 @@ def refreeze(sdfg: SDFG) -> FrozenSignature:
             )
         ),
         free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs) + tuple(promoted),
+        size_symbols=tuple(s for s in frozen.size_symbols if s in live_fs),
     )
     # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.
     new.verify_against(sdfg)

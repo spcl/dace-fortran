@@ -46,13 +46,22 @@ def test_symbol_of_no_module_still_takes_the_array_extent():
 
 
 def test_a_free_symbol_with_no_source_is_a_build_error():
-    frozen = FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("nij",))
+    frozen = FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("nij",), size_symbols=("nij",))
 
     with pytest.raises(ValueError, match="no source for the free symbol 'nij'"):
         assigns(frozen)
+
+
+# Reproducer: ICON ocean and solve_nh stopped building on a free symbol no caller provides (n_it_sp, a status a solver
+# call sets; the lower bound of an assumed-shape dummy) though neither sizes an array
+def test_a_free_symbol_with_no_source_that_sizes_nothing_takes_a_fixed_value():
+    frozen = FrozenSignature(entry="k", mangled="_QPk", args=(), free_symbols=("n_it_sp",))
+
+    assert "    n_it_sp = 0  ! no caller value, and it sizes no array" in assigns(frozen)
 
 
 if __name__ == "__main__":
     test_module_scalar_is_read_from_its_module_not_from_an_array_extent()
     test_symbol_of_no_module_still_takes_the_array_extent()
     test_a_free_symbol_with_no_source_is_a_build_error()
+    test_a_free_symbol_with_no_source_that_sizes_nothing_takes_a_fixed_value()
