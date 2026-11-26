@@ -81,6 +81,9 @@ class DerivedType:
     name: str  # 't_state'
     module: str | None  # 'mo_state' if defined in a module
     members: tuple[Member, ...] = field(default_factory=tuple)
+    # Pointer or allocatable record members, outside the C ABI: a binding reads the scalars an extent comes from
+    # through them (ICON's p_patch%comm_pat_c%n_recv)
+    handles: tuple[Member, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,5 +184,18 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                     alloc=m.get("alloc", ""),
                 )
             )
-        struct_types[sname] = DerivedType(name=st["name"], module=st["module"] or None, members=tuple(members))
+        handles = tuple(
+            Member(
+                name=h["name"],
+                fortran_type=f"type({h['struct_name']})",
+                rank=0,
+                shape=(),
+                struct_name=h["struct_name"],
+                alloc=h["alloc"],
+            )
+            for h in st.get("handles", [])
+        )
+        struct_types[sname] = DerivedType(
+            name=st["name"], module=st["module"] or None, members=tuple(members), handles=handles
+        )
     return OriginalInterface(entry=entry, args=tuple(args), struct_types=struct_types, used_modules=used_modules)

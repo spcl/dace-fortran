@@ -16,15 +16,18 @@
 //
 // What the pass does:
 //     Rewrites each such pair into the IR flang emits for ``ALLOCATE(x(lb:ub, ...)); x = y``:
-//     fir.allocmem with the SetBounds extents, fir.shape + fir.embox + fir.store into x's
-//     descriptor, then ``hlfir.assign y to x realloc``.  The runtime's stat result becomes 0.
+//     fir.allocmem with the SetBounds extents, fir.shape (every lower bound the literal 1) or
+//     fir.shape_shift (the literal lower bound every ALLOCATE of an allocatable source gives it; QE h_psi's
+//     iexx_istart reads its bound off the source's descriptor) +
+//     fir.embox + fir.store into x's descriptor, then ``hlfir.assign y to x realloc``.  The
+//     runtime's stat result becomes 0.
 //
 //     A scalar allocatable gets the same without a shape (ICON's ``ALLOCATE(x, SOURCE=y)`` of a scalar).
 //
-// Limits (rejected with an error, never lowered silently wrong):
-//     a lower bound other than the literal 1, a missing SetBounds for some dim.  A polymorphic
-//     allocatable keeps its runtime call, with a warning: the whole module runs this pass, and ICON's
-//     polymorphic SOURCE= sit outside the kernels the bridge builds.
+// Limits (left as runtime calls, never lowered silently wrong):
+//     a polymorphic allocatable (with a warning), a missing SetBounds for some dim, a lower bound that is no
+//     literal at some ALLOCATE of the source. The bridge refuses such a call where a translated procedure makes
+//     it; a module procedure the kernel never calls (ICON's CLASS(*) key-value store) builds as before.
 // ============================================================================
 
 #include <optional>
@@ -67,6 +70,41 @@ mlir::Value declaredExtent(mlir::Value source, unsigned dim) {
   return shapeOp && dim < shapeOp.getExtents().size() ? shapeOp.getExtents()[dim] : mlir::Value{};
 }
 
+/// The lower bound of dim ``dim`` that every ALLOCATE of the allocatable ``lb`` is read off (``fir.box_dims`` of its
+/// loaded descriptor) gives it, as a literal: 1 for a plain ``fir.shape``, the ``fir.shape_shift`` literal otherwise.
+/// Null when ``lb`` is no such read, a site's bound is no literal, or two sites disagree: the bridge could not name
+/// the copy's lower bound then.
+std::optional<int64_t> allocatedLowerBound(mlir::Value lb) {
+  if (std::optional<int64_t> const c = constInt(lb)) return c;
+  auto dims = peelConverts(lb).getDefiningOp<fir::BoxDimsOp>();
+  if (!dims || peelConverts(lb) != dims.getResult(0)) return std::nullopt;
+  std::optional<int64_t> const dim = constInt(dims.getDim());
+  auto load = dims.getVal().getDefiningOp<fir::LoadOp>();
+  auto decl = load ? load.getMemref().getDefiningOp<hlfir::DeclareOp>() : hlfir::DeclareOp{};
+  auto module = decl ? decl->getParentOfType<mlir::ModuleOp>() : mlir::ModuleOp{};
+  if (!dim || !module) return std::nullopt;
+  std::string const name = (decl.getUniqName().getValue() + ".alloc").str();
+  std::optional<int64_t> found;
+  bool agree = true;
+  // Over the allocations of the source: each one's lower bound of ``dim``
+  module.walk([&](fir::AllocMemOp alloc) {
+    auto uniq = alloc.getUniqName();
+    if (!uniq || *uniq != name) return;
+    std::optional<int64_t> bound;
+    // Over the descriptors built on the allocation: the shape they carry
+    for (mlir::Operation* user : alloc->getUsers()) {
+      auto embox = mlir::dyn_cast<fir::EmboxOp>(user);
+      mlir::Operation* shape = embox && embox.getShape() ? embox.getShape().getDefiningOp() : nullptr;
+      if (mlir::isa_and_nonnull<fir::ShapeOp>(shape)) bound = 1;
+      if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape))
+        if (2 * *dim < ss.getPairs().size()) bound = constInt(ss.getPairs()[2 * *dim]);
+    }
+    agree = agree && bound && (!found || *found == *bound);
+    found = bound;
+  });
+  return agree ? found : std::nullopt;
+}
+
 llvm::StringRef calleeName(fir::CallOp call) {
   auto callee = call.getCallee();
   return callee ? callee->getRootReference().getValue() : llvm::StringRef{};
@@ -87,15 +125,15 @@ struct LowerAllocateSourcePass
     getOperation().walk([&](fir::CallOp call) {
       if (calleeName(call) == "_FortranAAllocatableAllocateSource") sources.push_back(call);
     });
-    for (fir::CallOp call : sources)
-      if (mlir::failed(lower(call))) return signalPassFailure();
+    // Over the calls: each one this pass can model is rewritten, the rest stay for the bridge to refuse if reached
+    for (fir::CallOp call : sources) (void)lower(call);
   }
 
   // ``ALLOCATE(x, SOURCE=y)`` of a scalar: ``x`` gets a fresh scalar, then ``x = y``.
   static mlir::LogicalResult lowerScalar(fir::CallOp call, mlir::Value boxRef, mlir::Value source, fir::BoxType boxTy,
                                          fir::HeapType heapTy) {
     auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
-    if (!decl) return call.emitError("ALLOCATE(..., SOURCE=...) of an allocatable without an hlfir.declare");
+    if (!decl) return mlir::failure();
     mlir::OpBuilder b(call);
     mlir::Location const loc = call.getLoc();
     mlir::Value const heap =
@@ -132,27 +170,55 @@ struct LowerAllocateSourcePass
       if (!dim || *dim < 0 || *dim >= rank || setBounds[*dim]) continue;
       setBounds[*dim] = sb;
     }
+    // Over the dims: every one needs its SetBounds and a lower bound the bridge can name, checked before any op is
+    // created
+    llvm::SmallVector<int64_t, 4> lowBounds;
+    for (fir::CallOp sb : setBounds) {
+      std::optional<int64_t> const low = sb ? allocatedLowerBound(sb.getArgs()[2]) : std::nullopt;
+      if (!low) return mlir::failure();
+      lowBounds.push_back(*low);
+    }
+    // ``<decl>.alloc``, as flang names a plain ALLOCATE's allocmem: the bridge finds a variable's ALLOCATEs by it.
+    auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
+    if (!decl) return mlir::failure();
     mlir::OpBuilder b(call);
     mlir::Location const loc = call.getLoc();
     mlir::Type const idx = b.getIndexType();
-    llvm::SmallVector<mlir::Value, 4> extents;
+    llvm::SmallVector<mlir::Value, 4> extents, lowers;
+    bool unitLowers = true;
+    // Over the dims: the extent (the source's declared one, else ub - lb + 1) and the lower bound
     for (unsigned dim = 0; dim < rank; ++dim) {
       fir::CallOp sb = setBounds[dim];  // NOLINT(misc-const-correctness): getArgs is non-const
-      if (!sb) return call.emitError("ALLOCATE(..., SOURCE=...) without a SetBounds call for every dim");
-      if (constInt(sb.getArgs()[2]) != 1)
-        return call.emitError("ALLOCATE(..., SOURCE=...) with a lower bound other than 1 is not supported");
-      mlir::Value const declared = declaredExtent(source, dim);
-      extents.push_back(declared ? declared : b.create<fir::ConvertOp>(loc, idx, sb.getArgs()[3]));  // ub, lb == 1
+      bool const unit = lowBounds[dim] == 1;
+      unitLowers = unitLowers && unit;
+      mlir::Value lb;
+      if (!unit) lb = b.create<mlir::arith::ConstantIndexOp>(loc, lowBounds[dim]);
+      mlir::Value extent = declaredExtent(source, dim);
+      if (!extent) {
+        mlir::Value const ub = b.create<fir::ConvertOp>(loc, idx, sb.getArgs()[3]);
+        extent = ub;
+        if (!unit)
+          extent = b.create<mlir::arith::AddIOp>(loc, b.create<mlir::arith::SubIOp>(loc, ub, lb),
+                                                 b.create<mlir::arith::ConstantIndexOp>(loc, 1));
+      }
+      extents.push_back(extent);
+      lowers.push_back(lb);
     }
     llvm::SmallVector<mlir::Value, 4> dynamicExtents;
     for (unsigned dim = 0; dim < rank; ++dim)
       if (seqTy.getShape()[dim] == fir::SequenceType::getUnknownExtent()) dynamicExtents.push_back(extents[dim]);
-    // ``<decl>.alloc``, as flang names a plain ALLOCATE's allocmem: the bridge finds a variable's ALLOCATEs by it.
-    auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
-    if (!decl) return call.emitError("ALLOCATE(..., SOURCE=...) of an allocatable without an hlfir.declare");
     mlir::Value const heap = b.create<fir::AllocMemOp>(loc, seqTy, (decl.getUniqName().getValue() + ".alloc").str(),
                                                        mlir::ValueRange{}, dynamicExtents);
-    mlir::Value const shape = b.create<fir::ShapeOp>(loc, extents);
+    llvm::SmallVector<mlir::Value, 8> pairs;
+    // Over the dims: (lower bound, extent) pairs of the shape_shift
+    for (unsigned dim = 0; dim < rank && !unitLowers; ++dim)
+      pairs.append(
+          {lowers[dim] ? lowers[dim] : mlir::Value(b.create<mlir::arith::ConstantIndexOp>(loc, 1)), extents[dim]});
+    mlir::Value shape;
+    if (unitLowers)
+      shape = b.create<fir::ShapeOp>(loc, extents);
+    else
+      shape = b.create<fir::ShapeShiftOp>(loc, fir::ShapeShiftType::get(b.getContext(), rank), pairs);
     mlir::Value const box = b.create<fir::EmboxOp>(loc, boxTy, heap, shape);
     b.create<fir::StoreOp>(loc, box, boxRef);
     b.create<hlfir::AssignOp>(loc, source, boxRef, /*realloc=*/true);

@@ -1,3 +1,5 @@
+// Copyright 2026 ETH Zurich and the dace-fortran authors.
+// SPDX-License-Identifier: GPL-3.0-or-later
 // bridge.cpp -- nanobind Python boundary for the HLFIR bridge. Thin layer: delegates extraction to
 // extract_vars.cpp/extract_ast.cpp, passes to the MLIR pass pipeline parser; walks no IR itself.
 
@@ -337,6 +339,16 @@ class HLFIRModule {
         members.append(md);
       }
       sd["members"] = members;
+      nb::list handles;
+      // Over the pointer-to-record members: name and pointee type, for symbol sources only
+      for (auto& h : layout.handles) {
+        nb::dict hd;
+        hd["name"] = h.name;
+        hd["struct_name"] = h.struct_name;
+        hd["alloc"] = h.alloc;
+        handles.append(hd);
+      }
+      sd["handles"] = handles;
       struct_types[kv.first.c_str()] = sd;
     }
     return out;

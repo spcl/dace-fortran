@@ -1347,7 +1347,9 @@ def _entry_presence_guard(iface: OriginalInterface, base: str) -> str:
         mname = seg.split("(")[0].strip().lower()
         m = next((mm for mm in st.members if mm.name.lower() == mname), None)
         if m is None:
-            return ""
+            # A pointer or allocatable record on the way: its presence guards everything read through it
+            h = next((hh for hh in st.handles if hh.name.lower() == mname), None)
+            return _present("%".join(parts[: i + 2]), h.alloc == "pointer") if h else ""
         if i == len(parts) - 2:
             return _present(base, m.alloc == "pointer") if m.alloc else ""
         st = iface.struct_types.get(m.struct_name) if m.struct_name else None
@@ -1584,7 +1586,12 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSourc
     sources: dict[str, str] = {}
     member_paths: dict[str, str] = {}
 
-    def walk(st: DerivedType, sym_prefix: str, access: str) -> None:
+    def walk(st: DerivedType, sym_prefix: str, access: str, through: tuple[str, ...] = ()) -> None:
+        # Over the record's pointer or allocatable records: their scalars source symbols, each type once per path
+        for h in st.handles:
+            pointee = iface.struct_types.get(h.struct_name or "")
+            if pointee is not None and pointee.name not in (*through, st.name):
+                walk(pointee, f"{sym_prefix}_{h.name}", f"{access}%{h.name}", (*through, st.name))
         for m in st.members:
             msym = f"{sym_prefix}_{m.name}"
             macc = f"{access}%{m.name}"
@@ -1596,7 +1603,7 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> MemberSymbolSourc
                     # EVERY dim (kernel reads the single-domain first element, same
                     # constant index the access generator prepends).
                     idx1 = ", ".join(["1"] * m.rank)
-                    walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc)
+                    walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc, through)
                 continue
             member_paths[msym] = macc
             if m.rank == 0:

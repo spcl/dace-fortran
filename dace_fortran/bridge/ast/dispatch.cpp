@@ -1,3 +1,5 @@
+// Copyright 2026 ETH Zurich and the dace-fortran authors.
+// SPDX-License-Identifier: GPL-3.0-or-later
 // ast_helpers.h carries cross-TU API + thread-local state shared by ast/*.cpp.
 #include <functional>
 #include <iomanip>
@@ -2212,6 +2214,13 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
       return;
     }
   }
+  // An ALLOCATE(..., SOURCE=...) hlfir-lower-allocate-source left as a runtime call (a polymorphic allocatable, a
+  // lower bound no literal names): its copy has no model here, and dropping it would lose the source's values.
+  // n.callee is the printed symbol reference (``@_FortranA...``).
+  if (n.callee == "@_FortranAAllocatableAllocateSource")
+    throw std::runtime_error(
+        "ALLOCATE(..., SOURCE=...) of a polymorphic allocatable, or with a lower bound no literal names, is not "
+        "supported");
   // Fortran I/O runtime call: advances the open/read/write/close state machine (see recognizeIoCall); consumed here
   // either way.
   if (n.callee.find("_FortranAio") != std::string::npos) {
