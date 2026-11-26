@@ -51,7 +51,6 @@ from dace.data import Data
 from dace.frontend.python import astutils
 from dace.properties import CodeBlock
 from dace.sdfg.state import ControlFlowRegion, LoopRegion
-from dace.sdfg.utils import specialize_symbols
 from dace.subsets import Subset
 
 from dace_fortran.bindings.frozen_signature import FrozenArgKind, ModuleOrigin
@@ -92,6 +91,7 @@ from dace_fortran.builder.emit_tasklet import add_whole_array_fill, emit_scalar_
 from dace_fortran.builder.records import NodeLike, VarLike
 from dace_fortran.dace_types import connectors
 from dace_fortran.entry_names import split_qualified_entry
+from dace_fortran.specialize import specialize_symbols
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (

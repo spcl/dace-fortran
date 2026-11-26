@@ -33,7 +33,6 @@ from dace.sdfg import nodes
 from dace.sdfg.graph import MultiConnectorEdge
 from dace.sdfg.propagation import propagate_memlets_sdfg
 from dace.sdfg.state import LoopRegion, SDFGState
-from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
 from dace.transformation.dataflow.prune_connectors import PruneConnectors
 from dace.transformation.dataflow.wcr_conversion import AugAssignToWCR
@@ -51,6 +50,7 @@ from dace_fortran.demote_symbols import DemoteNonStructuralSymbols, enclosing_lo
 from dace_fortran.loop_unroll import ShortLoopUnroll
 from dace_fortran.omp_threads import BindOmpThreadCount
 from dace_fortran.persistent_transients import MakeTransientsPersistent
+from dace_fortran.specialize import specialize_scalars, specialize_symbols
 
 #: Labels of the states ``ConvertLengthOneArraysToScalars`` adds to copy staged signature arrays in and out.
 STAGING_STATE_PREFIXES = ("stage_copyin", "stage_copyout")
