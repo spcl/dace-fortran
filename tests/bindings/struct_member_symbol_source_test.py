@@ -138,6 +138,37 @@ def test_plan_entry_still_wins_over_struct_layout_fallback():
     assert "TODO: no plan entry gives size" not in text
 
 
+# Reproducer: ICON ocean solve_free_sfc and the e2e MPI builds hit "RecursionError: maximum recursion depth": a record
+# member walk forgot its own type, so a member record pointing back to it recursed forever
+def test_a_member_record_pointing_back_to_its_container_is_walked_once():
+    iface = OriginalInterface(
+        entry="solve",
+        args=(OriginalArg(name="p", fortran_type="type(t_outer)", rank=0, intent="in", struct_type="t_outer"),),
+        struct_types={
+            "t_outer": DerivedType(
+                name="t_outer",
+                module="m",
+                members=(
+                    Member(name="n", fortran_type="integer(c_int)", rank=0),
+                    Member(name="inner", fortran_type="type(t_inner)", rank=0, struct_name="t_inner"),
+                ),
+            ),
+            "t_inner": DerivedType(
+                name="t_inner",
+                module="m",
+                members=(Member(name="m", fortran_type="integer(c_int)", rank=0),),
+                handles=(
+                    Member(name="back", fortran_type="type(t_outer)", rank=0, struct_name="t_outer", alloc="pointer"),
+                ),
+            ),
+        },
+    )
+
+    found = _struct_member_symbol_sources(iface)
+
+    assert found.sources == {"p_n": "p%n", "p_inner_m": "p%inner%m"}
+
+
 # Reproducer: ICON solve_nh failed to bind ("no source for the free symbol 'p_patch_comm_pat_c_n_recv'"): its halo
 # buffers are sized by p_patch%comm_pat_c%n_recv, and the layout left the POINTER member comm_pat_c out
 def test_a_symbol_read_through_a_pointer_record_is_sourced_under_its_association():
