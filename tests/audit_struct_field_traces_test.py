@@ -56,26 +56,6 @@ end module
     assert "g" not in sdfg.symbols
 
 
-def test_module_struct_field_in_subscript(tmp_path):
-    """Struct field as array-index subscript -- bridge mints a position symbol via internPosSymbol for a closed-form memlet subset."""
-    src = """
-module m
-  type :: t
-    integer :: idx
-  end type
-  type(t) :: g
-contains
-  subroutine f(arr, out)
-    real(kind=8), intent(in) :: arr(10)
-    real(kind=8), intent(out) :: out
-    out = arr(g % idx)
-  end subroutine
-end module
-"""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
-    assert "g" not in sdfg.symbols
-
-
 def test_module_struct_array_field_subscript(tmp_path):
     """g % a(i): array-typed struct field with element subscript -- different designate path than whole-array access."""
     src = """

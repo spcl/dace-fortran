@@ -19,28 +19,6 @@ import numpy as np
 from tests._util import build_sdfg
 
 
-def test_matmul_transpose_whole_assign_into_array_temp(tmp_path):
-    """``tmp = MATMUL(TRANSPOSE(A), q)`` -- whole-assign routes through the GEMM lib
-    node with the transpose flag. Result must match A.T @ q."""
-    src = """
-module m
-contains
-  subroutine matmul_t(a, q, tmp)
-    real(kind=8), intent(in) :: a(3, 3), q(3)
-    real(kind=8), intent(out) :: tmp(3)
-    tmp = MATMUL(TRANSPOSE(a), q)
-  end subroutine
-end module
-"""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="matmul_t", entry="m::matmul_t").build()
-    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
-    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
-    tmp = np.zeros(3, dtype=np.float64, order="F")
-    sdfg(a=A, q=q, tmp=tmp)
-    expected = A.T @ q
-    np.testing.assert_allclose(tmp, expected)
-
-
 def test_matmul_transpose_via_temp_then_scalar_div(tmp_path):
     """QE's vcut_get pattern materialised to a temp: tmp=MATMUL(TRANSPOSE(A),q)
     (whole-assign->GEMM), then res=tmp/scalar (element-wise). Workaround until the
@@ -114,7 +92,7 @@ end module
 
 
 def test_matmul_transpose_libnode_is_dace_compatible(tmp_path):
-    """Emitted MATMUL(TRANSPOSE(A), q) node must be DaCe-ABI compatible: transA set
+    """Emitted MATMUL(TRANSPOSE(A), q) node must be DaCe-ABI compatible and give A.T @ q: transA set
     as a declared Property, NOT an __init__ kwarg (raised "MatMul.__init__() got
     an unexpected keyword argument 'transA'" on DaCe builds lacking it). Also pins
     the canonical _a/_b/_c connectors."""
@@ -138,34 +116,16 @@ end module
     # Canonical DaCe matmul connector names.
     assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
     assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)
-
-
-def test_matmul_transpose_b_side_whole_assign(tmp_path):
-    """B-side fold ``C = MATMUL(A, TRANSPOSE(B))``: same hlfir.matmul_transpose op
-    (operands swapped), bridge threads transB=True onto the GEMM node -- no
-    transient B^T materialised. Result must match A @ B.T."""
-    src = """
-module m
-contains
-  subroutine mmt_b(a, b, c)
-    real(kind=8), intent(in) :: a(4, 3), b(5, 3)
-    real(kind=8), intent(out) :: c(4, 5)
-    c = MATMUL(a, TRANSPOSE(b))
-  end subroutine
-end module
-"""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mmt_b", entry="m::mmt_b").build()
-    rng = np.random.default_rng(2)
-    A = np.asfortranarray(rng.standard_normal((4, 3)))
-    B = np.asfortranarray(rng.standard_normal((5, 3)))
-    C = np.zeros((4, 5), dtype=np.float64, order="F")
-    sdfg(a=A, b=B, c=C)
-    np.testing.assert_allclose(C, A @ B.T)
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order="F")
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order="F")
+    tmp = np.zeros(3, dtype=np.float64, order="F")
+    sdfg(a=A, q=q, tmp=tmp)
+    np.testing.assert_allclose(tmp, A.T @ q)
 
 
 def test_matmul_transpose_b_side_libnode_transB(tmp_path):
     """B-side MATMUL(A, TRANSPOSE(B)) folds onto a single GEMM node with transB set
-    (transA clear), no transient Transpose node -- symmetric to the A-side fold."""
+    (transA clear), no transient Transpose node -- symmetric to the A-side fold; the result matches A @ B.T."""
     src = """
 module m
 contains
@@ -186,6 +146,12 @@ end module
     assert not transposes, f"B-side fold must allocate no transient transpose, got {transposes}"
     assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
     assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)
+    rng = np.random.default_rng(2)
+    A = np.asfortranarray(rng.standard_normal((4, 3)))
+    B = np.asfortranarray(rng.standard_normal((5, 3)))
+    C = np.zeros((4, 5), dtype=np.float64, order="F")
+    sdfg(a=A, b=B, c=C)
+    np.testing.assert_allclose(C, A @ B.T)
 
 
 if __name__ == "__main__":

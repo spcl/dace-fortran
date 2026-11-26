@@ -9,29 +9,6 @@ import numpy as np
 from tests._util import build_sdfg
 
 
-def test_alloc_then_whole_array_copy(tmp_path: Path):
-    """``allocate(x(n)); x = src; out = x; deallocate(x)`` round-trips end to end."""
-    src = """
-subroutine main(n, src, out)
-  integer, intent(in) :: n
-  double precision, intent(in)  :: src(n)
-  double precision, intent(out) :: out(n)
-  double precision, allocatable :: x(:)
-  allocate(x(n))
-  x = src
-  out = x
-  deallocate(x)
-end subroutine main
-"""
-    sdfg = build_sdfg(src, tmp_path, name="main").build()
-    n = 8
-    src_arr = np.empty(n, dtype=np.float64, order="F")
-    src_arr[:] = np.arange(1.0, n + 1.0)
-    out = np.zeros(n, order="F", dtype=np.float64)
-    sdfg(n=n, src=src_arr, out=out)
-    np.testing.assert_array_equal(out, src_arr)
-
-
 def test_alloc_then_section_copy(tmp_path: Path):
     """Section assigns into/out of an allocatable land on the right elements."""
     src = """

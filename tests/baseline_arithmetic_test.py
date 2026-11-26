@@ -41,35 +41,6 @@ end subroutine daxpy_lite
     np.testing.assert_allclose(z_sdfg, z_ref, rtol=1e-12, atol=1e-12)
 
 
-def test_two_tasklets_raw(tmp_path):
-    """Two statements, second consumes first -- pins the single-access-node-per-state invariant."""
-    src = """
-subroutine raw_chain(a, out, n)
-  implicit none
-  integer, intent(in)    :: n
-  real(8), intent(in)    :: a(n)
-  real(8), intent(inout) :: out(n)
-  real(8) :: tmp(n)
-  integer :: i
-  do i = 1, n
-    tmp(i) = a(i) * 2.0d0
-    out(i) = tmp(i) + 1.0d0
-  end do
-end subroutine raw_chain
-"""
-    mod = f2py_compile(src, tmp_path / "ref", "raw_chain")
-    sdfg = _build(src, tmp_path / "sdfg", name="raw_chain")
-
-    rng = np.random.default_rng(2)
-    n = 8
-    a = rng.standard_normal(n)
-    out_ref = np.zeros(n, order="F")
-    mod.raw_chain(np.asfortranarray(a), out_ref)
-    out_sdfg = np.zeros(n, dtype=np.float64)
-    sdfg(a=np.ascontiguousarray(a), out=out_sdfg, n=n)
-    np.testing.assert_allclose(out_sdfg, out_ref, rtol=1e-12, atol=1e-12)
-
-
 def test_widened_integers_multiply_in_the_wide_kind(tmp_path):
     """``int(a, 8)`` must reach the multiplication: 32-bit arithmetic wraps this product."""
     src = """

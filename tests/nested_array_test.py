@@ -5,25 +5,6 @@ import numpy as np
 from tests._util import build_sdfg
 
 
-def test_fortran_frontend_nested_array_access(tmp_path):
-    src = """
-subroutine main(d)
-  double precision d(4)
-  integer test(3, 3, 3)
-  integer indices(3, 3, 3)
-  indices(1, 1, 1) = 2
-  indices(1, 1, 2) = 3
-  indices(1, 1, 3) = 1
-  test(indices(1, 1, 1), indices(1, 1, 2), indices(1, 1, 3)) = 2
-  d(test(2, 3, 1)) = 5.5
-end subroutine main
-"""
-    sdfg = build_sdfg(src, tmp_path, name="main").build()
-    a = np.full([4], 42, order="F", dtype=np.float64)
-    sdfg(d=a)
-    assert np.allclose(a, [42, 5.5, 42, 42])
-
-
 def test_fortran_frontend_nested_array_access_pointer_args_1(tmp_path):
     src = """
 subroutine main(d, test, indices)

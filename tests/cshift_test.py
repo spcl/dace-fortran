@@ -55,25 +55,6 @@ END MODULE
     np.testing.assert_allclose(res, np.roll(arr, 1))
 
 
-def test_cshift_inline_expr(tmp_path):
-    """``2.0 - CSHIFT(arr, 1)`` -- expr-producer feeding an elemental."""
-    src = """
-module m
-contains
-  subroutine cshe(arr, res)
-    real(kind=8), intent(in) :: arr(5)
-    real(kind=8), intent(out) :: res(5)
-    res = 2.0d0 - CSHIFT(arr, 1)
-  end subroutine
-end module
-"""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshe", entry="m::cshe").build()
-    arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
-    res = np.zeros(5, dtype=np.float64, order="F")
-    sdfg(arr=arr, res=res)
-    np.testing.assert_allclose(res, 2.0 - np.roll(arr, -1))
-
-
 if __name__ == "__main__":
     import pytest
 

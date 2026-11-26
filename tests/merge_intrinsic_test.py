@@ -8,6 +8,7 @@ bridge's generic arith.select fallback in buildExpr emits Python `(t if cond els
 from pathlib import Path
 
 import numpy as np
+from dace.libraries.standard.nodes import MergeLibraryNode
 
 from tests._util import build_sdfg
 
@@ -49,7 +50,8 @@ end subroutine
 def test_merge_array_via_library_node(tmp_path: Path):
     """Array merge(t, f, mask) -- Flang lowers to hlfir.elemental{hlfir.designate;
     arith.select; yield_element}; bridge detects the simple shape (three loaded
-    designates of declared arrays) and routes through MergeLibraryNode. Verified against np.where."""
+    designates of declared arrays) and routes through one MergeLibraryNode, not per-element tasklets. Verified
+    against np.where."""
     src = """
 subroutine main(t, f, mask, out, n)
   integer, intent(in)  :: n
@@ -68,23 +70,6 @@ end subroutine main
     out = np.zeros(n, dtype=np.float64)
     sdfg(t=t, f=f, mask=mask.astype(np.uint32), out=out, n=n)
     np.testing.assert_array_equal(out, np.where(mask, t, f))
-
-
-def test_merge_array_verifies_libnode_present(tmp_path: Path):
-    """Same as above, but also asserts a MergeLibraryNode is present in the
-    built SDFG -- pins bridge->library-node routing so a silent fallback to per-element tasklets trips this test."""
-    from dace.libraries.standard.nodes import MergeLibraryNode
-
-    src = """
-subroutine main(t, f, mask, out, n)
-  integer, intent(in)  :: n
-  real(8), intent(in)  :: t(n), f(n)
-  logical, intent(in)  :: mask(n)
-  real(8), intent(out) :: out(n)
-  out = MERGE(t, f, mask)
-end subroutine main
-"""
-    sdfg = build_sdfg(src, tmp_path, name="main").build()
     libnodes = [n for state in sdfg.states() for n in state.nodes() if isinstance(n, MergeLibraryNode)]
     assert len(libnodes) == 1, f"expected exactly one MergeLibraryNode, got {len(libnodes)}"
 

@@ -270,6 +270,7 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_idx" in sdfg.symbols or "g_idx" in sdfg.arrays
+    assert "g" not in sdfg.symbols
 
 
 if __name__ == "__main__":
