@@ -26,9 +26,7 @@ from tests.cloudsc.full._registries import program_outputs
 
 SOURCE = Path(__file__).resolve().parents[1] / "tests" / "cloudsc" / "full" / "cloudsc.F90"
 MAX_MAPS = 264
-# One column loop stays a loop in its fallback version: under LAERICESED it writes ZVQX(NCLDQI), which later levels
-# read; its other version, a map, runs when LAERICESED is off
-SEQUENTIAL_LOOPS = 9
+SEQUENTIAL_LOOPS = 8
 
 
 def run(work_dir: Path) -> None:

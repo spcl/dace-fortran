@@ -32,7 +32,7 @@ from dace import SDFG, Memlet, dtypes, subsets, symbolic
 from dace.sdfg import nodes
 from dace.sdfg.graph import MultiConnectorEdge
 from dace.sdfg.propagation import propagate_memlets_sdfg
-from dace.sdfg.state import LoopRegion, SDFGState
+from dace.sdfg.state import ConditionalBlock, ControlFlowBlock, LoopRegion, SDFGState
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.dataflow.map_collapse import MapCollapse
 from dace.transformation.dataflow.prune_connectors import PruneConnectors
@@ -467,6 +467,34 @@ def num_loops(sdfg: SDFG) -> int:
     return sum(1 for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion))
 
 
+def is_fallback(loop: LoopRegion) -> bool:
+    """Whether ``loop`` is the in-order version of a loop run-time versioning parallelized: the sole block of the
+    else arm of a conditional whose other arms run it without a loop at their top (a map)."""
+    region = loop.parent_graph
+    conditional = region.parent_graph if region is not None else None
+    if not isinstance(conditional, ConditionalBlock) or len(region.nodes()) != 1:
+        return False
+    arms = conditional.branches
+    if not any(condition is None and arm is region for condition, arm in arms) or len(arms) < 2:
+        return False
+    return all(not any(isinstance(b, LoopRegion) for b in arm.nodes()) for _, arm in arms if arm is not region)
+
+
+def sequential_loops(sdfg: SDFG) -> int:
+    """The loops ``sdfg`` runs in order on its parallel path: every loop, but for the fallback versions (and the loops
+    inside them) whose parallel version runs whenever its check holds."""
+    count = 0
+    # Over every loop: it counts unless it or a loop around it is a fallback
+    for region in sdfg.all_control_flow_regions(recursive=True):
+        if not isinstance(region, LoopRegion):
+            continue
+        outer: ControlFlowBlock | None = region
+        while outer is not None and not (isinstance(outer, LoopRegion) and is_fallback(outer)):
+            outer = outer.parent_graph
+        count += outer is None
+    return count
+
+
 def parallelization_rate(sdfg: SDFG, loops_before: int, sequential: int = 0) -> float:
     """The share of the loops that can run in parallel which do, in [0, 1].
 
@@ -475,16 +503,17 @@ def parallelization_rate(sdfg: SDFG, loops_before: int, sequential: int = 0) -> 
     :param sequential: loops that must stay sequential, such as one carrying a flux from level to level.
     """
     parallelizable = loops_before - sequential
-    return 1.0 if parallelizable <= 0 else (loops_before - num_loops(sdfg)) / parallelizable
+    return 1.0 if parallelizable <= 0 else (loops_before - sequential_loops(sdfg)) / parallelizable
 
 
 def assert_parallelized(sdfg: SDFG, *, loops_before: int, max_maps: int, sequential: int = 0) -> None:
     """Fail unless every parallelizable loop became a map and at most ``max_maps`` maps remain.
 
-    The rate and a bound, not exact counts: a better pipeline fuses maps, and that must not read as a regression.
+    The rate and a bound, not exact counts: a better pipeline fuses maps, and that must not read as a regression. A
+    loop versioned at run time counts as parallelized: its in-order fallback (:func:`is_fallback`) is not a loop left.
     """
     rate = parallelization_rate(sdfg, loops_before, sequential)
-    maps, loops = num_maps(sdfg), num_loops(sdfg)
+    maps, loops = num_maps(sdfg), sequential_loops(sdfg)
     if rate < 1.0 or maps > max_maps:
         raise AssertionError(
             f"{rate:.1%} parallelized ({loops} of {loops_before} loops left, {sequential} expected), "
