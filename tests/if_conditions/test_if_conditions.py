@@ -1,3 +1,5 @@
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pin various IF-condition shapes against the bridge -> SDFG path.
 
 Covers scalar conditions, array-element conditions (lifted via the
@@ -242,6 +244,43 @@ END SUBROUTINE
     sdfg(n=np.int32(4), x=x, out=out)
     # x>0 on the first guard only: +1 each, never +10.
     np.testing.assert_array_equal(out, [1.0, 1.0, 1.0, 1.0])
+
+
+def test_if_guard_over_a_local_only_a_stub_writes_takes_no_argument(tmp_path):
+    """A local only an empty callee's INTENT(OUT) writes is defined at entry, not left free.
+
+    ICON-O's ``solve_free_sfc_ab_mimetic`` reads ``n_it_sp`` (written only by the stubbed-empty
+    ``ocean_solve``) in a guard; the SDFG kept it as a free symbol no binding could source.
+    """
+    src = """
+MODULE stubs
+CONTAINS
+  SUBROUTINE solve(it, it_sp)
+    INTEGER, INTENT(OUT) :: it, it_sp
+  END SUBROUTINE
+END MODULE
+SUBROUTINE if_stub(n, out)
+  USE stubs
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(OUT) :: out(n)
+  INTEGER :: i, it, it_sp
+  REAL(8) :: dbg
+  CALL solve(it, it_sp)
+  dbg = 0.0d0
+  IF (it_sp .NE. -2) THEN
+    dbg = 1.0d0
+  END IF
+  DO i = 1, n
+    out(i) = REAL(i, 8)
+  END DO
+END SUBROUTINE
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="if_stub", entry="if_stub").build()
+    assert "it_sp" not in map(str, sdfg.free_symbols)
+    out = np.zeros(4, dtype=np.float64, order="F")
+    sdfg(n=np.int32(4), out=out)
+    np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
 
 
 if __name__ == "__main__":

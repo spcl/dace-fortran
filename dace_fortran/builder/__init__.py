@@ -1861,20 +1861,32 @@ class SDFGBuilder:
                             region.branches[idx] = (new_cond, body)
 
     def _define_local_symbols_at_entry(self, sdfg: SDFG) -> None:
-        """Assign 0 at entry to every kernel-internal symbol the kernel assigns but that is still free.
+        """Assign 0 at entry to every kernel-internal symbol that is still free.
 
         A local the kernel assigns only on a conditional path (QE's ``qvan_init``'s ``nij``, under
         ``IF (okvan)``) is not defined on every path to its uses, so DaCe keeps it free and the SDFG takes
-        it as an argument the caller cannot know. A Fortran local has no value before its first
-        assignment, so defining it as 0 at entry keeps the semantics and drops it from the signature.
+        it as an argument the caller cannot know. A local the kernel never assigns (ICON-O's ``n_it_sp``,
+        the INTENT(OUT) actual of a callee stubbed empty) is free the same way. A Fortran local has no
+        value before its first assignment, so defining it as 0 at entry keeps the semantics and drops it
+        from the signature.
         """
         assigned = {k for e in sdfg.all_interstate_edges() for k in e.data.assignments}
-        # A symbol of no Fortran variable is the builder's own (a remap view's ``<view>_total_extent_d0``).
+
+        def fortran_local(name: str) -> bool:
+            v = self.symbols.get(name)
+            return (
+                v is not None
+                and not v.intent
+                and not v.module_origin_mod
+                and "F" in (v.mangled_name or "").removeprefix("_Q")
+            )
+
+        # A symbol of no Fortran variable is the builder's own (a remap view's ``<view>_total_extent_d0``):
+        # local when the kernel assigns it, an extent the binding sources otherwise.
         local = [
             name
-            for name in sorted(set(map(str, sdfg.free_symbols)) & assigned)
-            if (v := self.symbols.get(name)) is None
-            or (not v.intent and not v.module_origin_mod and "F" in (v.mangled_name or "").removeprefix("_Q"))
+            for name in sorted(map(str, sdfg.free_symbols))
+            if fortran_local(name) or (name in assigned and name not in self.symbols)
         ]
         if local:
             sdfg.add_state_before(
