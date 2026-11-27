@@ -76,7 +76,7 @@ config-settings = { editable_mode = "compat" }
 # CI and a checkout test against a fixed commit of the DaCe FaCe branch; a git install is never replaced by dace_setup.
 # Sources are never published.
 [tool.uv.sources]
-dace = { git = "https://github.com/spcl/dace.git", rev = "25554a019e6f0e39cd48c53f56a02d3ef0e4fd3c" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "d0abf827a9564bf9ed138a32dcd82030d21f191d" }
 
 [project.scripts]
 dace-fortran-setup-dace = "dace_fortran.dace_setup:main"

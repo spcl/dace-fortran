@@ -4,7 +4,7 @@ All notable changes to dace-fortran 1.x, the line on DaCe's FaCe branch.
 
 ## 1.4.0
 
-Pins DaCe FaCe 25554a019e. Replaces the planned 1.3.1.
+Pins DaCe FaCe d0abf827a9. Replaces the planned 1.3.1.
 
 ### Moved from DaCe FaCe into dace-fortran
 - `dace_fortran.specialize`: `specialize_scalars`, `specialize_symbols`, `bake_symbols`, `scope_iterators` and
