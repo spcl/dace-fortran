@@ -1,3 +1,5 @@
+// Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
+// SPDX-License-Identifier: GPL-3.0-or-later
 // trace_utils.h -- shared SSA tracing utilities. Walks Flang's def-use chains
 // (fir.convert/fir.load/arith.select/hlfir.declare) to recover Fortran names and constants from SSA values; used by
 // bridge extraction and MLIR passes.
