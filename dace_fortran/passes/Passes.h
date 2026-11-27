@@ -22,6 +22,8 @@ std::unique_ptr<mlir::Pass> createPropagateShapesPass();
 std::unique_ptr<mlir::Pass> createVersionShapeScalarsPass();
 std::unique_ptr<mlir::Pass> createInlineAllPass();
 std::unique_ptr<mlir::Pass> createLowerFirSelectCasePass();
+std::unique_ptr<mlir::Pass> createLowerFirLogicalOpsPass();
+std::unique_ptr<mlir::Pass> createLowerArithMinMaxPass();
 std::unique_ptr<mlir::Pass> createFlattenStructsPass();
 std::unique_ptr<mlir::Pass> createFlattenGlobalScalarReadsPass();
 std::unique_ptr<mlir::Pass> createSplitAoRDummiesPass();

@@ -51,8 +51,14 @@ jobs:
       matrix:
         llvm: ['21', '22']
         lane: [fast, e2e, e2e-cloudsc, e2e-graupel, heavy-icon, heavy-qe, heavy-atmo, heavy-ocean]
+        include:
+        # LLVM 23 runs the fast lane only; the heavy lanes stay on 21/22 so CI time does not grow.
+        - llvm: '23'
+          lane: fast
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.lane }})
     runs-on: ubuntu-24.04
+    # LLVM 23 support is in progress (derived-type default initialisation lowers differently); its leg reports but does not gate.
+    continue-on-error: ${{ matrix.llvm == '23' }}
     # heavy-qe: test_h_psi_numerical_correctness's own pytest timeout is 120 minutes.
     timeout-minutes: ${{ matrix.lane == 'heavy-qe' && 150 || matrix.lane == 'e2e-graupel' && 30 || 75 }}
     env:

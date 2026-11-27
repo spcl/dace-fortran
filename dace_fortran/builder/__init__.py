@@ -127,6 +127,8 @@ DEFAULT_PIPELINE = (
     # a plain CFG that lift-cf-to-scf turns back into nested scf.if for
     # the bridge to consume.
     "lower-fir-select-case,"
+    # LLVM 23 emits fir.logical_and/or and fir.eqv/neqv; rewrite them to the 21/22 shape the bridge reads.
+    "lower-fir-logical-ops,"
     # Structurize callees BEFORE inlining: an early ``RETURN`` (``if (c)
     # return``) or other in-callee CFG makes the callee a multi-block
     # function, and ``mlir::inlineCall`` then splices those blocks into the
@@ -360,8 +362,10 @@ DEFAULT_PIPELINE = (
     # and remove dead code before AST extraction.
     "hlfir-fold-constant-scalars,"
     # Constant propagation + fold + CSE after every HLFIR rewrite has
-    # exposed as many constants as it will.
-    "sccp,canonicalize,cse"
+    # exposed as many constants as it will.  LLVM 23's canonicalize folds the
+    # extent clamp select(n>0, n, 0) into arith.maxsi; lower-arith-minmax undoes
+    # that (a no-op before LLVM 23).
+    "sccp,canonicalize,cse,lower-arith-minmax"
 )
 
 # Multi-file pipeline: flatten cross-file calls into the entry, drop
@@ -397,7 +401,7 @@ MULTI_FILE_PIPELINE = (
     "hlfir-preserve-mutable-globals,"
     "hlfir-fold-assumed-rank-queries,"
     "hlfir-fold-constant-scalars,"
-    "sccp,canonicalize,cse"
+    "sccp,canonicalize,cse,lower-arith-minmax"
 )
 
 # Sympy module-level attributes that turn user-source identifiers into

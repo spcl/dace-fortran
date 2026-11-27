@@ -88,6 +88,7 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Path | None:
       ``/usr/lib/llvm-<major>/bin``; modules under
       ``/usr/lib/llvm-<major>/include/flang``).
     * ``<flang_install_root>/../share/flang/include`` -- some custom builds.
+    * ``<flang_install_root>/lib/clang/<major>/finclude/flang/<triple>`` -- LLVM 23 and later.
 
     Returns the **directory** that contains ``iso_c_binding.mod`` (and the
     matching ``ieee_*`` / ``omp_lib`` / ... modules), or ``None`` if no
@@ -107,6 +108,7 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Path | None:
     candidates = (
         install_root / "include" / "flang",
         install_root / "share" / "flang" / "include",
+        *sorted(install_root.glob("lib/clang/*/finclude/flang/*")),
     )
     for cand in candidates:
         if (cand / "iso_c_binding.mod").exists():

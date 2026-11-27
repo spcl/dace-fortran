@@ -4,7 +4,7 @@ description: LLVM/flang from apt.llvm.org, the Fortran/MPI/ICON build dependenci
 
 inputs:
   llvm:
-    description: LLVM major (21 or 22)
+    description: LLVM major (21, 22 or 23)
     required: true
 
 runs:

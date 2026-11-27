@@ -1220,6 +1220,8 @@ std::string buildExpr(mlir::Value val, int d) {
       {"math.absi", "abs"},
       {"math.floor", "floor"},
       {"math.ceil", "ceil"},
+      {"math.round", "round"},  // LLVM 23 emits ANINT/NINT as math.round, earlier majors as llvm.round calls
+      {"math.trunc", "trunc"},
       {"math.erf", "erf"},
       {"math.erfc", "erfc"},
       // ``llvm.intr.<op>``  --  LLVM-dialect intrinsic ops Flang uses
