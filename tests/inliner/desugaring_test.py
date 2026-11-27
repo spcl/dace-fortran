@@ -55,11 +55,11 @@ def test_coalesce_split_specification_parts():
     SourceCodeBuilder().add_file(ast.tofortran()).check_with_gfortran()
 
 
-def test_interleaved_statement_functions_extract_end_to_end():
+def test_interleaved_statement_functions_extract_end_to_end(tmp_path):
     """Full inliner over the interleaved-stmt-fn source: without the coalescer
     the pipeline raises "at most 1 item"; with it the statement functions
     deconstruct into internal FUNCTIONs and the TU is emitted."""
-    tu = inline_to_single_tu(sources={"m.f90": _INTERLEAVED_STMT_FN_SRC}, entry="m::stf")
+    tu = inline_to_single_tu(sources={"m.f90": _INTERLEAVED_STMT_FN_SRC}, entry="m::stf", out_dir=tmp_path)
     from pathlib import Path
 
     text = Path(tu).read_text() if not isinstance(tu, str) else tu
@@ -68,7 +68,7 @@ def test_interleaved_statement_functions_extract_end_to_end():
     assert "res = foeew(ptare_in)" in low
 
 
-def test_force_double_precision_collapses_real_kinds():
+def test_force_double_precision_collapses_real_kinds(tmp_path):
     """``force_double_precision`` rewrites every ``SELECTED_REAL_KIND(...)`` to
     the fp64 kind, so a kernel written for a reduced-precision kind parameter
     (the SC2026 CLOUDSC ``JPRM``/``JPRL`` family) lowers at uniform fp64 -- no
@@ -95,7 +95,7 @@ contains
   end subroutine k
 end module m
 """
-    tu = inline_to_single_tu(sources={"m.f90": src}, entry="m::k", force_double_precision=True)
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="m::k", force_double_precision=True, out_dir=tmp_path)
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     assert "real(kind = 4)" not in text and "real(kind = 8)" in text
     assert "selected_real_kind" not in text
@@ -130,7 +130,7 @@ end module dmod
 """
 
 
-def test_make_noop_drops_calls_and_prunes_stub():
+def test_make_noop_drops_calls_and_prunes_stub(tmp_path):
     """An EXPLICIT make_noop subroutine is a semantic no-op: its CALL
     statements are dropped outright and the stub -- with its derived-type
     scaffolding -- prunes away.  (A surviving module procedure with a
@@ -139,14 +139,16 @@ def test_make_noop_drops_calls_and_prunes_stub():
     stubs hit exactly this.)"""
     from pathlib import Path
 
-    tu = inline_to_single_tu(sources={"m.f90": _TIMER_LIKE_SRC}, entry="dmod::drv", make_noop=[("tmod", "p_start")])
+    tu = inline_to_single_tu(
+        sources={"m.f90": _TIMER_LIKE_SRC}, entry="dmod::drv", make_noop=[("tmod", "p_start")], out_dir=tmp_path
+    )
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     assert "p_start" not in text
     assert "type(perf)" not in text and "class(perf)" not in text
     assert "x = x * 2.0d0" in text
 
 
-def test_keep_external_stub_keeps_calls():
+def test_keep_external_stub_keeps_calls(tmp_path):
     """The do_not_emit/keep_external path must NOT drop call statements --
     those calls are real (an external implementation or the bridge serves
     them).  Only the explicit make_noop path is a droppable no-op."""
@@ -172,12 +174,12 @@ subroutine drv2(x)
 end subroutine drv2
 end module dmod2
 """
-    tu = inline_to_single_tu(sources={"m.f90": src}, entry="dmod2::drv2", do_not_emit=("ext_impl",))
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="dmod2::drv2", do_not_emit=("ext_impl",), out_dir=tmp_path)
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     assert "call ext_impl" in text
 
 
-def test_pruned_memberless_type_gets_placeholder():
+def test_pruned_memberless_type_gets_placeholder(tmp_path):
     """When pruning strips every component of a derived type that variables
     still reference, a placeholder component is kept: a zero-component type is
     questionable Fortran and makes numpy f2py's module wrapper NULL (import
@@ -200,7 +202,11 @@ end subroutine use_holder
 end module pmod
 """
     tu = inline_to_single_tu(
-        sources={"m.f90": src}, entry="pmod::use_holder", do_not_prune_type_components=False, f2py_safe=True
+        sources={"m.f90": src},
+        entry="pmod::use_holder",
+        do_not_prune_type_components=False,
+        f2py_safe=True,
+        out_dir=tmp_path,
     )
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     # Either the type pruned away entirely (no variable left referencing it)
