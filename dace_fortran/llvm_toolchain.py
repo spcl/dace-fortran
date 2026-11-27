@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 #: LLVM major versions the bridge builds against, in preference order.
-SUPPORTED_LLVM_VERSIONS = ("21", "22", "23")
+SUPPORTED_LLVM_VERSIONS = ("22", "23")
 
 #: Unversioned binary names; they only pin a major once ``--version`` confirms it.
 _UNVERSIONED = ("flang-new", "flang")

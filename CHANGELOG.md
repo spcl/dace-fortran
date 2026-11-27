@@ -11,6 +11,8 @@ Requires `dace-extended>=1.0.5`.
 - Parallelization gate: a loop versioned at run time counts as parallelized.
 - Tests: four exact duplicates dropped; three structure-and-value pairs folded into one test each; the QE h_psi
   numerical check is skipped on this line.
+- Toolchain: LLVM 22 is the core version and runs every CI lane; LLVM 23 is supported and its fast lane gates CI.
+  LLVM 21 is no longer supported.
 
 ## 2.0.0a1
 

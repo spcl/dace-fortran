@@ -1,5 +1,5 @@
 // ============================================================================
-// llvm_compat.h  --  LLVM-major-version shims for the bridge (LLVM 21 and 22).
+// llvm_compat.h  --  LLVM-major-version shims for the bridge (LLVM 22 and 23).
 // ============================================================================
 // Every construct whose spelling differs between the supported majors lives
 // here behind LLVM_VERSION_MAJOR, so the passes stay version-agnostic and
@@ -21,16 +21,14 @@ namespace hlfir_bridge {
 /// ``hlfir.declare`` through the explicit-result-types builder, which pins both
 /// result types instead of letting the short builder infer them.
 ///
-/// LLVM 22 gave ``hlfir.declare`` the ``storage`` / ``storage_offset`` operands
-/// (FortranVariableStorageOpInterface) plus ``skip_rebox`` / ``dummy_arg_no``, so
-/// its generated builder takes four more arguments than LLVM 21's.  All four are
-/// absent/default here: these declares describe freshly allocated local temps.
+/// The ``storage`` / ``storage_offset`` operands (FortranVariableStorageOpInterface)
+/// and ``skip_rebox`` / ``dummy_arg_no`` are absent/default here: these declares
+/// describe freshly allocated local temps.
 /// ``fortranAttrs`` marks such a temp (e.g. ``allocatable`` for a heap box slot).
 inline hlfir::DeclareOp createDeclare(mlir::OpBuilder& b, mlir::Location loc, mlir::Type resultType0,
                                       mlir::Type resultType1, mlir::Value memref, mlir::Value shape,
                                       mlir::ValueRange typeparams, mlir::StringAttr uniqName,
                                       fir::FortranVariableFlagsAttr fortranAttrs = {}) {
-#if LLVM_VERSION_MAJOR >= 22
   return b.create<hlfir::DeclareOp>(loc, resultType0, resultType1, memref, shape, typeparams,
                                     /*dummy_scope=*/mlir::Value{},
                                     /*storage=*/mlir::Value{},
@@ -38,19 +36,11 @@ inline hlfir::DeclareOp createDeclare(mlir::OpBuilder& b, mlir::Location loc, ml
                                     /*data_attr=*/cuf::DataAttributeAttr{},
                                     /*skip_rebox=*/mlir::UnitAttr{},
                                     /*dummy_arg_no=*/mlir::IntegerAttr{});
-#else
-  return b.create<hlfir::DeclareOp>(loc, resultType0, resultType1, memref, shape, typeparams,
-                                    /*dummy_scope=*/mlir::Value{}, uniqName, fortranAttrs,
-                                    /*data_attr=*/cuf::DataAttributeAttr{});
-#endif
 }
 
 /// One entry per ``hlfir.declare`` operand segment; a short array silently reads past its end.
 inline mlir::NamedAttribute declareSegments(mlir::OpBuilder& b, bool hasShape) {
-  llvm::SmallVector<std::int32_t, 5> sizes{1, hasShape ? 1 : 0, 0, 0};
-#if LLVM_VERSION_MAJOR >= 22
-  sizes.push_back(0);
-#endif
+  llvm::SmallVector<std::int32_t, 5> sizes{1, hasShape ? 1 : 0, 0, 0, 0};
   return b.getNamedAttr("operandSegmentSizes", b.getDenseI32ArrayAttr(sizes));
 }
 

@@ -30,8 +30,8 @@ if [ "${SKIP_APT:-0}" != 1 ]; then
     gfortran libopenmpi-dev openmpi-bin \
     libnetcdf-dev libnetcdff-dev libhdf5-dev \
     libxml2-dev libfyaml-dev liblapack-dev libblas-dev zlib1g-dev
-  # flang-new-21 (the HLFIR emitter) -- LLVM apt repo; adjust per distro.
-  command -v flang-new-21 >/dev/null || echo "WARN: install flang-new-21 (LLVM 21) for the bridge"
+  # flang-new-22 (the HLFIR emitter) -- LLVM apt repo; adjust per distro.
+  command -v flang-new-22 >/dev/null || echo "WARN: install flang-new-22 (LLVM 22) for the bridge"
 fi
 
 # 2. Submodule init for the in-tree ICON checkout; a custom out-of-tree
