@@ -62,6 +62,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # tests/_cache.py keeps the f2py reference builds and the generated-code warning verdicts here, each under a digest
+    # of its source, flags and toolchain, so a restored entry is exactly what a rebuild would produce.
+    - name: Restore the test reference cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/dace_fortran_tests
+        key: test-refs-llvm${{ matrix.llvm }}-${{ matrix.lane }}-${{ hashFiles('tests/**/*.py', 'tests/**/*.f90') }}
+        restore-keys: test-refs-llvm${{ matrix.llvm }}-${{ matrix.lane }}-
+
     - name: Locate the ICON build tree
       run: echo "ICON_BUILD=$RUNNER_TEMP/icon_build/stock_cpu" >> "$GITHUB_ENV"
 
