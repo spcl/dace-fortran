@@ -146,7 +146,9 @@ mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp, bool* negated =
 /// ub-lb+1 -> "max((endcol - startcol) + 1, 0)") for a symbolic shape dim; leaf scalars must be separately promoted to
 /// SDFG symbols (extract_vars::symbolNames). Empty string if unrecognised -- callers fall back to the "?"
 /// synthetic-symbol path.
-std::string traceExtentExpr(mlir::Value v);
+/// ``element`` names a runtime-indexed element load (``lo(k)``) the walk meets, or returns "" to give up there.
+using ElementSymbolFn = std::function<std::string(mlir::Value)>;
+std::string traceExtentExpr(mlir::Value v, const ElementSymbolFn& element = {});
 
 /// Walk the same SSA chain traceExtentExpr recognises, appending every leaf scalar-declare name to out; used by
 /// extract_vars Pass 2 to promote those scalars so traceExtentExpr's expression string doesn't reference undeclared

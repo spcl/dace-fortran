@@ -638,7 +638,8 @@ void forEachConstIndexedElement(mlir::Value v,
   forEachConstIndexedElementImpl(v, fn, 0);
 }
 
-static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Operation*, std::string>& memo) {
+static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Operation*, std::string>& memo,
+                                       const ElementSymbolFn& element) {
   if (!v) return "";
   auto* def = v.getDefiningOp();
   if (!def) return "";
@@ -648,7 +649,7 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
   if (auto it = memo.find(def); it != memo.end()) return it->second;
   std::string result = [&]() -> std::string {
     // Transparent peels.
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return traceExtentExprMemo(cv.getValue(), memo);
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return traceExtentExprMemo(cv.getValue(), memo, element);
 
     // fir.box_dims extent result renders as <name>_d<dim>; a transient sized from another array's runtime extent (e.g.
     // LiftAosPointerRecords' gather temp) must reuse the source's extent symbol, or it falls through to "?", defaults
@@ -672,6 +673,8 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
     // its position symbol instead, since promoting the whole array would collide it with its own data descriptor.
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
       if (auto e = constIndexedElementLoad(v)) return posSymbolName(e->first, e->second);
+      if (element)
+        if (std::string sym = element(v); !sym.empty()) return sym;
       auto mem = ld.getMemref();
       auto* md = mem.getDefiningOp();
       if (!md) return "";
@@ -695,9 +698,9 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
         if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
           if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) falseIsZero = (ia.getInt() == 0);
       if (falseIsZero && (pred == P::sgt || pred == P::sge))
-        return traceExtentExprMemo(sel.getTrueValue(), memo);  // non-neg clamp
-      auto a = traceExtentExprMemo(sel.getTrueValue(), memo);
-      auto b = traceExtentExprMemo(sel.getFalseValue(), memo);
+        return traceExtentExprMemo(sel.getTrueValue(), memo, element);  // non-neg clamp
+      auto a = traceExtentExprMemo(sel.getTrueValue(), memo, element);
+      auto b = traceExtentExprMemo(sel.getFalseValue(), memo, element);
       if (a.empty() || b.empty()) return "";
       if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge) return "max(" + a + ", " + b + ")";
       if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule) return "min(" + a + ", " + b + ")";
@@ -711,8 +714,8 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
         {"arith.addi", " + "}, {"arith.subi", " - "}, {"arith.muli", " * "}, {"arith.divsi", ""}, {"arith.divui", ""},
     };
     if (auto it = bin.find(nm); it != bin.end() && def->getNumOperands() == 2) {
-      auto l = traceExtentExprMemo(def->getOperand(0), memo);
-      auto r = traceExtentExprMemo(def->getOperand(1), memo);
+      auto l = traceExtentExprMemo(def->getOperand(0), memo, element);
+      auto r = traceExtentExprMemo(def->getOperand(1), memo, element);
       if (l.empty() || r.empty()) return "";
       if (nm == "arith.divsi") return truncatedDivision(l, r);
       if (nm == "arith.divui") return floorDivision(l, r);
@@ -720,8 +723,8 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
     }
     if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" || nm == "arith.minui") &&
         def->getNumOperands() == 2) {
-      auto l = traceExtentExprMemo(def->getOperand(0), memo);
-      auto r = traceExtentExprMemo(def->getOperand(1), memo);
+      auto l = traceExtentExprMemo(def->getOperand(0), memo, element);
+      auto r = traceExtentExprMemo(def->getOperand(1), memo, element);
       if (l.empty() || r.empty()) return "";
       const char* fn = (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
       return std::string(fn) + "(" + l + ", " + r + ")";
@@ -733,9 +736,9 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
   return result;
 }
 
-std::string traceExtentExpr(mlir::Value v) {
+std::string traceExtentExpr(mlir::Value v, const ElementSymbolFn& element) {
   llvm::DenseMap<mlir::Operation*, std::string> memo;
-  return traceExtentExprMemo(v, memo);
+  return traceExtentExprMemo(v, memo, element);
 }
 
 // Extent expressions form a DAG; without a visited set the operand recursion re-explores shared subtrees (exponential).

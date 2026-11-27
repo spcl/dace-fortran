@@ -1,3 +1,5 @@
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """An array *element value* used as a data-access dimension becomes an SDFG symbol
 (``__sym_<array>_<index>``) distinct from the array itself; the backing array must
 stay constant in the symbol's scope or the build is refused.  Reproduces ICON's
@@ -152,6 +154,46 @@ def test_value_symbol_reaching_def_resnapshot(tmp_path: Path):
     mod.resnap_mod.resnap(np.int32(sel), tab_r, z, out_r)
     np.testing.assert_array_equal(out_s, out_r)
     np.testing.assert_array_equal(tab_s, tab_r)
+
+
+_SRC_LOWER = """
+module array_value_lower_mod
+  implicit none
+contains
+subroutine array_value_lower(starts, sel, out)
+  implicit none
+  integer, intent(in) :: starts(4)
+  integer, intent(in) :: sel
+  real(8), intent(inout) :: out(8)
+  real(8) :: work(starts(sel):8)
+  integer :: i
+  do i = starts(sel), 8
+    work(i) = out(i) * 3.0d0
+  end do
+  do i = starts(sel), 8
+    out(i) = work(i)
+  end do
+end subroutine array_value_lower
+end module array_value_lower_mod
+"""
+
+
+def test_an_automatic_array_lower_bound_read_from_an_element_is_defined_at_entry(tmp_path: Path):
+    """ICON's ``z_dwdz_dd(nproma, kstart_dd3d(p_patch%id):nlev, nblks_c)``: the lower bound is an element value,
+    which left ``offset_z_dwdz_dd_d1`` a free symbol the binding cannot source (a local has no caller)."""
+    sdfg = build_sdfg(
+        _SRC_LOWER, tmp_path / "sdfg", name="avl", entry="array_value_lower_mod::array_value_lower"
+    ).build()
+    assert not [s for s in map(str, sdfg.free_symbols) if s.startswith("offset_work")], sorted(
+        map(str, sdfg.free_symbols)
+    )
+    starts = np.array([2, 4, 6, 1], dtype=np.int32)
+    out0 = np.arange(1, 9, dtype=np.float64)
+    out = out0.copy()
+    sdfg(starts=starts, sel=np.int32(2), out=out)
+    ref = out0.copy()
+    ref[3:] = out0[3:] * 3.0
+    np.testing.assert_array_equal(out, ref)
 
 
 if __name__ == "__main__":
