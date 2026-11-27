@@ -178,7 +178,18 @@ def compile_to_hlfir(
     source = preprocess_fortran_source(source, search_dirs=[out_dir], merge=merge, if_intvar=preprocess)
     src.write_text(source)
     hlfir = out_dir / f"{name}.hlfir"
-    subprocess.check_call([_FLANG, "-fc1", "-emit-hlfir", str(src), "-o", str(hlfir)])
+    subprocess.check_call(
+        [
+            _FLANG,
+            "-fc1",
+            "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(),
+            "-emit-hlfir",
+            str(src),
+            "-o",
+            str(hlfir),
+        ]
+    )
     return hlfir
 
 

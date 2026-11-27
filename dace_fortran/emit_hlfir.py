@@ -37,7 +37,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from dace_fortran.entry_names import resolve_entry_name
-from dace_fortran.llvm_toolchain import require_flang
+from dace_fortran.llvm_toolchain import intrinsic_modules_path, require_flang
 
 #: (source_path, include_dirs, cpp_defines) of one Fortran translation unit.
 CompileEntry = tuple[Path, list[str], list[str]]
@@ -207,6 +207,8 @@ def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], d
     collisions, so hermetic mode buys nothing here."""
     out_dir = out_dir.resolve()
     cmd = [flang, "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC", "-J", str(out_dir), "-I", str(out_dir)]
+    # -fc1 searches only <bin>/../include/flang, which LLVM 23 no longer ships.
+    cmd += ["-fintrinsic-modules-path", str(intrinsic_modules_path(flang))]
     for d in includes:
         cmd += ["-I", str(d)]
     for d in defines:

@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from tests._util import _FLANG
+from tests._util import _FLANG, flang_intrinsic_modules_path
 
 # Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
 # the override could only mean genuine devirtualisation (no concrete-TYPE call to muddy the
@@ -104,7 +104,8 @@ def _emit_fir(tmp_path: Path, source: str, stem: str, *, optimize: bool) -> str:
     src = tmp_path / f"{stem}.f90"
     src.write_text(source)
     out = tmp_path / f"{stem}{'_O2' if optimize else ''}.fir"
-    cmd = [_FLANG, "-fc1", "-emit-fir"]
+    # Without the intrinsic modules flang emits no fir.type_info, so --fir-polymorphic-op finds no binding tables.
+    cmd = [_FLANG, "-fc1", "-fintrinsic-modules-path", flang_intrinsic_modules_path(), "-emit-fir"]
     if optimize:
         cmd.append("-O2")
     cmd += [str(src), "-o", str(out)]
@@ -148,7 +149,7 @@ def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Pat
     """``--fir-polymorphic-op`` eliminates ``fir.dispatch`` but only by expanding it into
     the explicit vtable-load sequence (``fir.address_of`` -> indirect call) -- never a
     direct ``fir.call``. This is *lowering*, not devirtualisation."""
-    fir_opt = _sibling_tool("fir-opt-21", "fir-opt")
+    fir_opt = _sibling_tool("fir-opt")
     assert fir_opt is not None, "fir-opt not found alongside flang"
     raw = tmp_path / "poly.fir"
     raw.write_text(_emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False))
