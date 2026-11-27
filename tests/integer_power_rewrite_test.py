@@ -124,7 +124,7 @@ def test_eval_equivalent(expr: str):
 # --- e2e: bridge vs gfortran on a base that needs wrapping ----------
 
 
-def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
+def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path, e2e_cpu_args):
     """``(t(i) - k)**2.0`` (parenthesised base in a quotient) plus ``s**3.0`` must stay
     numerically identical after the rewrite: bridge build vs gfortran reference."""
     from tests._util import build_sdfg, f2py_compile
