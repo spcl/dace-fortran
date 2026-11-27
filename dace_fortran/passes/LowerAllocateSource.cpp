@@ -19,9 +19,12 @@
 //     fir.allocmem with the SetBounds extents, fir.shape + fir.embox + fir.store into x's
 //     descriptor, then ``hlfir.assign y to x realloc``.  The runtime's stat result becomes 0.
 //
+//     A scalar allocatable gets the same without a shape (ICON's ``ALLOCATE(x, SOURCE=y)`` of a scalar).
+//
 // Limits (rejected with an error, never lowered silently wrong):
-//     a lower bound other than the literal 1, a scalar or polymorphic allocatable, a missing
-//     SetBounds for some dim.
+//     a lower bound other than the literal 1, a missing SetBounds for some dim.  A polymorphic
+//     allocatable keeps its runtime call, with a warning: the whole module runs this pass, and ICON's
+//     polymorphic SOURCE= sit outside the kernels the bridge builds.
 // ============================================================================
 
 #include <optional>
@@ -88,14 +91,36 @@ struct LowerAllocateSourcePass
       if (mlir::failed(lower(call))) return signalPassFailure();
   }
 
+  // ``ALLOCATE(x, SOURCE=y)`` of a scalar: ``x`` gets a fresh scalar, then ``x = y``.
+  static mlir::LogicalResult lowerScalar(fir::CallOp call, mlir::Value boxRef, mlir::Value source, fir::BoxType boxTy,
+                                         fir::HeapType heapTy) {
+    auto decl = boxRef.getDefiningOp<hlfir::DeclareOp>();
+    if (!decl) return call.emitError("ALLOCATE(..., SOURCE=...) of an allocatable without an hlfir.declare");
+    mlir::OpBuilder b(call);
+    mlir::Location const loc = call.getLoc();
+    mlir::Value const heap =
+        b.create<fir::AllocMemOp>(loc, heapTy.getEleTy(), (decl.getUniqName().getValue() + ".alloc").str(),
+                                  mlir::ValueRange{}, mlir::ValueRange{});
+    b.create<fir::StoreOp>(loc, b.create<fir::EmboxOp>(loc, boxTy, heap), boxRef);
+    b.create<hlfir::AssignOp>(loc, source, boxRef, /*realloc=*/true);
+    for (mlir::Value res : call.getResults())
+      res.replaceAllUsesWith(b.create<mlir::arith::ConstantOp>(loc, b.getIntegerAttr(res.getType(), 0)));
+    call.erase();
+    return mlir::success();
+  }
+
   static mlir::LogicalResult lower(fir::CallOp call) {
     mlir::Value const boxRef = peelConverts(call.getArgs()[0]);
     mlir::Value const source = peelConverts(call.getArgs()[1]);
     auto boxTy = mlir::dyn_cast<fir::BoxType>(fir::dyn_cast_ptrEleTy(boxRef.getType()));
     auto heapTy = boxTy ? mlir::dyn_cast<fir::HeapType>(boxTy.getEleTy()) : fir::HeapType{};
-    auto seqTy = heapTy ? mlir::dyn_cast<fir::SequenceType>(heapTy.getEleTy()) : fir::SequenceType{};
-    if (!seqTy)
-      return call.emitError("ALLOCATE(..., SOURCE=...) of a scalar or polymorphic allocatable is not supported");
+    if (!heapTy) {
+      llvm::errs() << "hlfir-lower-allocate-source: ALLOCATE(..., SOURCE=...) of a polymorphic allocatable keeps its "
+                      "runtime call\n";
+      return mlir::success();
+    }
+    auto seqTy = mlir::dyn_cast<fir::SequenceType>(heapTy.getEleTy());
+    if (!seqTy) return lowerScalar(call, boxRef, source, boxTy, heapTy);
 
     // The SetBounds calls on this descriptor before the AllocateSource, one per dim.
     unsigned const rank = seqTy.getDimension();

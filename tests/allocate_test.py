@@ -99,5 +99,25 @@ end subroutine
     np.testing.assert_allclose(b, want, rtol=1e-14)
 
 
+# Reproducer: ICON velocity's whole-module build failed on a scalar ALLOCATE(x, SOURCE=y)
+def test_allocate_with_source_of_a_scalar_copies_the_source(tmp_path):
+    """A scalar allocatable takes the source's value."""
+    src = """
+subroutine top(a, b)
+  real(8), intent(in) :: a(1)
+  real(8), intent(out) :: b(1)
+  real(8), allocatable :: t
+  allocate(t, source=a(1))
+  t = t + 1
+  b(1) = 2 * t
+  deallocate(t)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path, name="top", entry="top").build()
+    a, b = np.array([1.5]), np.zeros(1)
+    sdfg(a=a, b=b)
+    np.testing.assert_allclose(b, 2 * (a + 1), rtol=1e-14)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
