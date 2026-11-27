@@ -4,7 +4,7 @@ All notable changes to dace-fortran. `helpers/release_patch.sh` adds a section p
 
 ## 2.0.0a2
 
-Requires `dace-extended>=1.0.4`.
+Requires `dace-extended>=1.0.5`.
 
 - optimize: a loop is versioned at run time only where LoopToMap refused it for a loop-invariant branch
   (ParallelizeUnderConstraint after LoopToMap).

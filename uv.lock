@@ -303,7 +303,7 @@ testing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dace-extended", marker = "python_full_version >= '3.12' and extra == 'extended'", specifier = ">=1.0.4" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12' and extra == 'extended'", specifier = ">=1.0.5" },
     { name = "fparser", specifier = ">0.2" },
     { name = "nanobind" },
     { name = "networkx" },
@@ -315,7 +315,7 @@ provides-extras = ["extended"]
 dev = [
     { name = "clang-format", specifier = "~=21.1" },
     { name = "coverage" },
-    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.4" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.5" },
     { name = "fprettify" },
     { name = "meson" },
     { name = "mypy", specifier = "==1.18.2" },
@@ -339,7 +339,7 @@ linting = [
 mpi = [{ name = "mpi4py" }]
 testing = [
     { name = "coverage" },
-    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.4" },
+    { name = "dace-extended", marker = "python_full_version >= '3.12'", specifier = ">=1.0.5" },
     { name = "meson" },
     { name = "ninja" },
     { name = "pytest" },
