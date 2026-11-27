@@ -4,7 +4,7 @@ All notable changes to dace-fortran 1.x, the line on DaCe's FaCe branch.
 
 ## 1.4.0
 
-Pins DaCe FaCe d0abf827a9. Replaces the planned 1.3.1.
+Pins DaCe FaCe d527e94f61. Replaces the planned 1.3.1.
 
 ### Toolchain
 - LLVM 22 is the core version and runs every CI lane; LLVM 23 is supported and its fast lane gates CI. LLVM 21 is no
