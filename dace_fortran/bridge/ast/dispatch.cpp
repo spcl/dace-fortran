@@ -776,19 +776,29 @@ static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane
   return n;
 }
 
+static hlfir::DesignateOp traceSectionDesignate(mlir::Value v);
+
 /// Builds an fftcall ASTNode for a recognised QE FFT call. Buffer is the 2nd argument (after the fft_kind literal);
-/// descriptor/howmany not inspected in this first cut.
+/// descriptor/howmany not inspected in this first cut. A section buffer (``temppsic_d(:, ii)``) carries its subset in
+/// call_arg_subsets, so the transform covers that column and not the whole array.
 static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction) {
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 2) return n;
   std::string const buf = traceToDecl(args[1]);
   if (buf.empty()) return n;
+  std::string subset;
+  if (hlfir::DesignateOp sec = traceSectionDesignate(args[1])) {
+    auto parts = renderDesignateSubsetStrings(sec);
+    if (parts.empty()) throw std::runtime_error("QE FFT on a section of " + buf + " whose bounds do not render");
+    subset = llvm::join(parts, ", ");
+  }
   n.kind = "fftcall";
   n.callee = "fft_execute";
   n.expr = direction;
   n.target = buf;
   n.call_args = {buf, buf};  // in-place
+  n.call_arg_subsets = {subset, subset};
   return n;
 }
 

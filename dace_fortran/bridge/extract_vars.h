@@ -63,6 +63,9 @@ struct VarInfo {
   /// an unallocated AoS component); descriptors.py registers it as a read-only transient instead of a program arg since
   /// it's dead on every non-allocating path. See extract_vars.cpp's component-base guard.
   bool unbindable_section = false;
+  /// A module global the kernel allocates and frees within the call (QE's qgm): no host state, so descriptors.py
+  /// registers it as a kernel-owned transient sized where it is allocated, never an argument.
+  bool kernel_scoped_alloc = false;
   /// Marshalling metadata for a flattened component of a module-level array-of-structs global (QE ``us_exx``'s
   /// ``becxx(ikq)%k``): aos_origin_mod/aos_origin_struct/aos_member_path identify the owning module/global/%-joined
   /// member path, aos_outer_rank is the AoS dim count, global_alloc_inside means the kernel itself ALLOCATEs it

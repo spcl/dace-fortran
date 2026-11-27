@@ -1172,6 +1172,37 @@ static std::string traceToGlobalSymbol(mlir::Value memref) {
   return {};
 }
 
+/// Whether the global ``sym`` is allocated and freed within the call: its ``ALLOCATE`` and ``DEALLOCATE`` sites, in
+/// program order, alternate starting with an ``ALLOCATE`` and ending with a ``DEALLOCATE`` (QE's ``qgm``: allocated by
+/// ``qvan_init``, freed by ``qvan_clean``). Such a global is unallocated before and after the call, so it carries no
+/// host state: the kernel owns it as a scratch buffer sized where it is allocated.
+///
+/// shortcut: program order, not control flow -- an ALLOCATE and a DEALLOCATE under different conditions read as
+/// paired; upgrade to a dominance check if a kernel ever frees a global on a path that did not allocate it.
+static bool allocatedAndFreedWithinCall(const std::string& sym, mlir::ModuleOp module) {
+  std::string const allocName = sym + ".alloc";
+  std::vector<bool> isAlloc;  // the alloc (true) / free (false) sites of ``sym``, in program order
+  module.walk([&](mlir::Operation* op) {
+    if (auto a = mlir::dyn_cast<fir::AllocMemOp>(op)) {
+      if (auto un = a.getUniqName(); un && un->str() == allocName) isAlloc.push_back(true);
+      return;
+    }
+    auto f = mlir::dyn_cast<fir::FreeMemOp>(op);
+    if (!f) return;
+    // ``fir.freemem (fir.box_addr (fir.load <declare of sym>))``
+    auto addr = f.getHeapref().getDefiningOp<fir::BoxAddrOp>();
+    auto load = addr ? addr.getVal().getDefiningOp<fir::LoadOp>() : fir::LoadOp{};
+    if (!load) return;
+    mlir::Value ref = load.getMemref();
+    if (auto decl = ref.getDefiningOp<hlfir::DeclareOp>()) ref = decl.getMemref();
+    if (traceToGlobalSymbol(ref) == sym) isAlloc.push_back(false);
+  });
+  if (isAlloc.empty() || isAlloc.size() % 2 != 0) return false;
+  for (size_t i = 0; i < isAlloc.size(); ++i)
+    if (isAlloc[i] != (i % 2 == 0)) return false;
+  return true;
+}
+
 std::pair<std::string, std::string> decodeModuleGlobalSymbol(const std::string& sym) {
   llvm::StringRef s(sym);
   // Module data only.  ``_QF`` = function-scope SAVE local (private,
@@ -1682,6 +1713,7 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
 // scope's -- collapsing the false-positive collision.
 void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   std::map<std::string, std::set<std::string>> shortToScopes;
+  std::set<std::string> optionalCalleeShorts;
   // A module global has no F scope and keeps its bare name; it still counts as a scope of its own, so an inlined
   // callee's same-named local (QE grid_set's ``g(3)`` vs gvect's ``g(:, :)``) is qualified instead of merged into it.
   auto record = [&](mlir::Operation* /*op*/, llvm::StringRef uniq) {
@@ -1719,6 +1751,10 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
       bool const isOptional = bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::optional);
       std::string const declScope = getFScope(decl.getUniqName().str());
       if (isOptional && !declScope.empty() && declScope != entryScope) {
+        std::string const un = decl.getUniqName().str();
+        bool const isArray =
+            mlir::isa<fir::SequenceType>(fir::unwrapPassByRefType(fir::unwrapRefType(decl.getResult(0).getType())));
+        if (auto p = un.rfind('E'); isArray && p != std::string::npos) optionalCalleeShorts.insert(un.substr(p + 1));
         return;
       }
     }
@@ -1735,6 +1771,13 @@ void buildCollisionSet(mlir::ModuleOp module, const std::string& entryScope) {
   std::set<std::string> collisions;
   for (auto& kv : shortToScopes) {
     if (kv.second.size() >= 2) collisions.insert(kv.first);
+  }
+  // An inlined callee's optional ARRAY dummy that names an entry-scope declare is a different variable all the same: an
+  // absent one still becomes an SDFG container, and unqualified it merged with the entry's (QE's addusxx_g
+  // ``becpsi_r(nkb)`` with the entry's flattened ``becpsi % r``, so the binding bound one to the other).
+  for (auto const& shortName : optionalCalleeShorts) {
+    auto it = shortToScopes.find(shortName);
+    if (it != shortToScopes.end() && it->second.count(entryScope)) collisions.insert(shortName);
   }
 
   // A module record that stays a record (not flattened into companion declares) names each member by composition,
@@ -3605,7 +3648,11 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       };
       if (written) {
         v.is_written = true;
-        if (isModuleScope && !isParameter && v.intent.empty()) {
+        // A global the kernel allocates and frees within the call stays a kernel-owned transient: as an argument
+        // the binding would have to size it before the call, by an extent only the kernel computes.
+        v.kernel_scoped_alloc =
+            isModuleScope && !isParameter && v.intent.empty() && allocatedAndFreedWithinCall(sym, module);
+        if (isModuleScope && !isParameter && v.intent.empty() && !v.kernel_scoped_alloc) {
           // A WRITTEN module-scope global is host-shared INOUT state: the
           // kernel's update must be visible to the caller after the call.
           // Surface it as an inout arg with module-origin provenance -- the
@@ -3872,6 +3919,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                   }
                   if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
                     return traceToDecl(ld.getMemref());
+                  }
+                  // flang's extent clamp ``select(x > 0, x, 0)``: a pointer remap's extent is non-negative.
+                  if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
+                    auto cmp = sel.getCondition().getDefiningOp<mlir::arith::CmpIOp>();
+                    auto zero = traceConstInt(sel.getFalseValue());
+                    if (!cmp || cmp.getPredicate() != mlir::arith::CmpIPredicate::sgt ||
+                        cmp.getLhs() != sel.getTrueValue() || !zero || *zero != 0)
+                      return "";
+                    vv = sel.getTrueValue();
+                    continue;
                   }
                   if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
                     std::string const lhs = renderExtent(mul.getLhs());

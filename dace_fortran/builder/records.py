@@ -44,6 +44,7 @@ class SyntheticVar:
     bounds_remap_total_extent: str = ""
     bounds_remap_source_subset: list[str] = field(default_factory=list)
     unbindable_section: bool = False
+    kernel_scoped_alloc: bool = False
     aos_origin_mod: str = ""
     aos_origin_struct: str = ""
     aos_member_path: str = ""
