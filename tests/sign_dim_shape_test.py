@@ -27,9 +27,10 @@ subroutine main(a, b, out)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
+    csdfg = sdfg.compile()
     for a_in, b_in, expected in [(3.0, 5.0, 3.0), (3.0, -5.0, -3.0), (-3.0, 5.0, 3.0), (-3.0, -5.0, -3.0)]:
         out = np.zeros(1, dtype=np.float64)
-        sdfg(a=a_in, b=b_in, out=out)
+        csdfg(a=a_in, b=b_in, out=out)
         assert float(out[0]) == expected, f"SIGN({a_in}, {b_in}) -> {out[0]}, want {expected}"
 
 
@@ -43,9 +44,10 @@ subroutine main(a, b, out)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
+    csdfg = sdfg.compile()
     for a_in, b_in, expected in [(7, 3, 7), (7, -3, -7), (-7, 3, 7), (-7, -3, -7)]:
         out = np.zeros(1, dtype=np.int32)
-        sdfg(a=a_in, b=b_in, out=out)
+        csdfg(a=a_in, b=b_in, out=out)
         assert int(out[0]) == expected, f"SIGN({a_in}, {b_in}) -> {out[0]}, want {expected}"
 
 
@@ -64,9 +66,10 @@ subroutine main(a, b, out)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
+    csdfg = sdfg.compile()
     for a_in, b_in, expected in [(5.0, 3.0, 2.0), (3.0, 5.0, 0.0), (-1.0, -3.0, 2.0), (4.0, 4.0, 0.0)]:
         out = np.zeros(1, dtype=np.float64)
-        sdfg(a=a_in, b=b_in, out=out)
+        csdfg(a=a_in, b=b_in, out=out)
         assert float(out[0]) == expected, f"DIM({a_in}, {b_in}) -> {out[0]}, want {expected}"
 
 
@@ -80,9 +83,10 @@ subroutine main(a, b, out)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name="main").build()
+    csdfg = sdfg.compile()
     for a_in, b_in, expected in [(8, 3, 5), (3, 8, 0), (-2, -7, 5), (4, 4, 0)]:
         out = np.zeros(1, dtype=np.int32)
-        sdfg(a=a_in, b=b_in, out=out)
+        csdfg(a=a_in, b=b_in, out=out)
         assert int(out[0]) == expected, f"DIM({a_in}, {b_in}) -> {out[0]}, want {expected}"
 
 

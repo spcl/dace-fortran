@@ -19,17 +19,18 @@ res(1) = COUNT(d)
 END SUBROUTINE intrinsic_count_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     d = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([2], 42, order="F", dtype=np.int32)
 
     d[2] = True
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 1
 
     d[2] = False
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 0
 
 
@@ -71,6 +72,7 @@ res(7) = COUNT(first(1:2) .eq. second(4:5))
 END SUBROUTINE intrinsic_count_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
@@ -78,18 +80,18 @@ END SUBROUTINE intrinsic_count_test_function
     second[2] = 2
     res = np.full([7], 0, order="F", dtype=np.int32)
 
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     assert list(res) == [4, 4, 4, 4, 4, 2, 2]
 
     second = np.full([size], 2, order="F", dtype=np.int32)
     res = np.full([7], 0, order="F", dtype=np.int32)
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     for val in res:
         assert val == 0
 
     second = np.full([size], 1, order="F", dtype=np.int32)
     res = np.full([7], 0, order="F", dtype=np.int32)
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     assert list(res) == [5, 5, 5, 5, 5, 3, 2]
 
 
@@ -112,26 +114,27 @@ res(8) = COUNT(6 .gt. first)
 END SUBROUTINE intrinsic_count_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
     res = np.full([8], 0, order="F", dtype=np.int32)
 
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [0, 0, 0, 0, 0, 5, 0, size]
 
     first[1] = 42
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [1, 1, 1, 0, 1, 4, 1, size - 1]
 
     first[1] = 5
     first[2] = 42
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [1, 1, 0, 1, 1, 4, 1, size - 1]
 
     first[2] = 7
     first[3] = 42
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [1, 1, 0, 1, 1, 4, 2, size - 2]
 
 
@@ -146,23 +149,24 @@ res(1) = COUNT(d)
 END SUBROUTINE intrinsic_count_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    csdfg = sdfg.compile()
 
     sizes = [5, 7]
     d = np.full(sizes, True, order="F", dtype=np.uint32)
     res = np.full([2], 42, order="F", dtype=np.int32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 35
 
     d[2, 2] = False
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 34
 
     d = np.full(sizes, False, order="F", dtype=np.uint32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 0
 
     d[2, 2] = True
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == 1
 
 
@@ -185,6 +189,7 @@ res(7) = COUNT(first(2:3, 3:4) .eq. second(2:3, 3:4))
 END SUBROUTINE intrinsic_count_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_count_test_function").build()
+    csdfg = sdfg.compile()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -192,12 +197,12 @@ END SUBROUTINE intrinsic_count_test_function
     second[1, 1] = 1
     res = np.full([7], 0, order="F", dtype=np.int32)
 
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     assert list(res) == [1, 1, 1, 1, 1, 1, 0]
 
     second = np.full(sizes, 1, order="F", dtype=np.int32)
     res = np.full([7], 0, order="F", dtype=np.int32)
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     assert list(res) == [20, 20, 20, 20, 20, 20, 4]
 
 

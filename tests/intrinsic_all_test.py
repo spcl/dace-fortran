@@ -19,17 +19,18 @@ res(1) = ALL(d)
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     d = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([2], False, order="F", dtype=np.uint32)
 
     d[2] = True
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert not res[0]
 
     d = np.full([size], True, order="F", dtype=np.uint32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0]
 
 
@@ -44,10 +45,11 @@ res(1) = ALL(d, 1)
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
     res = np.zeros(2, dtype=np.uint32)
-    sdfg(d=np.ones(5, dtype=np.uint32), res=res)
+    csdfg(d=np.ones(5, dtype=np.uint32), res=res)
     assert res[0] != 0
-    sdfg(d=np.array([1, 1, 0, 1, 1], dtype=np.uint32), res=res)
+    csdfg(d=np.array([1, 1, 0, 1, 1], dtype=np.uint32), res=res)
     assert res[0] == 0
 
 
@@ -71,6 +73,7 @@ res(7) = ALL(first(1:2) .eq. second(4:5))
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     first = np.full([size], 1, order="F", dtype=np.int32)
@@ -78,12 +81,12 @@ END SUBROUTINE intrinsic_all_test_function
     second[2] = 2
     res = np.full([7], False, order="F", dtype=np.uint32)
 
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     assert list(res) == [0, 0, 0, 0, 0, 0, 1]
 
     second = np.full([size], 2, order="F", dtype=np.int32)
     res = np.full([7], False, order="F", dtype=np.uint32)
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     for val in res:
         assert not val
 
@@ -106,27 +109,28 @@ res(6) = ALL(42 .ne. first)
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
 
     size = 5
     first = np.full([size], 42, order="F", dtype=np.int32)
     res = np.full([6], False, order="F", dtype=np.uint32)
 
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     for val in res[0:-1]:
         assert val
     assert not res[-1]
 
     first[1] = 5
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [0, 0, 0, 1, 0, 0]
 
     first[1] = 42
     first[3] = 7
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [0, 0, 1, 0, 0, 0]
 
     first = np.full([size], 41, order="F", dtype=np.int32)
-    sdfg(first=first, res=res)
+    csdfg(first=first, res=res)
     assert list(res) == [0, 0, 0, 0, 0, 1]
 
 
@@ -141,17 +145,18 @@ res(1) = ALL(d)
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
 
     sizes = [5, 7]
     d = np.full(sizes, True, order="F", dtype=np.uint32)
     res = np.full([2], False, order="F", dtype=np.uint32)
 
     d[2, 2] = False
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert not res[0]
 
     d[2, 2] = True
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0]
 
 
@@ -174,6 +179,7 @@ res(7) = ALL(first(2:3, 3:4) .eq. second(2:3, 3:4))
 END SUBROUTINE intrinsic_all_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="intrinsic_all_test_function").build()
+    csdfg = sdfg.compile()
 
     sizes = [5, 4]
     first = np.full(sizes, 1, order="F", dtype=np.int32)
@@ -181,13 +187,13 @@ END SUBROUTINE intrinsic_all_test_function
     second[2, 2] = 2
     res = np.full([7], False, order="F", dtype=np.uint32)
 
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     for val in res:
         assert not val
 
     second = np.full(sizes, 1, order="F", dtype=np.int32)
     res = np.full([7], False, order="F", dtype=np.uint32)
-    sdfg(first=first, second=second, res=res)
+    csdfg(first=first, second=second, res=res)
     for val in res:
         assert val
 
