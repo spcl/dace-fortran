@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from .llvm_toolchain import require_flang
+from .llvm_toolchain import intrinsic_modules_path, require_flang
 from .preprocess import merge_used_modules
 
 # ---------------------------------------------------------------------------
@@ -469,13 +469,17 @@ def emit_hlfir_from_codebase(
     # test runs.  Flang's ``.mod`` format is incompatible with
     # gfortran's; a chance collision surfaces as ``Cannot use module
     # file for module X``.
+    flang = flang_program or require_flang()
     subprocess.check_call(
         [
-            flang_program or require_flang(),
+            flang,
             "-fc1",
             "-cpp",
             "-U_OPENMP",
             "-U_OPENACC",
+            # -fc1 searches only <bin>/../include/flang, which LLVM 23 no longer ships.
+            "-fintrinsic-modules-path",
+            str(intrinsic_modules_path(flang)),
             *flang_flags,
             *extra_flang_flags,
             "-emit-hlfir",

@@ -7,14 +7,25 @@ from pathlib import Path
 
 from dace_fortran.bindings import FlattenPlan
 from dace_fortran.build_bridge import hb
-from tests._util import flang_binary
+from tests._util import flang_binary, flang_intrinsic_modules_path
 
 
 def _plan_from_fortran(src: str, tmp_path: Path) -> FlattenPlan:
     f90 = tmp_path / "src.f90"
     f90.write_text(src)
     hlfir = tmp_path / "src.hlfir"
-    subprocess.check_call([flang_binary(), "-fc1", "-emit-hlfir", str(f90), "-o", str(hlfir)])
+    subprocess.check_call(
+        [
+            flang_binary(),
+            "-fc1",
+            "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(),
+            "-emit-hlfir",
+            str(f90),
+            "-o",
+            str(hlfir),
+        ]
+    )
     m = hb.HLFIRModule()
     assert m.parse_file(str(hlfir))
     m.run_passes("hlfir-flatten-structs")

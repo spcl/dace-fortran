@@ -2862,8 +2862,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
             if (auto* dop = as_expr.getVar().getDefiningOp()) {
               if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dop)) {
-                auto memref = decl.getMemref();
-                for (auto u : memref.getUsers()) {
+                // LLVM 21/22 save the result to the alloca, LLVM 23 to the declare.
+                llvm::SmallVector<mlir::Operation*, 4> users(decl.getMemref().getUsers());
+                users.append(decl.getBase().getUsers().begin(), decl.getBase().getUsers().end());
+                for (auto* u : users) {
                   auto sr = mlir::dyn_cast<fir::SaveResultOp>(u);
                   if (!sr) continue;
                   auto* srdef = sr.getValue().getDefiningOp();
