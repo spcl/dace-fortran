@@ -50,6 +50,7 @@ subroutine probe(x, s, o_var, o_negconst, o_negx)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="probe").build()
+    csdfg = sdfg.compile()
 
     def fortran_ishft(x, s):
         u = np.uint32(np.int32(x))
@@ -60,7 +61,7 @@ end subroutine
         o_var = np.zeros(1, np.int32)
         o_negc = np.zeros(1, np.int32)
         o_negx = np.zeros(1, np.int32)
-        sdfg(x=np.int32(x_in), s=np.int32(s_in), o_var=o_var, o_negconst=o_negc, o_negx=o_negx)
+        csdfg(x=np.int32(x_in), s=np.int32(s_in), o_var=o_var, o_negconst=o_negc, o_negx=o_negx)
         assert int(o_var[0]) == int(fortran_ishft(x_in, s_in)), (x_in, s_in)
         assert int(o_negc[0]) == int(fortran_ishft(x_in, -2)), x_in
         assert int(o_negx[0]) == int(fortran_ishft(-100, -2))

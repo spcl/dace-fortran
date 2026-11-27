@@ -20,12 +20,13 @@ from tests._util import build_sdfg, f2py_compile
 def _run(tmp_path, src, cases, argnames):
     """Build src through bridge and f2py; run both on each cases tuple (mapped to argnames); assert out(10) arrays match."""
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
+    csdfg = sdfg.compile()
     mod = f2py_compile(src, tmp_path / "ref", f"ca_ref_{tmp_path.name}")
     for args in cases:
         s = np.zeros(10, dtype=np.float64)
         r = np.zeros(10, dtype=np.float64)
         kw = {k: np.int32(v) for k, v in zip(argnames, args, strict=False)}
-        sdfg(out=s, **kw)
+        csdfg(out=s, **kw)
         # probe lives in probe_mod, so f2py exposes it under the module's submodule namespace.
         mod.probe_mod.probe(*args, r)
         np.testing.assert_array_equal(s, r)

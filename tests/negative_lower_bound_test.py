@@ -32,6 +32,7 @@ end module read_arr_mod
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="read_arr", entry="read_arr_mod::read_arr").build()
+    csdfg = sdfg.compile()
     sdfg.validate()
 
     # arr[i] = (i-5)*10 -- distinguishes offset-by-1 from offset-by-(-5).
@@ -39,13 +40,13 @@ end module read_arr_mod
     out = np.zeros(1, dtype=np.int32, order="F")
 
     # arr(-3) should be -30 (arr(-5)=-50, arr(-4)=-40, ...); a wrong offset would segfault or misread.
-    sdfg(arr=arr, idx=np.int32(-3), out=out)
+    csdfg(arr=arr, idx=np.int32(-3), out=out)
     assert out[0] == -30, f"arr(-3) should be -30; got {out[0]}"
 
-    sdfg(arr=arr, idx=np.int32(5), out=out)
+    csdfg(arr=arr, idx=np.int32(5), out=out)
     assert out[0] == 50, f"arr(5) should be 50; got {out[0]}"
 
-    sdfg(arr=arr, idx=np.int32(0), out=out)
+    csdfg(arr=arr, idx=np.int32(0), out=out)
     assert out[0] == 0, f"arr(0) should be 0; got {out[0]}"
 
 

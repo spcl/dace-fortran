@@ -44,17 +44,18 @@ subroutine kernel_all(mask, result, n)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="kernel_all", pipeline="hlfir-propagate-shapes").build()
+    csdfg = sdfg.compile()
 
     # All-true case
     mask_all = np.asfortranarray(np.ones(5, dtype=np.uint32))
     res_all = np.zeros(1, dtype=np.uint32)
-    sdfg(mask=mask_all, result=res_all, n=5)
+    csdfg(mask=mask_all, result=res_all, n=5)
     assert bool(res_all[0]) is True
 
     # One-false case
     mask_mixed = np.asfortranarray(np.array([True, True, False, True, True], dtype=np.uint32))
     res_mixed = np.zeros(1, dtype=np.uint32)
-    sdfg(mask=mask_mixed, result=res_mixed, n=5)
+    csdfg(mask=mask_mixed, result=res_mixed, n=5)
     assert bool(res_mixed[0]) is False
 
 

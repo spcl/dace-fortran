@@ -41,13 +41,14 @@ end subroutine driver
 end module driver_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
+    csdfg = sdfg.compile()
     assert len(_reduce_nodes(sdfg)) >= 1, "SUM-in-condition should be a Reduce lib-node"
     n = 5
     cnt = np.zeros(n, dtype=np.int32)
-    sdfg(rv=np.array([1.5, 2.0, 3.0], dtype=np.float64), cnt=cnt, n=np.int32(n))
+    csdfg(rv=np.array([1.5, 2.0, 3.0], dtype=np.float64), cnt=cnt, n=np.int32(n))
     assert cnt.tolist() == [1] * n  # rv non-integer -> condition true every iter
     cnt2 = np.zeros(n, dtype=np.int32)
-    sdfg(rv=np.array([1.0, 2.0, 3.0], dtype=np.float64), cnt=cnt2, n=np.int32(n))
+    csdfg(rv=np.array([1.0, 2.0, 3.0], dtype=np.float64), cnt=cnt2, n=np.int32(n))
     assert cnt2.tolist() == [0] * n  # integer-valued -> never
 
 
@@ -72,16 +73,17 @@ end subroutine driver
 end module driver_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
+    csdfg = sdfg.compile()
     assert len(_reduce_nodes(sdfg)) >= 1
     n = 4
     a = np.array([1.0, 2.0, 3.0, 0.0], dtype=np.float64)
     b = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float64)  # max(a-b)=3 > 0.5
     cnt = np.zeros(n, dtype=np.int32)
-    sdfg(a=a, b=b, cnt=cnt, n=np.int32(n))
+    csdfg(a=a, b=b, cnt=cnt, n=np.int32(n))
     assert cnt.tolist() == [1] * n
     cnt2 = np.zeros(n, dtype=np.int32)
     b2 = a - 0.1  # max(a-b2)=0.1 < 0.5
-    sdfg(a=a, b=b2.copy(), cnt=cnt2, n=np.int32(n))
+    csdfg(a=a, b=b2.copy(), cnt=cnt2, n=np.int32(n))
     assert cnt2.tolist() == [0] * n
 
 

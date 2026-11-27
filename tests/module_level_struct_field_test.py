@@ -141,12 +141,13 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="written_struct_member", entry="m::driver").build()
+    csdfg = sdfg.compile()
     (flag,) = [name for name in sdfg.arglist() if name.endswith("is_init")]
     (x,) = [name for name in sdfg.arglist() if name.endswith("_x")]
     out, is_init, value = np.zeros(1), np.zeros(1, dtype=sdfg.arrays[flag].dtype.as_numpy_dtype()), np.zeros(1)
-    sdfg(a=3.0, out=out, **{flag: is_init, x: value})
+    csdfg(a=3.0, out=out, **{flag: is_init, x: value})
     assert out[0] == 3.0 and is_init[0] and value[0] == 3.0
-    sdfg(a=5.0, out=out, **{flag: is_init, x: value})
+    csdfg(a=5.0, out=out, **{flag: is_init, x: value})
     assert out[0] == 3.0, "an initialised host flag skips the initialisation"
 
 

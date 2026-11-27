@@ -67,6 +67,7 @@ res(:) = input1(:, pos1) - input1(:, pos2)
 END SUBROUTINE multiple_ranges_selection_function
 """
     sdfg = build_sdfg(src, tmp_path, name="multiple_ranges_selection_function").build()
+    csdfg = sdfg.compile()
 
     size = 7
     size2 = 2
@@ -75,11 +76,11 @@ END SUBROUTINE multiple_ranges_selection_function
         input1[i][1] = i + 1
         input1[i][0] = 0
     res = np.full([7], 42, order="F", dtype=np.float64)
-    sdfg(input1=input1, res=res, pos1=2, pos2=1)
+    csdfg(input1=input1, res=res, pos1=2, pos2=1)
     for idx, val in enumerate(res):
         assert val == idx + 1.0
 
-    sdfg(input1=input1, res=res, pos1=1, pos2=2)
+    csdfg(input1=input1, res=res, pos1=1, pos2=2)
     for idx, val in enumerate(res):
         assert -val == idx + 1.0
 

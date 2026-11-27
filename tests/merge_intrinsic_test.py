@@ -23,9 +23,10 @@ subroutine probe(a, b, mask, out)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="probe").build()
+    csdfg = sdfg.compile()
     for mask_val in (True, False):
         out = np.zeros(1, dtype=np.float64)
-        sdfg(a=1.5, b=2.5, mask=mask_val, out=out)
+        csdfg(a=1.5, b=2.5, mask=mask_val, out=out)
         expected = 1.5 if mask_val else 2.5
         assert float(out[0]) == expected, f"mask={mask_val}: got {out[0]}, want {expected}"
 
@@ -40,9 +41,10 @@ subroutine probe(a, b, out)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="probe").build()
+    csdfg = sdfg.compile()
     for a_in, b_in, expected in [(3.0, 2.0, 3.0), (1.0, 5.0, 5.0), (4.0, 4.0, 4.0)]:
         out = np.zeros(1, dtype=np.float64)
-        sdfg(a=a_in, b=b_in, out=out)
+        csdfg(a=a_in, b=b_in, out=out)
         assert float(out[0]) == expected
 
 
