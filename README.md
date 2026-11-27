@@ -242,7 +242,7 @@ Declare once with `apply_external_functions(EXTERNAL, IGNORE)`: `EXTERNAL` = lis
 
 ## Prerequisites
 
-- **LLVM/Flang 21, 22 or 23** — auto-detected: `dace_fortran/llvm_toolchain.py` (`SUPPORTED_LLVM_VERSIONS`) probes `flang-new-<major>` / `flang-<major>` and then unversioned `flang-new` / `flang` (which must self-identify via `--version`), taking the first installed major; `LLVM_VERSION` pins one, `LLVM_DIR` overrides discovery outright. Validated on LLVM 21.1.8 and 22.1.5. Debian/Ubuntu: `llvm-N-dev libmlir-N-dev mlir-N-tools libflang-N-dev flang-N clang-N` from apt.llvm.org (N = 21 or 22). `libflang-N-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes. The C++ side keeps both majors' spellings behind `LLVM_VERSION_MAJOR` in `dace_fortran/llvm_compat.h`.
+- **LLVM/Flang 22 or 23** — auto-detected: `dace_fortran/llvm_toolchain.py` (`SUPPORTED_LLVM_VERSIONS`) probes `flang-new-<major>` / `flang-<major>` and then unversioned `flang-new` / `flang` (which must self-identify via `--version`), taking the first installed major; `LLVM_VERSION` pins one, `LLVM_DIR` overrides discovery outright. Validated on LLVM 22.1.8 and 23.1.6. Debian/Ubuntu: `llvm-N-dev libmlir-N-dev mlir-N-tools libflang-N-dev flang-N clang-N` from apt.llvm.org (N = 22 or 23). `libflang-N-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes. The C++ side keeps both majors' spellings behind `LLVM_VERSION_MAJOR` in `dace_fortran/llvm_compat.h`.
 - **Python** 3.10–3.14 (CI runs 3.12).
 - **DaCe** — the package depends on the released `dace` (PyPI). On the first `import dace_fortran`, `dace_fortran/dace_setup.py` replaces a PyPI DaCe with the tip of the DaCe `FaCe` branch, which carries the DaCe-core pieces the frontend needs, as long as that branch exists. A git, path, or editable DaCe is never replaced. `DACE_FORTRAN_NO_DACE_SETUP=1` turns the switch off; `dace-fortran-setup-dace` runs it by hand. CI and a checkout pin a commit of that branch through `[tool.uv.sources]`. Plus `fparser > 0.2`, `networkx`, `numpy`.
 - **nanobind** — bridge is a nanobind extension (in the `testing` dependency group).
@@ -399,7 +399,7 @@ Autotools is supported via `autotools/dace_fortran.m4` + an included `dace_fortr
 
 ## Testing
 
-CI (`.github/workflows/fortran-ci.yml`) runs its lanes on LLVM 21 and 22 (LLVM 23, in progress, runs the fast lane only), all from one job definition and the
+CI (`.github/workflows/fortran-ci.yml`) runs every lane on LLVM 22, the core version, and the fast lane on LLVM 23, all from one job definition and the
 shared setup action `.github/actions/setup` (toolchain, locked uv environment, HLFIR bridge restored from the cache).
 The per-lane commands, runnable locally:
 
@@ -483,9 +483,9 @@ dace_fortran/
   omp_threads.py           OpenMP thread-count symbol for persistent maps
   entry_names.py           module::proc entry spelling
   bridge_types.py / dace_types.py  static types of the bridge extension and DaCe signatures
-  CMakeLists.txt           bridge build (LLVM 21/22/23, nanobind)
+  CMakeLists.txt           bridge build (LLVM 22/23, nanobind)
   llvm_toolchain.py        LLVM/flang discovery over the supported majors
-  llvm_compat.h            LLVM_VERSION_MAJOR shims for the 21/22/23 C++ API delta
+  llvm_compat.h            LLVM_VERSION_MAJOR shims for the 22/23 C++ API delta
   bridge/                  C++/MLIR bridge (nanobind ext: hlfir_bridge)
     bridge.cpp             nanobind boundary
     extract_vars.cpp / extract_ast.cpp / trace_utils.cpp

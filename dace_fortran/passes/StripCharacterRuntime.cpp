@@ -60,7 +60,6 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -184,8 +183,7 @@ mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::
   return {};
 }
 
-#if LLVM_VERSION_MAJOR >= 22
-/// Value of ``pred`` when both operands compare equal, matching the LLVM 21 call path.
+/// Value of ``pred`` when both operands compare equal, matching the _FortranACharacterCompare call path.
 bool cmpCharEqualResult(mlir::arith::CmpIPredicate pred) {
   using P = mlir::arith::CmpIPredicate;
   switch (pred) {
@@ -223,7 +221,6 @@ void stripCmpChar(mlir::ModuleOp module, LiteralSelection& selection) {
   for (auto cmp : toErase) cmp->erase();
   LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: folded " << toErase.size() << " hlfir.cmpchar op(s)\n");
 }
-#endif
 
 struct StripCharacterRuntimePass
     : public mlir::PassWrapper<StripCharacterRuntimePass, mlir::OperationPass<mlir::ModuleOp>> {
@@ -275,9 +272,7 @@ struct StripCharacterRuntimePass
 
     LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: erased " << toErase.size() << " _FortranACharacter* call(s)\n");
 
-#if LLVM_VERSION_MAJOR >= 22
     stripCmpChar(module, selection);
-#endif
   }
 };
 
