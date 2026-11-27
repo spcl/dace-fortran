@@ -15,6 +15,7 @@
 
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -52,8 +53,9 @@ bool isComponentOfDeclare(mlir::Value v) {
 // names a dummy.
 void eraseDeadChain(mlir::Operation* op) {
   if (!op || mlir::isa<hlfir::DeclareOp>(op) || !mlir::isOpTriviallyDead(op)) return;
-  llvm::SmallVector<mlir::Operation*, 4> defs;
-  for (auto v : op->getOperands()) defs.push_back(v.getDefiningOp());
+  // A set: an operand used twice (fir.shape %c0, %c0, %c0) must not be erased twice.
+  llvm::SmallSetVector<mlir::Operation*, 4> defs;
+  for (auto v : op->getOperands()) defs.insert(v.getDefiningOp());
   op->erase();
   for (auto* d : defs) eraseDeadChain(d);
 }

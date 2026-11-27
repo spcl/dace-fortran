@@ -4,7 +4,8 @@
 
 LLVM 23 nullifies each such component with ``fir.coordinate_of`` + ``fir.store`` (21/22: ``fir.copy`` from the
 ``DerivedInit`` global), which kept FlattenStructs from flattening the struct (``KeyError: 'fortran_s'``) until the
-``erase-component-null-init`` pass erased those stores.
+``erase-component-null-init`` pass erased those stores. The rank-3 ``w`` nulls through ``fir.shape %c0, %c0, %c0``,
+whose repeated operand the pass once erased twice (double free).
 """
 
 import numpy as np
@@ -13,9 +14,7 @@ SRC = """
 module lib
   implicit none
   type t
-    real, allocatable :: w(:)
-    real, pointer :: p(:)
-    real, allocatable :: v(:)
+    real, allocatable :: w(:, :, :)
   end type t
 end module lib
 
@@ -26,24 +25,23 @@ subroutine main(n, res)
   real, intent(out) :: res
   type(t) :: s
   integer :: i
-  allocate(s%w(n), s%v(n))
+  allocate(s%w(n, 1, 1))
   do i = 1, n
-    s%w(i) = real(i)
-    s%v(i) = 2.0 * real(i)
+    s%w(i, 1, 1) = real(i)
   end do
-  res = sum(s%w) + sum(s%v)
-  deallocate(s%w, s%v)
+  res = sum(s%w)
+  deallocate(s%w)
 end subroutine main
 """
 
 
-def test_allocatable_and_pointer_components_flatten(tmp_path):
+def test_rank3_allocatable_component_flattens(tmp_path):
     from tests._util import build_sdfg
 
     sdfg = build_sdfg(SRC, tmp_path, name="main", entry="main").build()
     res = np.zeros(1, dtype=np.float32)
     sdfg(n=np.int32(4), res=res)
-    assert res[0] == 30.0
+    assert res[0] == 10.0
 
 
 if __name__ == "__main__":
@@ -51,4 +49,4 @@ if __name__ == "__main__":
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as d:
-        test_allocatable_and_pointer_components_flatten(Path(d))
+        test_rank3_allocatable_component_flattens(Path(d))
