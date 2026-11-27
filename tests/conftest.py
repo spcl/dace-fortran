@@ -40,9 +40,9 @@ except (ImportError, ValueError, OSError):
 
 # Build the way production does: DaCe's own defaults (Release -O3, -march=native and the
 # targeted FP relaxations) so what the suite exercises is what users get. A test comparing
-# against a strict Fortran reference has to state its own tolerance rather than rely on the
-# whole suite being compiled at -O0: -O3 lets the compiler contract a multiply-add, which is a
-# different (more accurate) result, not a wrong one.
+# against a strict Fortran reference requests the ``e2e_cpu_args`` fixture (below) rather than
+# rely on the whole suite being compiled strict: -O3 contracts a multiply-add and
+# -freciprocal-math turns a/b into a*(1/b), each a different result by an ULP, not a wrong one.
 
 # Per-worker DaCe build folder: PYTEST_XDIST_WORKER is gw0/gw1/... per worker, absent on
 # serial runs (keeps the configured folder there). Workers sharing one folder race each other's
@@ -61,17 +61,18 @@ else:
 
 import contextlib
 
-import pytest
-
 # --- generated-C++ sanity check ------------------------------------------
 # Every SDFG a test compiles gets its generated C++ scanned for the UB-class warnings in
 # CRITICAL_WARNINGS.  Wrapping compile() (rather than checking in one dedicated test) is what makes it
 # a sanity check: any test that generates code exercises it, including the ones whose kernels nobody
 # thought to analyse.  The uninitialised-extent miscompile that motivated this shipped through a suite
 # that compiled the offending TU hundreds of times without ever reading a warning.
+import dace
+import pytest
 from dace.sdfg import SDFG
 
 from dace_fortran.external import clear_external_registry
+from tests._util import BITEXACT_CPU_ARGS
 from tests.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
 
 compile_without_check = SDFG.compile
@@ -233,3 +234,17 @@ def pytest_unconfigure(config):
             pass
 
     os._exit(_pytest_exitstatus[0])
+
+
+@pytest.fixture
+def e2e_cpu_args():
+    """Build the SDFG with the paper's flags; restore whatever was set before.
+
+    Request it in every test that asserts bit-exact equality with a strict Fortran/NumPy reference: DaCe's
+    default args carry -freciprocal-math (a/b -> a*(1/b)) and leave -ffp-contract at the compiler default (FMA
+    under -march=native on x86 with FMA), either of which moves the last ULP.
+    """
+    prev = dace.Config.get("compiler", "cpu", "args")
+    dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
+    yield BITEXACT_CPU_ARGS
+    dace.Config.set("compiler", "cpu", "args", value=prev)

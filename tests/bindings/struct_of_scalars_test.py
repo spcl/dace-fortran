@@ -64,7 +64,7 @@ def test_dt_of_scalar_constants_flattens_per_member(tmp_path):
         assert flat in arglist, f"{flat} missing from SDFG arglist: {arglist}"
 
 
-def test_dt_of_scalar_constants_numerical(tmp_path):
+def test_dt_of_scalar_constants_numerical(tmp_path, e2e_cpu_args):
     """Bridge SDFG must produce (rg/rcpd)*rd*i per element bit-for-bit. Reference is plain NumPy
     (not f2py): f2py's crackfortran maps type(t_consts) dummies to 'void' and crashes on lookup."""
     sdfg_dir = tmp_path / "sdfg"

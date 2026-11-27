@@ -5,9 +5,6 @@
 import os
 
 import dace
-import pytest
-
-from tests._util import BITEXACT_CPU_ARGS
 
 # ONE translation unit at a time. These kernels are single, very large TUs (CloudSC ~25k lines),
 # and each concurrent compile carries its own multi-GB peak -- together they exhaust this box and
@@ -16,12 +13,3 @@ from tests._util import BITEXACT_CPU_ARGS
 # would otherwise silently win. setdefault leaves a deliberate override alone.
 os.environ.setdefault("DACE_compiler_build_jobs", "1")
 dace.Config.set("compiler", "build_jobs", value=1)
-
-
-@pytest.fixture
-def e2e_cpu_args():
-    """Build the SDFG with the paper's flags; restore whatever was set before."""
-    prev = dace.Config.get("compiler", "cpu", "args")
-    dace.Config.set("compiler", "cpu", "args", value=BITEXACT_CPU_ARGS)
-    yield BITEXACT_CPU_ARGS
-    dace.Config.set("compiler", "cpu", "args", value=prev)
