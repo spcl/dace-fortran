@@ -20,7 +20,7 @@ cmake_minimum_required(VERSION 3.18)
 # -DLLVM_VERSION pins a major; empty means "probe LLVM_SUPPORTED_VERSIONS and take
 # the first one installed".  Keep this list in sync with llvm_toolchain.py's
 # SUPPORTED_LLVM_VERSIONS and with llvm_compat.h's LLVM_VERSION_MAJOR arms.
-set(LLVM_SUPPORTED_VERSIONS "21;22" CACHE STRING "LLVM major versions the bridge supports, in preference order")
+set(LLVM_SUPPORTED_VERSIONS "21;22;23" CACHE STRING "LLVM major versions the bridge supports, in preference order")
 set(LLVM_VERSION "" CACHE STRING "LLVM major version to use (empty: auto-detect)")
 
 # Debian/Ubuntu ship flang-new-<major>/flang-<major>; spack and upstream installs
@@ -379,6 +379,8 @@ add_library(hlfir_bridge_passes STATIC
     passes/VersionShapeScalars.cpp
     passes/InlineAll.cpp
     passes/LowerFirSelectCase.cpp
+    passes/LowerFirLogicalOps.cpp
+    passes/LowerArithMinMax.cpp
     passes/FlattenStructs.cpp
     passes/RaggedAos.cpp
     passes/FlattenGlobalScalarReads.cpp

@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 #: LLVM major versions the bridge builds against, in preference order.
-SUPPORTED_LLVM_VERSIONS = ("21", "22")
+SUPPORTED_LLVM_VERSIONS = ("21", "22", "23")
 
 #: Unversioned binary names; they only pin a major once ``--version`` confirms it.
 _UNVERSIONED = ("flang-new", "flang")
@@ -107,6 +107,11 @@ def intrinsic_modules_path(flang_binary: str) -> Path:
     """``-fintrinsic-modules-path`` for a flang binary: ``<prefix>/include/flang``.
 
     Debian's ``/usr/lib/llvm-<major>`` and spack/upstream prefixes share this layout,
-    so deriving it beats hardcoding either one.
+    so deriving it beats hardcoding either one.  LLVM 23 moved the modules to the
+    resource directory, ``<prefix>/lib/clang/<major>/finclude/flang/<triple>``.
     """
-    return llvm_prefix(flang_binary) / "include" / "flang"
+    prefix = llvm_prefix(flang_binary)
+    legacy = prefix / "include" / "flang"
+    if (legacy / "iso_c_binding.mod").exists():
+        return legacy
+    return next((m.parent for m in sorted(prefix.glob("lib/clang/*/finclude/flang/*/iso_c_binding.mod"))), legacy)
