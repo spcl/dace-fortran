@@ -19,10 +19,10 @@ from tests._util import build_sdfg
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 -- the dace::math::re / im codegen mechanism.
+# Tier 1 -- the complex-part codegen mechanism: ``.real`` / ``.imag`` on a complex connector.
 # ---------------------------------------------------------------------------
-def test_dace_re_im_read_components(tmp_path):
-    """``re(_in)``/``im(_in)`` in a tasklet read a complex connector's real/imaginary parts."""
+def test_dace_real_imag_read_components(tmp_path):
+    """``zin.real``/``zin.imag`` in a tasklet read a complex connector's real/imaginary parts."""
     sdfg = dace.SDFG("cc_read")
     sdfg.add_array("z", (4,), dace.complex128)
     sdfg.add_array("outr", (4,), dace.float64)
@@ -32,7 +32,7 @@ def test_dace_re_im_read_components(tmp_path):
     wr = st.add_write("outr")
     wi = st.add_write("outi")
     me, mx = st.add_map("m", dict(i="0:4"))
-    t = st.add_tasklet("t", {"zin"}, {"orr", "oii"}, "orr = re(zin)\noii = im(zin)")
+    t = st.add_tasklet("t", {"zin"}, {"orr", "oii"}, "orr = zin.real\noii = zin.imag")
     st.add_memlet_path(rz, me, t, dst_conn="zin", memlet=dace.Memlet("z[i]"))
     st.add_memlet_path(t, mx, wr, src_conn="orr", memlet=dace.Memlet("outr[i]"))
     st.add_memlet_path(t, mx, wi, src_conn="oii", memlet=dace.Memlet("outi[i]"))
@@ -57,9 +57,9 @@ def test_dace_component_rmw_runtime_ind(ind, expect):
     wz = st.add_write("z")
     me, mx = st.add_map("m", dict(i="0:4"))
     code = (
-        "_cur = (re(zin) if (ind == 1) else im(zin))\n"
+        "_cur = (zin.real if (ind == 1) else zin.imag)\n"
         "_new = _cur + 1.0\n"
-        "zout = (_new + 1j*im(zin)) if (ind == 1) else (re(zin) + 1j*_new)"
+        "zout = (_new + 1j*zin.imag) if (ind == 1) else (zin.real + 1j*_new)"
     )
     t = st.add_tasklet("rmw", {"zin"}, {"zout"}, code)
     st.add_memlet_path(rz, me, t, dst_conn="zin", memlet=dace.Memlet("z[i]"))
