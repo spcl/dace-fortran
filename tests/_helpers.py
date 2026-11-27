@@ -1,6 +1,7 @@
 """Shared helpers for verbatim ports from ``f2dace/dev:tests/fortran/`` -- reference build, arg routing, strict-xfail marker."""
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -11,6 +12,8 @@ from types import ModuleType
 import numpy as np
 import pytest
 
+from tests import _cache
+
 #: Retry only the f2py reference build: under heavy parallel load a fork/exec ENOMEM
 #: can transiently fail gfortran, unrelated to the source.  Never retry the SDFG build.
 _F2PY_BUILD_ATTEMPTS = 3
@@ -19,6 +22,9 @@ _F2PY_BUILD_ATTEMPTS = 3
 #: surfacing later as a cryptic AttributeError.  Detect at import and rebuild under a
 #: fresh extension name (re-importing a same-named CPython ext SIGABRTs at teardown).
 _F2PY_IMPORT_ATTEMPTS = 3
+
+#: Environment variables whose value changes what f2py/meson builds; part of the reference cache key.
+_F2PY_ENV = ("FFLAGS", "FCFLAGS", "F90FLAGS", "CFLAGS", "LDFLAGS", "CC", "FC")
 
 
 def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
@@ -84,6 +90,23 @@ def f2py_build_and_import(src_files, *, out_dir, mod_name, only=None, extra_args
     only_args = ["only:", *only, ":"] if only else []
     expected = tuple(only) if only else ()
     incomplete = None
+    # The reference is a pure function of its source, flags and toolchain: reuse an earlier build of the same inputs.
+    filename = f"{mod_name}{sysconfig.get_config_var('EXT_SUFFIX')}"
+    key = _cache.digest(
+        *(Path(s).read_bytes() for s in sources),
+        repr((mod_name, tuple(extra_args), only_args, [(env or {}).get(v) for v in _F2PY_ENV])),
+        sys.version,
+        np.__version__,
+        _cache.tool_version("gfortran"),
+        _cache.tool_version("gcc"),
+    )
+    hit = _cache.entry("f2py", key)
+    if hit is not None:
+        shutil.copyfile(hit, out_dir / filename)
+        mod = import_extension(out_dir, mod_name)
+        if all(_f2py_routine_present(mod, s) for s in expected):
+            return mod
+        (out_dir / filename).unlink()
     for attempt in range(1, _F2PY_IMPORT_ATTEMPTS + 1):
         ext_name = mod_name if attempt == 1 else f"{mod_name}_r{attempt}"
         cmd = [*base, "-m", ext_name, "--quiet", *extra_args, *only_args]
@@ -91,6 +114,8 @@ def f2py_build_and_import(src_files, *, out_dir, mod_name, only=None, extra_args
         mod = import_extension(out_dir, ext_name)
         missing = [s for s in expected if not _f2py_routine_present(mod, s)]
         if not missing:
+            if ext_name == mod_name:
+                _cache.store("f2py", key, next(out_dir.rglob(filename)))
             return mod
         wrapped = sorted(n for n in vars(mod) if not n.startswith("_"))
         incomplete = (ext_name, missing, wrapped)

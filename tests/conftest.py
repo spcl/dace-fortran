@@ -60,6 +60,7 @@ else:
     import dace_fortran.build_bridge  # noqa: F401
 
 import contextlib
+import functools
 
 # --- generated-C++ sanity check ------------------------------------------
 # Every SDFG a test compiles gets its generated C++ scanned for the UB-class warnings in
@@ -72,17 +73,56 @@ import pytest
 from dace.sdfg import SDFG
 
 from dace_fortran.external import clear_external_registry
+from tests import _cache
 from tests._util import BITEXACT_CPU_ARGS
-from tests.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
+from tests.codegen_check import (
+    NONCRITICAL_NOISE,
+    analyze,
+    build_flags,
+    compiler_is_clang,
+    critical_tags,
+    generated_source,
+)
 
 compile_without_check = SDFG.compile
+
+
+@functools.cache
+def runtime_headers_digest() -> str:
+    """Content of every DaCe runtime header: an upgraded runtime can change what the compiler warns about in a TU."""
+    include = Path(dace.__file__).parent / "runtime" / "include"
+    return _cache.digest(*(p.read_bytes() for p in sorted(include.rglob("*")) if p.is_file()))
+
+
+def warning_diagnostics(sdfg: SDFG) -> list[str]:
+    """Every ``-W`` diagnostic of the generated C++, memoised on the TU text, its flags and the compiler.
+
+    The analysis is a second full compile of the TU, so an identical TU (another run, another parametrisation) reuses the
+    earlier verdict. The build folder is masked out of the key: it differs per worker and per run.
+    """
+    folder = str(Path(sdfg.build_folder).resolve())
+    compiler = "clang++" if compiler_is_clang() else "g++"
+    key = _cache.digest(
+        generated_source(sdfg).read_bytes().replace(folder.encode(), b"<build>"),
+        "\0".join(f.replace(folder, "<build>") for f in build_flags(sdfg)),
+        _cache.tool_version(compiler),
+        runtime_headers_digest(),
+    )
+    hit = _cache.entry("warnings", key)
+    if hit is not None:
+        return hit.read_text().splitlines()
+    diagnostics = analyze(sdfg, "warnings", critical_only=False)
+    verdict = Path(sdfg.build_folder) / "warnings.txt"
+    verdict.write_text("\n".join(diagnostics))
+    _cache.store("warnings", key, verdict)
+    return diagnostics
 
 
 def compile_and_check_generated_code(self, *args, **kwargs):
     result = compile_without_check(self, *args, **kwargs)
     # One compile-flag pass gives every -W diagnostic; split it: critical (UB-class) fails the build, the rest is
     # surfaced as information (minus the hundreds-strong style noise) so a non-fatal warning is at least visible.
-    diagnostics = analyze(self, "warnings", critical_only=False)
+    diagnostics = warning_diagnostics(self)
     tags = critical_tags()
     critical = [ln for ln in diagnostics if any(t in ln for t in tags)]
     informational = [
