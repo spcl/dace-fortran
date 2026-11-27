@@ -759,7 +759,7 @@ def add_descriptors(builder: SDFGBuilder, sdfg: SDFG) -> None:
             # view is plain ``complex`` of ``complex`` -- expressible, unlike the
             # bridge's invalid float-of-complex view.  The source->view linking
             # memlet (``acc`` / ``ensure_view_writeback_link``) carries the
-            # slab; ``qg(c, i)`` lowers to ``re/im(qg[i-1])`` in emit.
+            # slab; ``qg(c, i)`` lowers to ``qg[i-1].real()/.imag()`` in emit.
             from dace_fortran.builder.access import cc_alias_view_spec
 
             spec = cc_alias_view_spec(builder, v.fortran_name)

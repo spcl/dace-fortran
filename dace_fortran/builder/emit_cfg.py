@@ -238,7 +238,7 @@ def emit_assign(builder: SDFGBuilder, ctx: Ctx, n: NodeLike, region: ControlFlow
         # Complex-as-2-reals component alias write (``qg(c, i) = ...``): a
         # staged read-modify-write on the complex source's element, setting
         # component ``c`` (re/im).  No descriptor / no View -- handled wholly
-        # in a tasklet with ``re()`` / ``im()``.
+        # in a tasklet with ``.real()`` / ``.imag()``.
         from dace_fortran.builder.emit_tasklet import emit_complex_component_assign
 
         ctx.flush(builder, region)
