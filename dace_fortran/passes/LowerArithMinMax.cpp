@@ -1,10 +1,11 @@
 // ============================================================================
 // LowerArithMinMax.cpp  --  Rewrite arith.max/min{si,ui} to arith.cmpi + arith.select (LLVM 23 only).
 // ============================================================================
-// MLIR 23's canonicalizer folds Flang's extent clamp ``select(n > 0, n, 0)`` into ``arith.maxsi(n, 0)``;
-// LLVM 21 and 22 leave the cmpi + select pair.  The bridge's extent, shape and bound tracing
-// (isExtentClamp, traceConstInt, the declared-shape readers) match the select shape, so this pass
-// turns the folded ops back into it after the last canonicalize.  A no-op before LLVM 23, where
+// Flang 23 emits some of its extent clamps ``select(n > 0, n, 0)`` as ``arith.maxsi(n, 0)`` (section extents)
+// and MLIR 23's canonicalizer folds the rest; LLVM 21 and 22 leave the cmpi + select pair.  The bridge's
+// extent, shape and bound tracing (isExtentClamp, traceConstInt, the declared-shape readers) match the
+// select shape, so this pass turns the ops back into it at the start of the pipeline and again after the
+// last canonicalize.  A no-op before LLVM 23, where
 // an ``arith.maxsi`` is Fortran's own MAX/MIN and the bridge reads it as such.
 // ============================================================================
 

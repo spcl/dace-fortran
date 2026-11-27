@@ -381,6 +381,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/LowerFirSelectCase.cpp
     passes/LowerFirLogicalOps.cpp
     passes/LowerArithMinMax.cpp
+    passes/EraseComponentNullInit.cpp
     passes/FlattenStructs.cpp
     passes/RaggedAos.cpp
     passes/FlattenGlobalScalarReads.cpp

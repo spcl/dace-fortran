@@ -132,6 +132,10 @@ DEFAULT_PIPELINE = (
     "lower-fir-select-case,"
     # LLVM 23 emits fir.logical_and/or and fir.eqv/neqv; rewrite them to the 21/22 shape the bridge reads.
     "lower-fir-logical-ops,"
+    # LLVM 23 emits a section's extent clamp as arith.maxsi already; the bridge's readers below need the select.
+    "lower-arith-minmax,"
+    # LLVM 23 nullifies allocatable/pointer components through fir.coordinate_of stores; erase them (21/22 shape).
+    "erase-component-null-init,"
     # Structurize callees BEFORE inlining: an early ``RETURN`` (``if (c)
     # return``) or other in-callee CFG makes the callee a multi-block
     # function, and ``mlir::inlineCall`` then splices those blocks into the
@@ -393,6 +397,10 @@ MULTI_FILE_PIPELINE = (
     # ``WP-2`` fix; the LU numerical correctness test passes
     # element-wise against the gfortran reference after this lands.
     "lift-cf-to-scf,"
+    # LLVM 23 shapes, rewritten to the 21/22 ones (see DEFAULT_PIPELINE).
+    "lower-fir-logical-ops,"
+    "lower-arith-minmax,"
+    "erase-component-null-init,"
     "hlfir-inline-all,"
     "hlfir-fold-element-aliases,"
     "symbol-dce,"
