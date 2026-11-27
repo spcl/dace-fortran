@@ -138,6 +138,19 @@ static std::optional<std::pair<std::string, std::string>> arrayElementExtent(mli
   return std::make_pair(array, idx);
 }
 
+/// The ``traceExtentExpr`` callback that names a runtime-indexed element inside a bound (``8 - lo(k) + 1``) by its
+/// value-symbol and records it in ``valueSyms`` for the builder to seed at entry; none without a collector.
+static ElementSymbolFn elementValueSymbols(std::vector<ValueSymbol>* valueSyms) {
+  if (!valueSyms) return {};
+  return [valueSyms](mlir::Value v) -> std::string {
+    auto ae = arrayElementExtent(v);
+    if (!ae) return "";
+    std::string sym = valueSymbolName(ae->first, ae->second);
+    valueSyms->push_back({sym, ae->first, ae->second});
+    return sym;
+  };
+}
+
 static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vector<ValueSymbol>* valueSyms = nullptr) {
   std::vector<std::string> syms;
 
@@ -206,7 +219,7 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl, std::vec
     // the dynamic gather-temp extent
     // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1), 0)``)
     // as a closed-form expression over already-promoted scalar symbols.
-    auto expr = traceExtentExpr(ext);
+    auto expr = traceExtentExpr(ext, elementValueSymbols(valueSyms));
     if (!expr.empty()) {
       syms.push_back(expr);
       return;
@@ -573,7 +586,7 @@ std::string allocAliasName(const std::string& fortran, unsigned site) {
   return fortran + "_alloc" + std::to_string(site);
 }
 
-static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl) {
+static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl, std::vector<ValueSymbol>* valueSyms) {
   std::vector<std::string> lbs;
 
   // ``hlfir-flatten-structs`` lb_hint: authoritative per-dim lower
@@ -601,12 +614,16 @@ static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl) {
   // both carry the authoritative explicit per-dim lower bounds for
   // an assumed-shape / pointer dummy declared with explicit local
   // bounds (``a(10:,20:)``) -- ``si.lbs`` holds them for both forms.
+  // An automatic array's bound read from an element (ICON's ``kstart_dd3d(p_patch%id)``) is frozen at entry like
+  // its extent: its value-symbol, not the bare array name traceToDecl would give.
+  auto element = elementValueSymbols(valueSyms);
   for (auto lb : si.lbs) {
     if (auto c = traceConstInt(lb)) {
       lbs.push_back(std::to_string(*c));
     } else {
-      auto n = traceToDecl(lb);
-      if (n.empty()) n = traceExtentExpr(lb);
+      std::string n = element ? element(lb) : "";
+      if (n.empty()) n = traceToDecl(lb);
+      if (n.empty()) n = traceExtentExpr(lb, element);
       lbs.push_back(n.empty() ? "?" : n);
     }
   }
@@ -1632,11 +1649,21 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
   });
   for (auto& kv : clonesByUniq) {
     if (kv.second.size() < 2) continue;
+    // A clone that aliases its actual maps the shared uniq_name to that actual (setAliasRoot), so a sibling that is a
+    // variable of its own (ICON's OPTIONAL recv2_dp bound to a POINTER member through a present test) would take
+    // that actual's name and keep its own source: it gets its own name too. An absent one (fir.absent) has no storage
+    // to confuse and keeps the shared name.
+    bool const anyAlias = llvm::any_of(kv.second, [](hlfir::DeclareOp op) { return bool(asAssumedShapeAlias(op)); });
     unsigned idx = 0;
+    unsigned own = 0;
     for (auto op : kv.second) {
-      if (!reinterpretsRank(op)) continue;
-      std::string const newUniq = op.getUniqName().str() + "_rank" + std::to_string(idx++);
-      op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), newUniq));
+      if (reinterpretsRank(op)) {
+        std::string const newUniq = op.getUniqName().str() + "_rank" + std::to_string(idx++);
+        op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), newUniq));
+      } else if (anyAlias && !asAssumedShapeAlias(op) && !op.getMemref().getDefiningOp<fir::AbsentOp>()) {
+        std::string const newUniq = op.getUniqName().str() + "_own" + std::to_string(own++);
+        op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), newUniq));
+      }
     }
   }
 
@@ -2739,7 +2766,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     }
 
     v.shape_symbols = resolveShapeSyms(op, value_symbols);
-    v.lower_bounds = resolveLowerBounds(op);
+    v.lower_bounds = resolveLowerBounds(op, value_symbols);
 
     // SequenceType-extent fallback: a declare with no ``fir.shape``
     // operand (e.g. one synthesised by ``hlfir-flatten-structs`` for
