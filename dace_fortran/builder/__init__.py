@@ -1872,10 +1872,15 @@ class SDFGBuilder:
         """
         assigned = {k for e in sdfg.all_interstate_edges() for k in e.data.assignments}
 
+        known = {v.fortran_name for v in self.variables}
+
         def fortran_local(name: str) -> bool:
             v = self.symbols.get(name)
+            # A presence flag the bridge adds for ``x`` (``x_allocated``, ``x_present``) is the binding's to source.
+            companion = any(name.endswith(suf) and name[: -len(suf)] in known for suf in ("_allocated", "_present"))
             return (
-                v is not None
+                not companion
+                and v is not None
                 and not v.intent
                 and not v.module_origin_mod
                 and "F" in (v.mangled_name or "").removeprefix("_Q")
