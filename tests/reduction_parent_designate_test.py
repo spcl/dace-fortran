@@ -28,6 +28,7 @@ SUBROUTINE count_parent_dg(m, pos1, res)
 END SUBROUTINE count_parent_dg
 """
     sdfg = build_sdfg(src, tmp_path, name="count_parent_dg").build()
+    csdfg = sdfg.compile()
 
     m = np.zeros((7, 4), order="F", dtype=np.int32)
     m[2, 1] = 5
@@ -35,13 +36,13 @@ END SUBROUTINE count_parent_dg
     m[3, 2] = 5
     res = np.zeros(2, order="F", dtype=np.int32)
 
-    sdfg(m=m, pos1=2, res=res)
+    csdfg(m=m, pos1=2, res=res)
     assert res[0] == 2
 
-    sdfg(m=m, pos1=3, res=res)
+    csdfg(m=m, pos1=3, res=res)
     assert res[0] == 1
 
-    sdfg(m=m, pos1=4, res=res)
+    csdfg(m=m, pos1=4, res=res)
     assert res[0] == 0
 
 
@@ -57,15 +58,16 @@ SUBROUTINE any_parent_dg(m, pos1, res)
 END SUBROUTINE any_parent_dg
 """
     sdfg = build_sdfg(src, tmp_path, name="any_parent_dg").build()
+    csdfg = sdfg.compile()
 
     m = np.zeros((5, 3), order="F", dtype=np.int32)
     m[2, 1] = 7
     res = np.zeros(2, order="F", dtype=np.uint32)
 
-    sdfg(m=m, pos1=2, res=res)
+    csdfg(m=m, pos1=2, res=res)
     assert res[0] != 0
 
-    sdfg(m=m, pos1=3, res=res)
+    csdfg(m=m, pos1=3, res=res)
     assert res[0] == 0
 
 
@@ -81,15 +83,16 @@ SUBROUTINE all_parent_dg(m, pos1, res)
 END SUBROUTINE all_parent_dg
 """
     sdfg = build_sdfg(src, tmp_path, name="all_parent_dg").build()
+    csdfg = sdfg.compile()
 
     m = np.ones((4, 3), order="F", dtype=np.int32)
     res = np.zeros(2, order="F", dtype=np.uint32)
 
-    sdfg(m=m, pos1=2, res=res)
+    csdfg(m=m, pos1=2, res=res)
     assert res[0] != 0
 
     m[1, 1] = 0
-    sdfg(m=m, pos1=2, res=res)
+    csdfg(m=m, pos1=2, res=res)
     assert res[0] == 0
 
 

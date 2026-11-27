@@ -43,19 +43,20 @@ subroutine halo_step(comm, buf, n)
 end subroutine halo_step
 """
     sdfg = build_sdfg(src, tmp_path, name="halo_step", entry="halo_step").build()
+    csdfg = sdfg.compile()
 
     n = 4
     comm = np.zeros(1, dtype=np.int32)  # declared outside, "not built yet"
     buf = np.ones(n, dtype=np.float64)
 
     # First call: the SDFG generates the comm and returns it to the caller.
-    sdfg(comm=comm, buf=buf, n=n)
+    csdfg(comm=comm, buf=buf, n=n)
     assert comm[0] == 42, "the SDFG-generated comm handle was not returned to the caller"
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0))
 
     # Second call: the caller still holds comm=42, so the SDFG reuses it (the
     # init guard does NOT fire again) -- the round-tripped handle persists.
-    sdfg(comm=comm, buf=buf, n=n)
+    csdfg(comm=comm, buf=buf, n=n)
     assert comm[0] == 42
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0 + 42.0))
 
@@ -79,14 +80,15 @@ subroutine halo_step_scalar(comm, buf, n)
 end subroutine halo_step_scalar
 """
     sdfg = build_sdfg(src, tmp_path, name="halo_step_scalar", entry="halo_step_scalar").build()
+    csdfg = sdfg.compile()
 
     n = 4
     comm = np.zeros(1, dtype=np.int32)
     buf = np.ones(n, dtype=np.float64)
-    sdfg(comm=comm, buf=buf, n=n)
+    csdfg(comm=comm, buf=buf, n=n)
     assert comm[0] == 42
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0))
-    sdfg(comm=comm, buf=buf, n=n)
+    csdfg(comm=comm, buf=buf, n=n)
     assert comm[0] == 42
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0 + 42.0))
 

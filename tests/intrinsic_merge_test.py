@@ -20,6 +20,7 @@ res = MERGE(input1, input2, mask)
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -27,13 +28,13 @@ END SUBROUTINE merge_test_function
     mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     for val in res:
         assert val == 42
 
     for i in range(int(size / 2)):
         mask[i] = True
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     for i in range(int(size / 2)):
         assert res[i] == 13
     for i in range(int(size / 2), size):
@@ -43,7 +44,7 @@ END SUBROUTINE merge_test_function
     for i in range(size):
         if i % 2 == 1:
             mask[i] = True
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     for i in range(size):
         if i % 2 == 1:
             assert res[i] == 13
@@ -63,19 +64,20 @@ res = MERGE(input1, input2, input1 .eq. 3)
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for val in res:
         assert val == 42
 
     for i in range(int(size / 2)):
         first[i] = 3
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for i in range(int(size / 2)):
         assert res[i] == 3
     for i in range(int(size / 2), size):
@@ -85,7 +87,7 @@ END SUBROUTINE merge_test_function
     for i in range(size):
         if i % 2 == 1:
             first[i] = 3
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for i in range(size):
         if i % 2 == 1:
             assert res[i] == 3
@@ -105,19 +107,20 @@ res = MERGE(input1, input2, input1 .lt. input2)
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for val in res:
         assert val == 13
 
     for i in range(int(size / 2)):
         first[i] = 45
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for i in range(int(size / 2)):
         assert res[i] == 42
     for i in range(int(size / 2), size):
@@ -127,7 +130,7 @@ END SUBROUTINE merge_test_function
     for i in range(size):
         if i % 2 == 1:
             first[i] = 45
-    sdfg(input1=first, input2=second, res=res)
+    csdfg(input1=first, input2=second, res=res)
     for i in range(size):
         if i % 2 == 1:
             assert res[i] == 42
@@ -210,15 +213,16 @@ res(1) = MERGE(input1, input2, val(1))
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
 
     val = np.full([2], 1, order="F", dtype=np.uint32)
     res = np.full([2], 40, order="F", dtype=np.float64)
 
-    sdfg(val=val, res=res)
+    csdfg(val=val, res=res)
     assert res[0] == 1
 
     val[0] = 0
-    sdfg(val=val, res=res)
+    csdfg(val=val, res=res)
     assert res[0] == 5
 
 
@@ -271,6 +275,7 @@ res(1) = MERGE(input1(1), input2(1), mask(1))
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -280,14 +285,14 @@ END SUBROUTINE merge_test_function
     mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
 
     assert res[0] == 42
     for val in res[1:]:
         assert val == 40
 
     mask[0] = True
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     assert res[0] == 13
     for val in res[1:]:
         assert val == 40
@@ -308,6 +313,7 @@ res(1) = MERGE(input1(1), 0.0D0, mask(1))
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -315,11 +321,11 @@ END SUBROUTINE merge_test_function
     mask = np.full([size], False, order="F", dtype=np.uint32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     assert res[0] == 0
 
     mask[:] = True
-    sdfg(input1=first, input2=second, mask=mask, res=res)
+    csdfg(input1=first, input2=second, mask=mask, res=res)
     assert res[0] == 13
 
 
@@ -340,6 +346,7 @@ res(1) = MERGE(input1(1), 0.0D0, mask(1) > mask2(1) .AND. mask2(2) == 0)
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     first = np.full([size], 13, order="F", dtype=np.float64)
@@ -348,11 +355,11 @@ END SUBROUTINE merge_test_function
     mask2 = np.full([size], 0, order="F", dtype=np.int32)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=first, input2=second, mask=mask, mask2=mask2, res=res)
+    csdfg(input1=first, input2=second, mask=mask, mask2=mask2, res=res)
     assert res[0] == 0
 
     mask[:] = 1
-    sdfg(input1=first, input2=second, mask=mask, mask2=mask2, res=res)
+    csdfg(input1=first, input2=second, mask=mask, mask2=mask2, res=res)
     assert res[0] == 13
 
 
@@ -368,16 +375,17 @@ res = MERGE(1.0D0, input2, input2 .lt. 3)
 END SUBROUTINE merge_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="merge_test_function").build()
+    csdfg = sdfg.compile()
 
     res = np.full([1], 40, order="F", dtype=np.float64)
 
-    sdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([42.0], dtype=np.float64), res=res)
+    csdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([42.0], dtype=np.float64), res=res)
     assert res[0] == 42
 
-    sdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([10.0], dtype=np.float64), res=res)
+    csdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([10.0], dtype=np.float64), res=res)
     assert res[0] == 10
 
-    sdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([2.0], dtype=np.float64), res=res)
+    csdfg(input1=np.array([13.0], dtype=np.float64), input2=np.array([2.0], dtype=np.float64), res=res)
     assert res[0] == 1
 
 

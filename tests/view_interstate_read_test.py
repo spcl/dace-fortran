@@ -47,10 +47,11 @@ END MODULE
 def test_assumed_size_view_read_on_an_interstate_edge(tmp_path):
     """Both calls: the whole actual (the View read on an interstate edge) and a column of it."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="view_interstate_read", entry="view_read_mod::driver").build()
+    csdfg = sdfg.compile()
     for nks in (1, 2):
         igk = np.array(np.arange(1, 3 * nks + 1, dtype=np.int32).reshape(3, nks, order="F"), order="F")
         out = np.zeros(1, np.int32)
-        sdfg(igk=igk, n=np.int32(3), nks=np.int32(nks), out=out)
+        csdfg(igk=igk, n=np.int32(3), nks=np.int32(nks), out=out)
         assert out[0] == sum(v for v in igk.ravel(order="F") if v > 1)
 
 

@@ -59,9 +59,10 @@ subroutine probe(x, out)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="probe").build()
+    csdfg = sdfg.compile()
     for v in (3.7, -3.7, 0.5):
         out = np.zeros(2, dtype=np.float64)
-        sdfg(x=v, out=out)
+        csdfg(x=v, out=out)
         assert out[0] == np.floor(v)  # floor: -inf rounding
         assert out[1] == np.trunc(v)  # aint: trunc toward 0
 
@@ -77,10 +78,11 @@ subroutine probe(x, out_int, out_nint)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="probe").build()
+    csdfg = sdfg.compile()
     for v, expected_int, expected_nint in [(3.4, 3, 3), (3.6, 3, 4), (-3.4, -3, -3), (-3.6, -3, -4)]:
         out_int = np.zeros(1, dtype=np.int32)
         out_nint = np.zeros(1, dtype=np.int32)
-        sdfg(x=v, out_int=out_int, out_nint=out_nint)
+        csdfg(x=v, out_int=out_int, out_nint=out_nint)
         assert int(out_int[0]) == expected_int, f"int({v}) = {out_int[0]}, want {expected_int}"
         assert int(out_nint[0]) == expected_nint, f"nint({v}) = {out_nint[0]}, want {expected_nint}"
 

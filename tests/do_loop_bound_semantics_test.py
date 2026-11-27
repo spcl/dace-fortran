@@ -53,9 +53,10 @@ subroutine down(n, s, b, last)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name="down", entry="down").build()
+    csdfg = sdfg.compile()
     for step, values, exit_value in ((-2, [0.0, 2.0, 0.0, 4.0, 0.0, 6.0], 0), (2, [0.0] * 6, 6)):
         b, last = np.zeros(6), np.zeros(1, dtype=np.int32)
-        sdfg(n=np.int32(6), s=np.int32(step), b=b, last=last)
+        csdfg(n=np.int32(6), s=np.int32(step), b=b, last=last)
         np.testing.assert_array_equal(b, values)
         assert last[0] == exit_value
 

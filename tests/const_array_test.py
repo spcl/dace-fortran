@@ -116,12 +116,13 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    csdfg = sdfg.compile()
     assert "a" not in sdfg.arglist() and "a" not in getattr(sdfg, "constants", {})
     # Fortran column-major: a(1,1)=1 a(2,1)=2 a(1,2)=3 a(2,2)=4 a(1,3)=5 a(2,3)=6 -> leading stride 1.
     assert int(sdfg.arrays["a"].strides[0]) == 1, "const array transient must be Fortran (column-major) laid out"
     for ii, jj, exp in [(1, 2, 103.0), (2, 1, 2.0), (1, 1, 1.0), (2, 3, 6.0), (1, 3, 5.0)]:
         y = np.zeros(1, dtype=np.float32)
-        sdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
+        csdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
         np.testing.assert_allclose(y[0], exp, rtol=1e-6, err_msg=f"a({ii},{jj})")
 
 
@@ -141,10 +142,11 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path, name="k", entry="k").build()
+    csdfg = sdfg.compile()
     assert "p" not in sdfg.arglist() and "Cp" in getattr(sdfg, "constants", {})
     for ii, jj, exp in [(1, 1, 1.0), (2, 1, 2.0), (1, 2, 3.0), (2, 2, 4.0), (1, 3, 5.0), (2, 3, 6.0)]:
         y = np.zeros(1, dtype=np.float64)
-        sdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
+        csdfg(ii=np.int32(ii), jj=np.int32(jj), y=y)
         assert y[0] == exp, f"p({ii},{jj}) = {y[0]}, want {exp}"
 
 

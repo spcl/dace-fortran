@@ -20,13 +20,14 @@ res(4) = MINVAL(dt)
 END SUBROUTINE minval_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.float64)
     for i in range(size):
         d[i] = i + 1
     res = np.full([4], 42, order="F", dtype=np.float64)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[0]
     assert res[1] == d[0]
@@ -35,7 +36,7 @@ END SUBROUTINE minval_test_function
 
     for i in range(size):
         d[i] = 10 - i
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == d[-1]
     assert res[1] == d[-1]
     assert res[2] == d[5]
@@ -57,13 +58,14 @@ res(4) = MINVAL(dt)
 END SUBROUTINE minval_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.int32)
     for i in range(size):
         d[i] = i + 1
     res = np.full([4], 42, order="F", dtype=np.int32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[0]
     assert res[1] == d[0]
@@ -72,7 +74,7 @@ END SUBROUTINE minval_test_function
 
     for i in range(size):
         d[i] = 10 - i
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == d[-1]
     assert res[1] == d[-1]
     assert res[2] == d[5]
@@ -81,7 +83,7 @@ END SUBROUTINE minval_test_function
     d = np.full([size], 0, order="F", dtype=np.int32)
     d[:] = [-5, 10, -6, 4, 32, 42, -1]
     res = np.full([4], 42, order="F", dtype=np.int32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[2]
     assert res[1] == d[2]
@@ -104,13 +106,14 @@ res(4) = MAXVAL(dt)
 END SUBROUTINE minval_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.float64)
     for i in range(size):
         d[i] = i + 1
     res = np.full([4], 42, order="F", dtype=np.float64)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[-1]
     assert res[1] == d[-1]
@@ -119,7 +122,7 @@ END SUBROUTINE minval_test_function
 
     for i in range(size):
         d[i] = 10 - i
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == d[0]
     assert res[1] == d[0]
     assert res[2] == d[2]
@@ -141,13 +144,14 @@ res(4) = MAXVAL(dt)
 END SUBROUTINE minval_test_function
 """
     sdfg = build_sdfg(src, tmp_path, name="minval_test_function").build()
+    csdfg = sdfg.compile()
     size = 7
 
     d = np.full([size], 0, order="F", dtype=np.int32)
     for i in range(size):
         d[i] = i + 1
     res = np.full([4], 42, order="F", dtype=np.int32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[-1]
     assert res[1] == d[-1]
@@ -156,7 +160,7 @@ END SUBROUTINE minval_test_function
 
     for i in range(size):
         d[i] = 10 - i
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
     assert res[0] == d[0]
     assert res[1] == d[0]
     assert res[2] == d[2]
@@ -165,7 +169,7 @@ END SUBROUTINE minval_test_function
     d = np.full([size], 0, order="F", dtype=np.int32)
     d[:] = [41, 10, 42, -5, 32, 41, 40]
     res = np.full([4], 42, order="F", dtype=np.int32)
-    sdfg(d=d, res=res)
+    csdfg(d=d, res=res)
 
     assert res[0] == d[2]
     assert res[1] == d[2]

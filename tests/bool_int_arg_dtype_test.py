@@ -123,6 +123,7 @@ END SUBROUTINE bool_scalar
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="bool_scalar", entry="bool_scalar").build()
+    csdfg = sdfg.compile()
 
     from dace.data import Scalar
 
@@ -139,12 +140,12 @@ END SUBROUTINE bool_scalar
     n = 5
     out_ref = ref.bool_scalar(True, n=n)
     out = np.zeros(n, dtype=np.int32)
-    sdfg(flag=_route_bool(True), out=out, n=n)
+    csdfg(flag=_route_bool(True), out=out, n=n)
     np.testing.assert_array_equal(out, out_ref)
 
     out_ref = ref.bool_scalar(False, n=n)
     out = np.zeros(n, dtype=np.int32)
-    sdfg(flag=_route_bool(False), out=out, n=n)
+    csdfg(flag=_route_bool(False), out=out, n=n)
     np.testing.assert_array_equal(out, out_ref)
 
 
